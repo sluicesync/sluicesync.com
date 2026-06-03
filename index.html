@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sluice — open-source HVR-class CDC for MySQL ↔ Postgres</title>
+<meta name="description" content="sluice is an open-source tool for migrating and continuously syncing databases between MySQL and Postgres, in all four directions. Correctness-first, loud failure by default.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<meta property="og:title" content="sluice — open-source HVR-class CDC for MySQL ↔ Postgres">
+<meta property="og:description" content="Migrate and continuously sync MySQL and Postgres in all four directions. Correctness-first, loud failure by default.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://sluicesync.com/">
+<meta property="og:image" content="https://sluicesync.com/og-image.png">
+<meta name="twitter:card" content="summary">
+<style>
+  :root{
+    --ink:#16242b; --muted:#5d6b72; --line:#e7ddd6;
+    --orange:#F35815; --orange-dk:#C0410A; --cream:#FFDCC6;
+    --dark:#0d1b22; --dark-2:#13262f; --paper:#ffffff; --paper-2:#faf6f3;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;color:var(--ink);background:var(--paper);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:var(--orange-dk);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,pre{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
+
+  /* top bar */
+  header{background:var(--dark);color:#eef3f4}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .nav .brand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:-.3px}
+  .nav .brand img{height:26px;display:block}
+  .nav nav a{color:#c8d3d8;margin-left:22px;font-size:15px}
+  .nav nav a:hover{color:#fff;text-decoration:none}
+
+  /* hero */
+  .hero{background:var(--dark);color:#eef3f4;padding:64px 0 76px;text-align:center;
+    border-bottom:3px solid var(--orange)}
+  .hero img.logo{height:96px;width:auto;margin:0 auto 26px}
+  .hero h1{font-size:30px;font-weight:600;letter-spacing:-.6px;margin:0 0 12px}
+  .hero p.sub{font-size:18px;color:#aab8be;max-width:680px;margin:0 auto 30px}
+  .install{display:inline-flex;align-items:center;gap:12px;background:#0a151b;border:1px solid #294049;
+    border-radius:10px;padding:13px 18px;color:#e9f0f2;font-size:15px}
+  .install code{color:var(--cream)}
+  .install .dollar{color:#5f7681;user-select:none}
+  .cta{margin-top:26px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .btn{display:inline-block;padding:11px 20px;border-radius:9px;font-weight:600;font-size:15px}
+  .btn.primary{background:var(--orange);color:#fff}
+  .btn.primary:hover{background:#ff6a2c;text-decoration:none}
+  .btn.ghost{border:1px solid #36505a;color:#dbe5e9}
+  .btn.ghost:hover{border-color:#5b7783;text-decoration:none}
+
+  /* sections */
+  section{padding:56px 0;border-bottom:1px solid var(--line)}
+  section:nth-of-type(even){background:var(--paper-2)}
+  h2{font-size:23px;letter-spacing:-.4px;margin:0 0 8px}
+  .lead{color:var(--muted);margin:0 0 28px;max-width:720px}
+
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+  .feat{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  section:nth-of-type(even) .feat{background:#fff}
+  .feat h3{margin:0 0 6px;font-size:16px}
+  .feat p{margin:0;color:var(--muted);font-size:14.5px}
+
+  pre{background:var(--dark);color:#e9f0f2;border-radius:12px;padding:20px 22px;overflow:auto;font-size:13.5px;line-height:1.7}
+  pre .c{color:#7fa0ab}      /* comment */
+  pre .k{color:var(--cream)} /* command */
+  pre .f{color:#8fd0ff}      /* flag */
+
+  .surfaces{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .surf{border:1px solid var(--line);border-radius:12px;padding:20px;background:#fff}
+  .surf .tag{display:inline-block;font-size:12px;font-weight:700;text-transform:uppercase;
+    letter-spacing:.5px;color:var(--orange-dk);background:#fdeee6;border-radius:20px;padding:3px 11px;margin-bottom:10px}
+  .surf h3{margin:0 0 6px;font-size:17px}
+  .surf p{margin:0;color:var(--muted);font-size:14.5px}
+
+  footer{background:var(--dark);color:#9fb0b7;padding:40px 0;text-align:center;font-size:14px}
+  footer a{color:var(--cream)}
+  footer .fl{margin-bottom:10px}
+  footer .fl a{margin:0 10px}
+
+  @media(max-width:680px){
+    .grid,.surfaces{grid-template-columns:1fr}
+    .nav nav a:first-child{margin-left:0}
+    .hero h1{font-size:25px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <span class="brand">
+      <img src="/sluice-logo-dark.png" alt="sluice">
+    </span>
+    <nav>
+      <a href="#quickstart">Quick start</a>
+      <a href="#features">Features</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <img class="logo" src="/sluice-logo-dark.png" alt="sluice">
+    <h1>Open-source HVR-class CDC for MySQL&nbsp;↔&nbsp;Postgres</h1>
+    <p class="sub">Migrate and continuously sync databases between MySQL and Postgres in all four
+      directions — initial snapshot, CDC catch-up, and operator-driven cutover in one tool,
+      opinionated about correctness.</p>
+    <div class="install">
+      <span class="dollar">$</span>
+      <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code>
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="#quickstart">Get started</a>
+      <a class="btn ghost" href="https://github.com/sluicesync/sluice">View source</a>
+    </div>
+  </div>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <h2>What you get</h2>
+    <p class="lead">Schema-evolution, cutover-priming, and slot-health capabilities that have lived
+      behind enterprise-tier paywalls — Apache&nbsp;2.0, a single static binary, no daemon, no SaaS dependency.</p>
+    <div class="grid">
+      <div class="feat"><h3>🔄 Bidirectional</h3><p>MySQL → Postgres, Postgres → MySQL, and same-engine in both directions. PlanetScale flavors included.</p></div>
+      <div class="feat"><h3>🔌 Slot-less Postgres sources</h3><p>Managed Postgres that blocks logical replication (e.g. Heroku) still streams via a trigger-based CDC engine — no replication slot or <code>REPLICATION</code> role required.</p></div>
+      <div class="feat"><h3>🪶 Schema evolution</h3><p><code>ADD COLUMN</code> forwards automatically; every other shape refuses loudly with a structured drift diff naming the column that changed.</p></div>
+      <div class="feat"><h3>🩺 Operational telemetry</h3><p>Pre-emptive slot-health warnings, a source-side heartbeat writer, and a Prometheus <code>/metrics</code> + <code>/readyz</code> endpoint for k8s health checks.</p></div>
+      <div class="feat"><h3>🔁 One-command cutover</h3><p><code>sluice cutover</code> primes sequences so the first post-cutover <code>INSERT</code> can't collide on the primary key.</p></div>
+      <div class="feat"><h3>🛑 Loud failure by default</h3><p>Every silent-loss class has a structured refuse-loudly message with an operator-action recovery hint. Paste it into Slack and the on-call DBA knows what to fix.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="wrap">
+    <h2>Quick start</h2>
+    <p class="lead">Install the binary, then run a one-shot migration or start a resumable continuous sync.</p>
+<pre><span class="c"># Install</span>
+<span class="k">go install</span> sluicesync.dev/sluice/cmd/sluice@latest
+
+<span class="c"># One-shot migration: MySQL → Postgres</span>
+<span class="k">sluice migrate</span> \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:rootpw@tcp(localhost:3306)/app' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://postgres:pgpw@localhost:5432/app?sslmode=disable'
+
+<span class="c"># Continuous sync: snapshot + CDC catch-up, resumable on restart</span>
+<span class="k">sluice sync start</span> \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> ... \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> ... \
+    <span class="f">--stream-id</span> myapp-prod
+
+<span class="c"># Cutover-time sequence priming (post-snapshot, pre-traffic-switch)</span>
+<span class="k">sluice cutover</span> <span class="f">--config</span> sluice.yaml <span class="f">--cutover-sequence-margin</span>=1000</pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Three surfaces, independently runnable</h2>
+    <p class="lead">sluice is built around three product surfaces — use one, or all three end to end.</p>
+    <div class="surfaces">
+      <div class="surf"><span class="tag">Migrate</span><h3>Schema &amp; data</h3><p>Read source schema, create target tables, bulk-copy rows, then build indexes and constraints — deferred for fast copy, resumable per-table.</p></div>
+      <div class="surf"><span class="tag">Sync</span><h3>Change data capture</h3><p>Snapshot → CDC handoff with resumable checkpoints, schema-drift detection, and slot-health telemetry against quiet sources.</p></div>
+      <div class="surf"><span class="tag">Operate</span><h3>Run as a service</h3><p>Long-running sync behind <code>/healthz</code>, <code>/readyz</code>, and <code>/metrics</code>, or one-shot jobs in CI and CronJobs via the container image.</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="fl">
+      <a href="https://github.com/sluicesync/sluice">GitHub</a> ·
+      <a href="https://github.com/sluicesync/sluice/releases/latest">Releases</a> ·
+      <a href="https://sluicesync.dev">sluicesync.dev</a>
+    </div>
+    <div>Apache&nbsp;2.0 · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></div>
+  </div>
+</footer>
+
+</body>
+</html>
