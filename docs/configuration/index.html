@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuration — sluice docs</title>
+<meta name="description" content="Connection strings, environment variables, the YAML config file, and the global flags every command shares.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk active" href="/docs/configuration/">Configuration</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
+  <main class="content">
+    <h1>Configuration</h1>
+    <p class="subtitle">Connection strings, environment variables, the YAML config file, and the global flags every command shares.</p>
+    
+<h2 id="connection-strings">Connection strings</h2>
+<p>Every data-moving command takes a source and target driver + DSN:</p>
+<table>
+<thead><tr><th>Engine</th><th>Driver name</th><th>DSN format</th></tr></thead>
+<tbody>
+<tr><td>MySQL</td><td><code>mysql</code></td><td><code>user:pass@tcp(host:3306)/dbname</code></td></tr>
+<tr><td>Postgres</td><td><code>postgres</code></td><td><code>postgres://user:pass@host:5432/dbname?sslmode=require</code></td></tr>
+<tr><td>PlanetScale</td><td><code>planetscale</code></td><td>MySQL DSN against the PlanetScale host (TLS required).</td></tr>
+<tr><td>Postgres (slot-less)</td><td><code>postgres-trigger</code></td><td>Same as <code>postgres</code>; pairs with <a href="/docs/commands/#trigger">trigger setup</a>.</td></tr>
+</tbody>
+</table>
+
+<h2 id="env-vars">Environment variables</h2>
+<p>Keep credentials out of your shell history by passing DSNs via the environment:</p>
+<table>
+<thead><tr><th>Variable</th><th>Equivalent flag</th></tr></thead>
+<tbody>
+<tr><td><code>SLUICE_SOURCE</code></td><td><code>--source</code></td></tr>
+<tr><td><code>SLUICE_TARGET</code></td><td><code>--target</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="config-file">YAML config file</h2>
+<p>For anything beyond a handful of flags, pass a YAML file with <code>--config</code> / <code>-c</code>. CLI flags take
+precedence over config values. Common keys:</p>
+<pre><code><span class="c"># sluice.yaml</span>
+include_tables: ["app_*"]
+exclude_tables: ["app_audit"]
+
+<span class="c"># force target column types (CLI: --type-override)</span>
+mappings:
+  - column: products.attrs
+    type: jsonb
+    binary: true
+
+<span class="c"># replace generated-column bodies verbatim (CLI: --expr-override)</span>
+expression_mappings:
+  - column: orders.total_cents
+    expression: "(price_cents * qty)"
+
+<span class="c"># PII redaction (CLI: --redact)</span>
+redactions:
+  - rule: users.email=hash:sha256
+  - rule: users.ssn=mask:ssn
+
+<span class="c"># dictionaries referenced by tokenize:dict / randomize:dict strategies</span>
+dictionaries:
+  first_names:
+    values: ["Alex", "Sam", "Jordan"]</code></pre>
+<p>Then run, for example:</p>
+<pre><code><span class="k">sluice</span> migrate -c sluice.yaml <span class="f">--source-driver</span> mysql <span class="f">--source</span> ... <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...</code></pre>
+
+<h2 id="global-flags">Global flags</h2>
+<p>These apply to every command:</p>
+<table>
+<thead><tr><th>Flag</th><th>Default</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>--config</code>, <code>-c</code></td><td>—</td><td class="desc">Path to a YAML config file.</td></tr>
+<tr><td><code>--log-level</code>, <code>-l</code></td><td><code>info</code></td><td class="desc">Verbosity: <code>debug</code> / <code>info</code> / <code>warn</code> / <code>error</code>.</td></tr>
+<tr><td><code>--pprof-listen</code></td><td>off</td><td class="desc">Bind net/http/pprof at an address to diagnose stalls (e.g. <code>:6060</code>).</td></tr>
+<tr><td><code>--mysql-sql-mode</code></td><td>strict</td><td class="desc">Override sluice's forced strict <code>sql_mode</code>. Pass <code>''</code> (empty) to migrate legacy MySQL data with zero-dates.</td></tr>
+<tr><td><code>--version</code>, <code>-V</code></td><td>—</td><td class="desc">Print version and exit.</td></tr>
+</tbody>
+</table>
+
+<div class="note warn"><strong>Migrating legacy MySQL data?</strong> sluice forces a strict <code>sql_mode</code> on every MySQL connection to close the silent-clamp / silent-zero-date class. Data that was only accepted under a relaxed mode (pre-5.7 zero-dates, silently-truncated values) will refuse loudly — pass <code>--mysql-sql-mode=''</code> to fall through to the server default.</div>
+
+    <div class="pager"><a class="prev" href="/docs/commands/">← Command reference</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+</body>
+</html>

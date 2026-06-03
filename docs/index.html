@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentation — sluice docs</title>
+<meta name="description" content="Migrate and continuously sync MySQL and Postgres — correctness-first, loud failure by default.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk active" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
+  <main class="content">
+    <h1>Documentation</h1>
+    <p class="subtitle">Migrate and continuously sync MySQL and Postgres — correctness-first, loud failure by default.</p>
+    
+<p>sluice is an open-source tool for moving and keeping databases in sync between <strong>MySQL</strong> and
+<strong>Postgres</strong>, in all four directions. It is built around three surfaces you can use independently or end to end:</p>
+<ul>
+  <li><strong>Migrate</strong> — a one-shot schema + data copy, with deferred indexes/constraints for fast bulk load and per-table resume.</li>
+  <li><strong>Sync</strong> — change-data-capture streaming with a snapshot → CDC handoff and resumable checkpoints.</li>
+  <li><strong>Operate</strong> — run as a long-lived service behind <code>/readyz</code> and <code>/metrics</code>, or as one-shot jobs.</li>
+</ul>
+<h2>Start here</h2>
+<ul>
+  <li><a href="/docs/getting-started/">Getting started</a> — install, connect, and run your first migration and sync.</li>
+  <li><a href="/docs/commands/">Command reference</a> — every command, its key flags, and worked examples.</li>
+  <li><a href="/docs/configuration/">Configuration</a> — connection strings, environment variables, the YAML config file, and global flags.</li>
+</ul>
+<div class="note"><strong>New here?</strong> The fastest path is <a href="/docs/getting-started/">Getting started</a> → run a <code>--dry-run</code> migration against a copy of your data → then read the <a href="/docs/commands/#migrate">migrate</a> and <a href="/docs/commands/#sync-start">sync start</a> references.</div>
+
+    <div class="pager"><span></span><a class="next" href="/docs/getting-started/">Getting started →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+</body>
+</html>

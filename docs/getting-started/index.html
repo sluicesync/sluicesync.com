@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started — sluice docs</title>
+<meta name="description" content="Install sluice, point it at a source and target, and run your first migration and continuous sync.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk active" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
+  <main class="content">
+    <h1>Getting started</h1>
+    <p class="subtitle">Install sluice, point it at a source and target, and run your first migration and continuous sync.</p>
+    
+<h2 id="install">Install</h2>
+<p>sluice is a single static binary with no daemon and no SaaS dependency. Install with the Go toolchain:</p>
+<pre><code><span class="k">go install</span> sluicesync.dev/sluice/cmd/sluice@latest</code></pre>
+<p>Or run the official container image (multi-arch, distroless):</p>
+<pre><code><span class="k">docker</span> run <span class="f">--rm</span> ghcr.io/sluicesync/sluice:latest <span class="f">--version</span></code></pre>
+<p>Pre-built Linux / macOS / Windows binaries are attached to every <a href="https://github.com/sluicesync/sluice/releases/latest">tagged release</a>. Verify the install:</p>
+<pre><code><span class="k">sluice</span> <span class="f">--version</span>
+<span class="k">sluice</span> engines      # list the database engines built into this binary</code></pre>
+
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+  <li>A <strong>source</strong> and a <strong>target</strong> database you can reach over the network.</li>
+  <li>Engines available out of the box: <code>mysql</code>, <code>postgres</code>, and the <code>planetscale</code> MySQL flavor. Run <code>sluice engines</code> to confirm what your binary supports.</li>
+  <li>For continuous sync from Postgres, the source normally needs logical replication (a replication slot). Managed Postgres that blocks slots (e.g. Heroku) can use the slot-less <a href="/docs/commands/#trigger">trigger engine</a> instead.</li>
+</ul>
+
+<h2 id="connecting">Connecting to your databases</h2>
+<p>Source and target are passed as DSNs (connection strings). The driver is named separately with <code>--source-driver</code> / <code>--target-driver</code>.</p>
+<table>
+<thead><tr><th>Engine</th><th>DSN format</th></tr></thead>
+<tbody>
+<tr><td><code>mysql</code></td><td><code>user:pass@tcp(host:3306)/dbname</code></td></tr>
+<tr><td><code>postgres</code></td><td><code>postgres://user:pass@host:5432/dbname?sslmode=require</code></td></tr>
+</tbody>
+</table>
+<p>DSNs often contain credentials, so you can supply them via environment variables instead of flags:</p>
+<pre><code>export SLUICE_SOURCE='root:rootpw@tcp(localhost:3306)/app'
+export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=disable'</code></pre>
+<p>See <a href="/docs/configuration/">Configuration</a> for the full set of environment variables and the optional YAML config file.</p>
+
+<h2 id="first-migration">Your first migration</h2>
+<p>A one-shot migration translates the source schema, creates the target tables, bulk-copies rows, then builds indexes and constraints. Always do a <strong>dry run</strong> first — it reads the source schema and prints the plan without touching the target:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:rootpw@tcp(localhost:3306)/app' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://postgres:pgpw@localhost:5432/app?sslmode=disable' \
+    <span class="f">--dry-run</span></code></pre>
+<p>When the plan looks right, drop <code>--dry-run</code> to apply it. If a migration is interrupted, re-run with <code>--resume</code> — state is checkpointed per table on the target, so it picks up where it left off:</p>
+<pre><code><span class="k">sluice</span> migrate <span class="f">--source-driver</span> mysql <span class="f">--source</span> ... <span class="f">--target-driver</span> postgres <span class="f">--target</span> ... <span class="f">--resume</span></code></pre>
+<div class="note"><strong>Cold-start safety.</strong> sluice refuses to bulk-copy into a non-empty target by default (an <code>INSERT</code> into a populated table would collide on the primary key). Use <code>--resume</code> to continue a prior run, or read the <a href="/docs/commands/#migrate">migrate reference</a> for the recovery flags.</div>
+
+<h2 id="first-sync">Your first continuous sync</h2>
+<p>Continuous sync captures a consistent snapshot, bulk-copies it, then streams ongoing changes. Streams are identified by a <code>--stream-id</code> so they can resume after a restart:</p>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:rootpw@tcp(localhost:3306)/app' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://postgres:pgpw@localhost:5432/app?sslmode=disable' \
+    <span class="f">--stream-id</span> app-prod</code></pre>
+<p>From another shell, check freshness or status, and stop the stream cleanly when you're done:</p>
+<pre><code><span class="k">sluice</span> sync status <span class="f">--stream-id</span> app-prod <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...
+<span class="k">sluice</span> sync health <span class="f">--stream-id</span> app-prod <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...   # cron-friendly exit code
+<span class="k">sluice</span> sync stop   <span class="f">--stream-id</span> app-prod <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...   # drains in-flight changes, then exits</code></pre>
+
+<h2 id="verify">Verify the copy</h2>
+<p>After a migration or once a stream has caught up, compare source and target:</p>
+<pre><code><span class="k">sluice</span> verify \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> ... \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...</code></pre>
+<p><code>verify</code> compares row counts by default and can escalate to per-row hashing — see the <a href="/docs/commands/#verify">verify reference</a>.</p>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/commands/">Command reference</a> — the full flag set for every command.</li>
+  <li><a href="/docs/commands/#cutover">cutover</a> — prime target sequences before switching traffic, so the first post-cutover <code>INSERT</code> can't collide.</li>
+  <li><a href="/docs/configuration/">Configuration</a> — YAML config, env vars, type/expression overrides, and PII redaction.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/">← Overview</a><a class="next" href="/docs/commands/">Command reference →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+</body>
+</html>
