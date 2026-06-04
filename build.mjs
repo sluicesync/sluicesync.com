@@ -173,11 +173,17 @@ write(
     subtitle: "Install sluice, point it at a source and target, and run your first migration and continuous sync.",
     body: `
 <h2 id="install">Install</h2>
-<p>sluice is a single static binary with no daemon and no SaaS dependency. Install with the Go toolchain:</p>
-${pre(`go install sluicesync.dev/sluice/cmd/sluice@latest`)}
-<p>Or run the official container image (multi-arch, distroless):</p>
-${pre(`docker run --rm ghcr.io/sluicesync/sluice:latest --version`)}
-<p>Pre-built Linux / macOS / Windows binaries are attached to every <a href="https://github.com/sluicesync/sluice/releases/latest">tagged release</a>. Verify the install:</p>
+<p>sluice is a single static binary with no daemon and no SaaS dependency. Install it with your platform's package manager:</p>
+<ul>
+  <li><strong>macOS / Linux</strong> (Homebrew): <code>brew install sluicesync/tap/sluice</code></li>
+  <li><strong>Windows</strong> (Scoop): <code>scoop bucket add sluicesync https://github.com/sluicesync/scoop-bucket</code> then <code>scoop install sluice</code></li>
+  <li><strong>Windows</strong> (WinGet): <code>winget install sluicesync.sluice</code> <em>(once accepted into <a href="https://github.com/microsoft/winget-pkgs">winget-pkgs</a>)</em></li>
+  <li><strong>Debian / Ubuntu</strong>: download the <code>.deb</code> from the <a href="https://github.com/sluicesync/sluice/releases/latest">latest release</a>, then <code>sudo dpkg -i sluice_*_linux_amd64.deb</code></li>
+  <li><strong>RHEL / Fedora</strong>: download the <code>.rpm</code>, then <code>sudo rpm -i sluice_*_linux_amd64.rpm</code></li>
+  <li><strong>Go</strong>: <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></li>
+  <li><strong>Container</strong> (multi-arch, distroless): <code>docker pull ghcr.io/sluicesync/sluice:latest</code></li>
+</ul>
+<p>Self-contained binaries (Linux / macOS / Windows &times; amd64 / arm64) and <code>.deb</code> / <code>.rpm</code> / <code>.apk</code> packages are attached to every <a href="https://github.com/sluicesync/sluice/releases/latest">release</a>. Verify the install:</p>
 ${pre(`sluice --version
 sluice engines      # list the database engines built into this binary`)}
 
