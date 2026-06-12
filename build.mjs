@@ -280,6 +280,9 @@ ${cmd(
   <tr><td><code>--include-table</code> / <code>--exclude-table</code></td><td class="desc">Glob-aware table filters (mutually exclusive). Scope the bulk copy — including the PlanetScale (VStream) snapshot — not just the write path.</td></tr>
   <tr><td><code>--resume</code>, <code>-r</code></td><td class="desc">Resume a failed migration from per-table checkpoints on the target.</td></tr>
   <tr><td><code>--bulk-parallelism</code></td><td class="desc">Parallel reader/writer pairs per large table (0 = auto).</td></tr>
+  <tr><td><code>--table-parallelism</code></td><td class="desc">Tables copied concurrently (0 = auto). Multiplies with <code>--bulk-parallelism</code>; the product is bounded by the target connection budget.</td></tr>
+  <tr><td><code>--max-target-connections</code></td><td class="desc">Connection budget on the target the parallelism product must fit inside.</td></tr>
+  <tr><td><code>--index-build-parallelism</code></td><td class="desc">Postgres-only: deferred indexes built concurrently after the bulk copy.</td></tr>
   <tr><td><code>--type-override</code></td><td class="desc"><code>TABLE.COLUMN=TYPE</code> — force a target column type (repeatable).</td></tr>
   <tr><td><code>--redact</code></td><td class="desc">Redact a PII column, e.g. <code>users.email=hash:sha256</code> (repeatable).</td></tr>
   <tr><td><code>--target-schema</code></td><td class="desc">Postgres-only: land tables under a named schema namespace.</td></tr>
@@ -361,16 +364,22 @@ ${cmd(
   "backup-c",
   "sluice backup",
   "Take and verify logical backups — full snapshots and incremental chains, optionally encrypted, to local FS or object storage.",
-  `<table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
-  <tr><td><code>--full</code></td><td class="desc">Take a full snapshot (chain root).</td></tr>
-  <tr><td><code>--incremental</code></td><td class="desc">Append an incremental onto the existing chain.</td></tr>
-  <tr><td><code>--stream</code></td><td class="desc">Run as a long-lived process appending incrementals continuously.</td></tr>
-  <tr><td><code>--verify</code></td><td class="desc">Verify a backup / chain integrity.</td></tr>
-  <tr><td><code>--prune</code> / <code>--compact</code></td><td class="desc">Retention: drop or compact old chain segments.</td></tr>
+  `<table><thead><tr><th>Subcommand</th><th>Purpose</th></tr></thead><tbody>
+  <tr><td><code>backup full</code></td><td class="desc">Take a full snapshot (chain root).</td></tr>
+  <tr><td><code>backup incremental</code></td><td class="desc">Append an incremental onto the existing chain.</td></tr>
+  <tr><td><code>backup stream run</code> / <code>stop</code></td><td class="desc">Run as a long-lived process appending incrementals at a rolling cadence; <code>stop</code> drains the in-flight rollover and exits cleanly.</td></tr>
+  <tr><td><code>backup verify</code></td><td class="desc">Re-checksum every chunk in a chain and report mismatches.</td></tr>
+  <tr><td><code>backup prune</code> / <code>compact</code></td><td class="desc">Retention: drop the oldest segments, or merge consecutive segments whose gaps fall within <code>--merge-window</code>. Compact splits a merge group at a rotation-boundary coverage gap instead of refusing the run (v0.99.41) — chains stopped while the source was idle stay compactable.</td></tr>
+  </tbody></table>
+  <table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
+  <tr><td><code>--output-dir</code> / <code>--target</code></td><td class="desc">Destination: a local directory, or a URL (<code>s3://</code>, <code>gs://</code>, <code>azblob://</code>, <code>file:///</code>). Mutually exclusive.</td></tr>
+  <tr><td><code>--chain-slot</code></td><td class="desc">Postgres-only, on <code>backup full</code>: provision the persistent replication slot (named by <code>--slot-name</code>) as the snapshot anchor and ensure the publication, so <code>backup incremental</code> chains with zero gap and no manual slot setup. (v0.99.35)</td></tr>
+  <tr><td><code>--table-parallelism</code></td><td class="desc">Tables read concurrently during the backup sweep (the read-side analog of <code>pg_dump -j</code>); <code>0</code> = auto. Postgres-only — engages with a shareable exported snapshot. (v0.99.39)</td></tr>
   <tr><td><code>--include-table</code> / <code>--exclude-table</code></td><td class="desc">Glob-aware table filters; scope the backup snapshot itself — including the PlanetScale (VStream) snapshot — so an excluded table in a large keyspace is never streamed (v0.99.13), not just what's written.</td></tr>
   </tbody></table>
-  ${pre(`sluice backup --full --source-driver postgres --source ... --backup-target s3://my-bucket/app-chain
-sluice backup --incremental --source-driver postgres --source ... --backup-target s3://my-bucket/app-chain`)}`
+  ${pre(`sluice backup full --source-driver postgres --source ... --target s3://my-bucket/app-chain --chain-slot
+sluice backup incremental --source-driver postgres --source ... --target s3://my-bucket/app-chain`)}
+  <div class="note"><strong>Values that used to break backups (v0.99.40).</strong> IEEE-special floats (<code>NaN</code>, <code>±Infinity</code>) now ride the chunk codec exactly — one such row no longer makes a table un-backupable, and restores are bit-identical to <code>pg_dump</code>.</div>`
 )}
 
 <h2 id="restore">restore</h2>
@@ -378,7 +387,12 @@ ${cmd(
   "restore-c",
   "sluice restore",
   "Restore a logical backup chain (full + every incremental up to the tail) into a target database.",
-  `${pre(`sluice restore --from s3://my-bucket/app-chain \\
+  `<table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
+  <tr><td><code>--from-dir</code> / <code>--from</code></td><td class="desc">Backup location: a local directory, or a URL (<code>s3://</code>, <code>gs://</code>, <code>azblob://</code>, <code>file:///</code>). Mutually exclusive.</td></tr>
+  <tr><td><code>--table-parallelism</code></td><td class="desc">Tables bulk-applied concurrently (the write-side analog of <code>pg_restore -j</code>); <code>0</code> = auto, works on both engines; incremental change replay stays ordered. (v0.99.39)</td></tr>
+  <tr><td><code>--target-schema</code></td><td class="desc">Postgres-only: land restored tables under a named schema namespace.</td></tr>
+  </tbody></table>
+  ${pre(`sluice restore --from s3://my-bucket/app-chain \\
     --target-driver postgres --target ...`)}
    <p>Pair with <a href="/docs/commands/#sync-start">sync start</a> <code>--resume-from-backup</code> to resume CDC from the chain's tail without re-bulking.</p>`
 )}
@@ -519,6 +533,7 @@ ${pre(`sluice migrate -c sluice.yaml --source-driver mysql --source ... --target
 <tbody>
 <tr><td><code>--config</code>, <code>-c</code></td><td>—</td><td class="desc">Path to a YAML config file.</td></tr>
 <tr><td><code>--log-level</code>, <code>-l</code></td><td><code>info</code></td><td class="desc">Verbosity: <code>debug</code> / <code>info</code> / <code>warn</code> / <code>error</code>.</td></tr>
+<tr><td><code>--log-format</code></td><td><code>text</code></td><td class="desc"><code>text</code> or <code>json</code> — one JSON object per line, for Loki / Datadog / CloudWatch ingestion of a long-running <code>sync</code>. (v0.99.31)</td></tr>
 <tr><td><code>--pprof-listen</code></td><td>off</td><td class="desc">Bind net/http/pprof at an address to diagnose stalls (e.g. <code>:6060</code>).</td></tr>
 <tr><td><code>--mysql-sql-mode</code></td><td>strict</td><td class="desc">Override sluice's forced strict <code>sql_mode</code>. Pass <code>''</code> (empty) to migrate legacy MySQL data with zero-dates.</td></tr>
 <tr><td><code>--max-memory</code></td><td>off</td><td class="desc">Soft ceiling on the Go heap (e.g. <code>2GiB</code>, <code>512MiB</code>), applied via <code>SetMemoryLimit</code> at startup to bound RSS. Unlike <code>--max-buffer-bytes</code> (raw buffered bytes only), this bounds the whole heap. Honors the <code>GOMEMLIMIT</code> env var when unset. (v0.99.10)</td></tr>
