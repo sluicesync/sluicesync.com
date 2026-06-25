@@ -33,6 +33,12 @@ const NAV = [
     ],
   },
   {
+    group: "Guides",
+    items: [
+      { slug: "from-backup-sync", label: "Sync from a backup chain" },
+    ],
+  },
+  {
     group: "Reference",
     items: [
       {
@@ -81,7 +87,7 @@ function sidebar(activeSlug) {
 function page({ slug, title, subtitle, body, prev, next }) {
   const desc = subtitle || "sluice documentation";
   const top =
-    '<a class="' + (slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "" ? "active" : "") + '" href="/docs/">Docs</a>';
+    '<a class="' + (slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "from-backup-sync" || slug === "" ? "active" : "") + '" href="/docs/">Docs</a>';
   let pager = "";
   if (prev || next) {
     pager = '<div class="pager">';
@@ -237,9 +243,48 @@ ${pre(`sluice verify \\
     --target-driver postgres --target ...`)}
 <p><code>verify</code> compares row counts by default and can escalate to per-row hashing — see the <a href="/docs/commands/#verify">verify reference</a>.</p>
 
+<h2 id="backups">Set up backups</h2>
+<p>sluice takes <strong>logical</strong> backups — a full snapshot that roots a chain, plus incrementals appended onto it — to a local directory or any S3/GCS/Azure object store. It's the same binary; no separate backup daemon. Take a full backup first; on Postgres, add <code>--chain-slot</code> so the full provisions the replication slot that anchors the chain (incrementals then chain with zero gap, no manual slot setup):</p>
+${pre(`# full snapshot to a local directory (chain root)
+sluice backup full --source-driver postgres --source ... \\
+    --output-dir /var/backups/app --chain-slot
+
+# append an incremental onto the chain
+sluice backup incremental --source-driver postgres --source ... \\
+    --output-dir /var/backups/app`)}
+<p>Backups are compressed with <strong>zstd by default</strong> (<code>--compression none|gzip|zstd</code>). To rest the chain encrypted, add the encryption flags — a passphrase (read from an env var or file, not the command line) or a cloud KMS key (<code>--kms-key-arn</code> / <code>--gcp-kms-key-resource</code> / <code>--azure-key-vault-id</code>); see the <a href="/docs/commands/#backup">backup reference</a>.</p>
+<p>For <strong>object storage</strong>, swap <code>--output-dir</code> for <code>--target &lt;url&gt;</code> (<code>s3://</code>, <code>gs://</code>, <code>azblob://</code>, <code>file:///</code>). S3-compatible providers — Cloudflare R2, Backblaze B2, MinIO, Wasabi, Tigris — take three extra knobs: <code>--backup-endpoint</code> (the provider's endpoint), <code>--backup-region</code>, and <code>--backup-path-style</code> (bucket-in-path addressing, which most non-AWS providers require):</p>
+${pre(`# full backup to Cloudflare R2 (an S3-compatible store)
+sluice backup full --source-driver postgres --source ... \\
+    --target s3://my-bucket/app-chain \\
+    --backup-endpoint https://<account>.r2.cloudflarestorage.com \\
+    --backup-region auto \\
+    --backup-path-style \\
+    --chain-slot`)}
+<div class="note">Credentials follow the cloud SDK's normal resolution (e.g. <code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code> for any S3-compatible endpoint). To run continuously instead of one incremental at a time, use <code>sluice backup stream run</code> (rolling incrementals) — and replay a chain into a live target with the <a href="/docs/from-backup-sync/">broker tutorial</a>.</div>
+
+<h2 id="trigger-cdc">Trigger-based CDC (no replication slot / Bucardo-style)</h2>
+<p>When the source is a managed Postgres that blocks logical replication slots — Heroku Postgres, RDS without the right grants, Supabase / Crunchy starter tiers — sluice can capture changes with <strong>plpgsql triggers</strong> instead. Per-table triggers write into a <code>sluice_change_log</code> capture table; the <code>postgres-trigger</code> engine tails the log. The lifecycle is explicit — <strong>setup → run → teardown</strong> — so the source-side DDL is visible at the CLI, not silently applied on first sync.</p>
+<p><strong>1. Install the capture triggers</strong> (<code>--tables</code> is required; on a tier that denies event-trigger creation, add <code>--allow-polled-fingerprint</code> to opt into the polled schema-fingerprint fallback):</p>
+${pre(`sluice trigger setup \\
+    --dsn 'postgres://user:pass@host:5432/app?sslmode=require' \\
+    --tables=orders,customers \\
+    --allow-polled-fingerprint`)}
+<p><strong>2. Stream with the trigger engine</strong> — the source driver is <code>postgres-trigger</code>; everything else is an ordinary <code>sync start</code>:</p>
+${pre(`sluice sync start \\
+    --source-driver postgres-trigger \\
+    --source 'postgres://user:pass@host:5432/app?sslmode=require' \\
+    --target-driver postgres --target 'postgres://...target...' \\
+    --stream-id app`)}
+<p><strong>3. Tear down cleanly</strong> when the stream is finished — this drops every per-table trigger and (by default) the <code>sluice_change_log</code> table, leaving the source with zero residue. Pass <code>--keep-data</code> to retain the change-log for forensics, or <code>--yes</code> to skip the confirmation prompt:</p>
+${pre(`sluice trigger teardown \\
+    --dsn 'postgres://user:pass@host:5432/app?sslmode=require' --yes`)}
+<div class="note">The slot-based PG CDC reader refuses loudly when the source role lacks the <code>REPLICATION</code> attribute rather than silently degrading to polling — the trigger engine is the deliberate slot-less path. See the <a href="/docs/commands/#trigger">trigger reference</a>.</div>
+
 <h2 id="next">Next steps</h2>
 <ul>
   <li><a href="/docs/commands/">Command reference</a> — the full flag set for every command.</li>
+  <li><a href="/docs/from-backup-sync/">Continuous sync from a backup chain</a> — replay a chain into a target as a long-running broker (decoupled transport).</li>
   <li><a href="/docs/commands/#cutover">cutover</a> — prime target sequences before switching traffic, so the first post-cutover <code>INSERT</code> can't collide.</li>
   <li><a href="/docs/configuration/">Configuration</a> — YAML config, env vars, type/expression overrides, and PII redaction.</li>
 </ul>
@@ -266,6 +311,15 @@ write(
 Run <code>sluice &lt;command&gt; --help</code> for the complete flag list — the tables below cover the
 flags you'll reach for most.</p>
 
+<div class="note"><strong>Parallelism flags mean different things per command.</strong> The same flag name maps to a different axis depending on the verb — read this row before tuning.
+<table><thead><tr><th>Flag</th><th>What it controls</th></tr></thead><tbody>
+<tr><td><code>--table-parallelism</code></td><td class="desc">Tables processed concurrently. On <strong>migrate</strong> = tables copied at once; on <strong>backup</strong> = tables read at once (the read-side analog of <code>pg_dump -j</code>); on <strong>restore</strong> = tables bulk-applied at once (<code>pg_restore -j</code>). On <strong>sync start</strong> it governs the PG-source cold-start sweep only.</td></tr>
+<tr><td><code>--bulk-parallelism</code></td><td class="desc">Within-table concurrency (a single table's chunks at once). On <strong>migrate</strong> / <strong>restore</strong> it multiplies with <code>--table-parallelism</code>, the product bounded by the target connection budget.</td></tr>
+<tr><td><code>--apply-concurrency</code></td><td class="desc">CDC apply lane count (PK-hash, exactly-once). Used by <strong>sync start</strong>, <strong>sync from-backup</strong>, and the incremental-replay leg of <strong>restore</strong>.</td></tr>
+<tr><td><code>--copy-fanout-degree</code></td><td class="desc">VStream/CDC cold-start <strong>write</strong> fan-out (PlanetScale-MySQL target) on <strong>sync start</strong>.</td></tr>
+</tbody></table>
+On <strong>sync start</strong>, <code>--table-parallelism</code> / <code>--bulk-parallelism</code> are <strong>PG-source-only</strong> — they're inert on MySQL / VStream sources. For a MySQL or Vitess/PlanetScale source's cold-copy concurrency, use the source-DSN knobs <a href="/docs/configuration/#dsn-tuning"><code>copy_table_parallelism</code></a> (native MySQL) / <code>vstream_copy_table_parallelism</code> (VStream) for read concurrency, and <code>--copy-fanout-degree</code> for write fan-out.</div>
+
 <h2 id="engines">engines</h2>
 ${cmd(
   "engines",
@@ -286,6 +340,9 @@ ${cmd(
   <tr><td><code>--target-driver</code> / <code>--target</code></td><td class="desc">Target engine name and DSN (or <code>SLUICE_TARGET</code>).</td></tr>
   <tr><td><code>--dry-run</code>, <code>-n</code></td><td class="desc">Print the plan; don't touch the target.</td></tr>
   <tr><td><code>--include-table</code> / <code>--exclude-table</code></td><td class="desc">Glob-aware table filters (mutually exclusive). Scope the bulk copy — including the PlanetScale (VStream) snapshot — not just the write path.</td></tr>
+  <tr><td><code>--include-database</code> / <code>--exclude-database</code> / <code>--all-databases</code></td><td class="desc">Multi-database fan-out (ADR-0074, <strong>MySQL source</strong>): migrate several source databases in one run, each to a same-named target namespace. Glob-aware; system databases (<code>information_schema</code>, <code>mysql</code>, …) are always excluded. When any database-scope flag is set the source DSN's database is optional (it's a server connection).</td></tr>
+  <tr><td><code>--include-schema</code> / <code>--exclude-schema</code> / <code>--all-schemas</code></td><td class="desc">Multi-schema fan-out (ADR-0075, <strong>Postgres source</strong>): the PG-source synonyms of the <code>-database</code> family. System schemas (<code>pg_catalog</code>, <code>information_schema</code>, …) are always excluded. <strong>MySQL source uses the <code>-database</code> spelling, PG source uses <code>-schema</code>; supplying both spellings in one invocation is a hard error.</strong></td></tr>
+  <tr><td><code>--allow-degraded-fks</code></td><td class="desc">PG-target only: tolerate a dirty FK source — when <code>ADD CONSTRAINT FOREIGN KEY</code> fails on orphan rows (SQLSTATE 23503), retry as <code>NOT VALID</code> and surface the degraded constraint at the end (run <code>VALIDATE CONSTRAINT</code> after fixing the orphans). Default off (loud failure on a dirty source). MySQL has no per-constraint <code>NOT VALID</code> and refuses loudly if this is set against a MySQL target.</td></tr>
   <tr><td><code>--resume</code>, <code>-r</code></td><td class="desc">Resume a failed migration from per-table checkpoints on the target.</td></tr>
   <tr><td><code>--bulk-parallelism</code></td><td class="desc">Parallel reader/writer pairs per large table (0 = auto, 1 = off). Since v0.99.64 (ADR-0096) within-table chunking covers single non-integer PKs (UUID/string/binary/decimal/temporal) and all-orderable composite PKs via sampled-keyset chunking — not just single-integer PKs. Tables with no usable PK (or a non-orderable PK column like JSON/array/geometry) still take the single-reader path.</td></tr>
   <tr><td><code>--bulk-parallel-min-rows</code></td><td class="desc">Row-count threshold below which a table is copied with a single reader/writer pair regardless of <code>--bulk-parallelism</code>. 0 = auto (base 80000, dialled down on many-table schemas).</td></tr>
@@ -378,7 +435,8 @@ ${cmd(
    </ul>
    ${pre(`sluice sync stop   --stream-id app-prod --target-driver postgres --target ... --wait --timeout 10m
 sluice sync health --stream-id app-prod --target-driver postgres --target ... \\
-    --max-lag 5m   # exit non-zero if the stream is more than 5 minutes behind`)}`
+    --max-stale-seconds 300   # exit non-zero if the last apply was more than 5 minutes ago`)}
+   <p><code>sync health</code>'s freshness check is <code>--max-stale-seconds N</code> (target-side wall-clock seconds since the last apply; <code>0</code> = informational only). When you also pass <code>--source-driver</code> + <code>--source</code> the probe reads the source position too and, on a <strong>PG→PG</strong> pair, exposes <code>--max-lag-bytes N</code> (source LSN bytes ahead of target; MySQL GTID sets aren't byte-distance comparable). Both exit <code>1</code> when breached — cron-friendly.</p>`
 )}
 
 <h2 id="schema-add-table">schema add-table</h2>
@@ -407,10 +465,23 @@ ${cmd(
   "sync-from-backup-c",
   "sluice sync from-backup run · stop",
   "Replay a backup chain into a target as a long-running broker — polls a chain root (S3/GCS/Azure/local) for new incrementals and applies them. No direct source↔target connectivity required.",
-  `${pre(`sluice sync from-backup run \\
+  `<table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
+  <tr><td><code>--backup-target</code> / <code>--backup-dir</code></td><td class="desc">The chain location: a URL (<code>s3://</code>, <code>gs://</code>, <code>azblob://</code>, <code>file:///</code>) or a local directory. Mutually exclusive.</td></tr>
+  <tr><td><code>--backup-endpoint</code> / <code>--backup-region</code> / <code>--backup-path-style</code></td><td class="desc">S3-compatible-provider knobs (R2 / B2 / MinIO / Wasabi / Tigris); only meaningful when <code>--backup-target</code> is an <code>s3://</code> URL.</td></tr>
+  <tr><td><code>--target-driver</code> / <code>--target</code></td><td class="desc">Target engine name and DSN (or <code>SLUICE_TARGET</code>).</td></tr>
+  <tr><td><code>--stream-id</code></td><td class="desc">Required. The key the broker's chain-state position is persisted under on the target — needed for clean restart resume.</td></tr>
+  <tr><td><code>--apply-concurrency</code></td><td class="desc">Key-hash concurrent-apply lane count <code>W</code> for incremental replay (the same machinery <code>sync start</code> uses). <code>0</code> (default) = <code>auto:4</code>; <code>1</code> = serial; <code>W&gt;1</code> honored. Matters for high-latency / cross-region targets — without it a large incremental replays through a single RTT-bound stream. Exactly-once preserved.</td></tr>
+  <tr><td><code>--reset-target-data</code></td><td class="desc">Cold-start recovery: drop target tables, run a chain restore (full + every incremental), then transition to live polling. Prompts (type <code>reset</code>) unless <code>--yes</code>. Mutually exclusive with <code>--at-chain-id</code>.</td></tr>
+  <tr><td><code>--at-chain-id</code></td><td class="desc">Operator-asserted resume: treat the target as currently at chain ID <code>&lt;ID&gt;</code> (e.g. after a manual <code>sluice restore</code>), write a fresh state row, and tail forward. Mutually exclusive with <code>--reset-target-data</code>.</td></tr>
+  <tr><td><code>--poll-interval</code></td><td class="desc">Cadence each broker tick runs at (default <code>30s</code>); new incrementals are applied within ~one interval of their source-side commit.</td></tr>
+  <tr><td><code>--apply-batch-size</code></td><td class="desc">CDC changes per target transaction during replay (default <code>100</code>). Idempotent applier semantics keep replay-on-crash safe.</td></tr>
+  <tr><td><code>--max-buffer-bytes</code></td><td class="desc">Soft cap on per-batch buffered memory in the CDC applier. Default <code>67108864</code> (64 MiB).</td></tr>
+  </tbody></table>
+  <p>The full walkthrough — producing the chain, cold-start vs warm-resume, stopping — is in the <a href="/docs/from-backup-sync/">backup-chain sync guide</a>.</p>
+  ${pre(`sluice sync from-backup run \\
     --backup-target s3://my-bucket/app-chain \\
     --target-driver postgres --target ... \\
-    --stream-id app-broker --poll-interval 30s
+    --stream-id app-broker --apply-concurrency 4 --poll-interval 30s
 
 sluice sync from-backup stop --backup-target s3://my-bucket/app-chain`)}`
 )}
@@ -441,6 +512,10 @@ ${cmd(
   <tr><td><code>--chain-slot</code></td><td class="desc">Postgres-only, on <code>backup full</code>: provision the persistent replication slot (named by <code>--slot-name</code>) as the snapshot anchor and ensure the publication, so <code>backup incremental</code> chains with zero gap and no manual slot setup. (v0.99.35)</td></tr>
   <tr><td><code>--table-parallelism</code></td><td class="desc">Tables read concurrently during the backup sweep (the read-side analog of <code>pg_dump -j</code>); <code>0</code> = auto (4). Postgres pins every parallel reader to one shareable exported snapshot; vanilla MySQL coordinates N readers under a brief FTWRL window (v0.99.43, ADR-0088) — both match the serial sweep's cross-table consistency. MySQL falls back to a serial single reader (a loud INFO names why) without <code>RELOAD</code>. (v0.99.39 / v0.99.43)</td></tr>
   <tr><td><code>--include-table</code> / <code>--exclude-table</code></td><td class="desc">Glob-aware table filters; scope the backup snapshot itself — including the PlanetScale (VStream) snapshot — so an excluded table in a large keyspace is never streamed (v0.99.13), not just what's written.</td></tr>
+  <tr><td><code>--compression</code></td><td class="desc">Per-segment chunk codec: <code>none</code> | <code>gzip</code> | <code>zstd</code>. Default <strong><code>zstd</code></strong> (55–85% faster restore — the DR-critical axis; ~1–5% larger than gzip). <code>none</code> leaves chunks as human-readable <code>.jsonl</code> on a local-FS target. Recorded in <code>lineage.json</code> and read back from there on restore (never inferred from bytes).</td></tr>
+  <tr><td><code>--encrypt</code></td><td class="desc">Enable client-side envelope encryption. Requires exactly one key source (below). The chain rests encrypted; <code>restore</code> / <code>verify</code> / the broker read the same flag to unwrap.</td></tr>
+  <tr><td><code>--encryption-passphrase-env</code> / <code>--encryption-passphrase-file</code></td><td class="desc">Passphrase mode: read the passphrase from an environment variable or a file (preferred over <code>--encryption-passphrase</code>, which lands in shell history). The chain root records the Argon2id params so incrementals and restores re-derive the KEK — operators only remember the passphrase.</td></tr>
+  <tr><td><code>--kms-key-arn</code> / <code>--gcp-kms-key-resource</code> / <code>--azure-key-vault-id</code></td><td class="desc">KMS mode: wrap the CEK through AWS KMS, GCP Cloud KMS, or Azure Key Vault respectively — the root key never leaves the cloud KMS. Mutually exclusive with each other and with the passphrase flags. KMS and passphrase modes can't be mixed within one chain.</td></tr>
   </tbody></table>
   ${pre(`sluice backup full --source-driver postgres --source ... --target s3://my-bucket/app-chain --chain-slot
 sluice backup incremental --source-driver postgres --source ... --target s3://my-bucket/app-chain`)}
@@ -457,6 +532,7 @@ ${cmd(
   <tr><td><code>--target-driver</code> / <code>--target</code></td><td class="desc">Target engine name and DSN. Accepts <strong>any registered engine</strong> — a backup taken from one engine can be restored into another (e.g. a MySQL chain into a Postgres target).</td></tr>
   <tr><td><code>--table-parallelism</code></td><td class="desc">Tables bulk-applied concurrently (the write-side analog of <code>pg_restore -j</code>); <code>0</code> = auto (4), works on both engines; incremental change replay stays ordered. (v0.99.39)</td></tr>
   <tr><td><code>--bulk-parallelism</code></td><td class="desc">Within-table chunk parallelism — a single table's chunks applied concurrently (ADR-0112). <code>0</code> = auto: <code>min(8, NumCPU)</code>; <code>1</code> = serial. Engages only for tables with ≥2 chunks; multiplies with <code>--table-parallelism</code> (table × chunk), with the product bounded by the target connection budget. Applies to chain restores too.</td></tr>
+  <tr><td><code>--apply-concurrency</code></td><td class="desc">Key-hash concurrent-apply lane count for the <strong>incremental-replay leg</strong> of a chain restore (ADR-0104/0105). The full-restore row load is the bulk COPY (governed by the two parallelism flags above); a chain's incremental change-replay would otherwise run through a single serial stream and stall RTT-bound on a high-latency / cross-region target. <code>0</code> (default) = <code>auto:4</code>; <code>1</code> = serial; <code>W&gt;1</code> honored. Exactly-once preserved. No effect on a single-full restore.</td></tr>
   <tr><td><code>--target-schema</code></td><td class="desc">Postgres-only: land restored tables under a named schema namespace.</td></tr>
   </tbody></table>
   ${pre(`sluice restore --from s3://my-bucket/app-chain \\
@@ -478,11 +554,14 @@ ${cmd(
   "Install the postgres-trigger engine's source-side state — slot-less CDC for managed Postgres that blocks logical replication.",
   `<table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
   <tr><td><code>--dsn</code></td><td class="desc">Source Postgres DSN to install the trigger state into.</td></tr>
-  <tr><td><code>--tables</code></td><td class="desc">Tables to capture (default: all).</td></tr>
-  <tr><td><code>--allow-polled-fingerprint</code></td><td class="desc">Permit the non-superuser polled path when event triggers aren't grantable (e.g. Heroku).</td></tr>
+  <tr><td><code>--tables</code></td><td class="desc"><strong>Required</strong>, comma-separated (repeatable): the tables to install per-table row + truncate triggers on. Empty-list discovery is a follow-up — the command errors if it's unset.</td></tr>
+  <tr><td><code>--schema</code></td><td class="desc">PG schema the change-log + capture function + per-table triggers live in. Defaults to the DSN's <code>schema</code> query parameter (typically <code>public</code>).</td></tr>
+  <tr><td><code>--allow-polled-fingerprint</code></td><td class="desc">Permit the non-superuser polled schema-fingerprint path when event triggers aren't grantable (e.g. Heroku). Default off: the engine refuses loudly so the weaker DDL-detection mode is acknowledged explicitly.</td></tr>
   <tr><td><code>--capture-payload</code></td><td class="desc"><code>full</code> (default) / <code>changed</code> / <code>minimal</code> — how much of each row the trigger records.</td></tr>
+  <tr><td><code>--dry-run</code>, <code>-n</code></td><td class="desc">Print the DDL the command would apply and exit; no source-side state is modified.</td></tr>
   </tbody></table>
-  ${pre(`sluice trigger setup --dsn 'postgres://user:pass@host:5432/app' --allow-polled-fingerprint
+  ${pre(`sluice trigger setup --dsn 'postgres://user:pass@host:5432/app' \\
+    --tables=orders,customers --allow-polled-fingerprint
 # then stream with the trigger engine:
 sluice sync start --source-driver postgres-trigger --source ... --target-driver mysql --target ... --stream-id app`)}`
 )}
@@ -529,7 +608,9 @@ ${cmd(
   "matview-c",
   "sluice matview refresh",
   "Refresh PostgreSQL materialized views on the target (PG-only). Handy as a scheduled job after a sync catches up.",
-  pre(`sluice matview refresh --target-driver postgres --target ... --view reporting.daily_totals`)
+  `${pre(`sluice matview refresh --target-driver postgres --target ... \\
+    --matview daily_totals --target-schema reporting`)}
+   <p><code>--matview</code> takes <strong>bare</strong> matview names (comma-separated, repeatable) that match <code>pg_matviews.matviewname</code> case-sensitively; the schema is named separately with <code>--target-schema</code> (default <code>public</code>). Omit <code>--matview</code> to refresh every matview in the schema. Add <code>--concurrently</code> to emit <code>REFRESH MATERIALIZED VIEW CONCURRENTLY</code> (requires a unique index on the matview; readers stay live).</p>`
 )}
 
 <h2 id="slot">slot list / drop</h2>
@@ -679,6 +760,77 @@ ${pre(`sluice migrate -c sluice.yaml --source-driver mysql --source ... --target
 </ul>
 `,
     prev: { href: "/docs/commands/", label: "Command reference" },
+  })
+);
+
+// ---- Guide: continuous sync from a backup chain --------------------------
+write(
+  "from-backup-sync",
+  page({
+    slug: "from-backup-sync",
+    title: "Continuous sync from a backup chain (the broker)",
+    subtitle: "Replay a backup chain into a target as a long-running broker — no direct source↔target connectivity required.",
+    body: `
+<p>The <strong>broker</strong> (<code>sluice sync from-backup run</code>) replicates by reading a <a href="/docs/commands/#backup">backup chain</a> instead of connecting to the source's CDC stream directly. One <code>sluice</code> process <em>produces</em> the chain from the source; another <em>tails</em> it and applies the changes to a target. The backup store — S3 / GCS / Azure Blob / local FS — is the message log between them. Reach for this when the source and target can't (or shouldn't) talk directly: an air-gapped target, cross-region DR where the chain already crosses the boundary, or fanning one chain out to several targets.</p>
+<div class="note">The broker trades latency and throughput for the <strong>decoupled-transport</strong> property. If your source and target <em>can</em> reach each other directly, <a href="/docs/commands/#sync-start">sync start</a> is lower-latency and higher-throughput — use it instead. The broker is for moderate volumes with decoupled transport.</div>
+
+<h2 id="produce">1. Produce the chain</h2>
+<p>On the source side, take a full backup to root the chain, then keep it fed with incrementals. On Postgres add <code>--chain-slot</code> to the full so it provisions the replication slot that anchors the chain (incrementals then chain with zero gap):</p>
+${pre(`sluice backup full --source-driver postgres --source 'postgres://...source...' \\
+    --target s3://my-bucket/app-chain \\
+    --backup-endpoint https://<account>.r2.cloudflarestorage.com \\
+    --backup-region auto --backup-path-style \\
+    --chain-slot`)}
+<p>Then feed it. Either run periodic incrementals from a scheduler:</p>
+${pre(`sluice backup incremental --source-driver postgres --source 'postgres://...source...' \\
+    --target s3://my-bucket/app-chain \\
+    --backup-endpoint https://<account>.r2.cloudflarestorage.com \\
+    --backup-region auto --backup-path-style`)}
+<p>…or run a continuous producer that commits rolling incrementals on a cadence (a long-lived process — run it under systemd / k8s). <code>--rollover-window</code> sets how often it commits an incremental; <code>--retain-rotate-at-chain-length</code> rotates into a fresh segment to keep segments compact for pruning:</p>
+${pre(`sluice backup stream run --source-driver postgres --source 'postgres://...source...' \\
+    --target s3://my-bucket/app-chain \\
+    --backup-endpoint https://<account>.r2.cloudflarestorage.com \\
+    --backup-region auto --backup-path-style \\
+    --rollover-window 10s \\
+    --retain-rotate-at-chain-length 20`)}
+
+<h2 id="replay">2. Replay it into the target</h2>
+<p>On the consumer side, point the broker at the same chain. It reads the chain's catalog every <code>--poll-interval</code>, applies any incrementals newer than its persisted position in chain order, and persists progress in the target's <code>sluice_cdc_state</code>. The <code>--stream-id</code> is required so it can resume cleanly after a restart:</p>
+${pre(`sluice sync from-backup run \\
+    --backup-target s3://my-bucket/app-chain \\
+    --backup-endpoint https://<account>.r2.cloudflarestorage.com \\
+    --backup-region auto --backup-path-style \\
+    --target-driver postgres --target 'postgres://...target...' \\
+    --stream-id app-broker \\
+    --apply-concurrency 4 \\
+    --poll-interval 10s`)}
+<div class="note"><strong><code>--apply-concurrency</code> matters for cross-region targets.</strong> Each incremental's merged change stream is fanned across <code>W</code> in-order PK-hash lanes (same key → same lane → applied in source order), each committing concurrently on its own connection. Without it, a large incremental replayed into a high-latency target applies through a single RTT-bound stream and the broker falls behind. <code>0</code> (default) = <code>auto:4</code>; <code>1</code> = explicit serial; <code>W&gt;1</code> honored. Exactly-once is preserved — every change in an incremental carries the same chain position, so the lanes persist the identical resume position the serial path would.</div>
+
+<h2 id="coldstart">3. Cold-start vs warm-resume</h2>
+<p>On its <strong>first</strong> launch against a chain, the broker has no <code>sluice_cdc_state</code> row for the chosen <code>--stream-id</code>, so it doesn't know where in the chain to begin and refuses loudly. There are two ways past that, mutually exclusive:</p>
+<ul>
+  <li><strong><code>--reset-target-data</code></strong> — drop the target's tables, run a chain restore (full + every incremental up to the tail), then transition to live polling. The full from-the-chain rebuild; suitable when the target is empty or you want a clean rebuild. Prompts (type <code>reset</code>) unless <code>--yes</code>.</li>
+  <li><strong><code>--at-chain-id &lt;ID&gt;</code></strong> — operator-asserted resume: tell the broker the target is already at chain ID <code>&lt;ID&gt;</code> (e.g. you just ran a manual <a href="/docs/commands/#restore">sluice restore</a> to bring the target up to a known checkpoint). It writes a fresh state row and tails forward from there — no re-bulking.</li>
+</ul>
+<p>The common case is the post-<code>restore</code> cold-start: bulk-copy the chain once with <code>sluice restore</code>, then launch the broker with <code>--at-chain-id</code> set to that restore's tail manifest. Pass the flag <strong>only on the first launch</strong>; every subsequent restart warm-resumes from <code>sluice_cdc_state</code> automatically and needs neither flag:</p>
+${pre(`# first launch after a fresh restore
+sluice sync from-backup run --backup-target s3://my-bucket/app-chain \\
+    --target-driver postgres --target 'postgres://...target...' \\
+    --stream-id app-broker --apply-concurrency 4 --poll-interval 10s \\
+    --at-chain-id 9b12b8ccdc3e7fa9725825ab032e6d6d41d3db09
+
+# every restart after that — warm-resume, no recovery flag
+sluice sync from-backup run --backup-target s3://my-bucket/app-chain \\
+    --target-driver postgres --target 'postgres://...target...' \\
+    --stream-id app-broker --apply-concurrency 4 --poll-interval 10s`)}
+
+<h2 id="stop">4. Stopping cleanly</h2>
+<p>Stop the broker by writing a stop signal to the chain destination — the running process observes it on its next tick and exits cleanly. Because the signal lives in the store, you can stop a broker from a different host without process access (both sides agree on the chain, not on the host):</p>
+${pre(`sluice sync from-backup stop --backup-target s3://my-bucket/app-chain`)}
+<div class="note">The broker follows segment-rotation seams automatically and is restart-resilient on both sides — its idempotent applier absorbs any overlap on resume. Two consumers must use <strong>distinct</strong> <code>--stream-id</code>s for distinct targets, or they'll race on position writes. To rest the chain encrypted, the broker accepts the same encryption flags as the rest of the backup family — see the <a href="/docs/commands/#backup">backup reference</a>.</div>
+`,
+    prev: { href: "/docs/getting-started/", label: "Getting started" },
+    next: { href: "/docs/commands/", label: "Command reference" },
   })
 );
 

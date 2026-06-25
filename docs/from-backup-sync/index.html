@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Continuous sync from a backup chain (the broker) — sluice docs</title>
+<meta name="description" content="Replay a backup chain into a target as a long-running broker — no direct source↔target connectivity required.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk active" href="/docs/from-backup-sync/">Sync from a backup chain</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
+  <main class="content">
+    <h1>Continuous sync from a backup chain (the broker)</h1>
+    <p class="subtitle">Replay a backup chain into a target as a long-running broker — no direct source↔target connectivity required.</p>
+    
+<p>The <strong>broker</strong> (<code>sluice sync from-backup run</code>) replicates by reading a <a href="/docs/commands/#backup">backup chain</a> instead of connecting to the source's CDC stream directly. One <code>sluice</code> process <em>produces</em> the chain from the source; another <em>tails</em> it and applies the changes to a target. The backup store — S3 / GCS / Azure Blob / local FS — is the message log between them. Reach for this when the source and target can't (or shouldn't) talk directly: an air-gapped target, cross-region DR where the chain already crosses the boundary, or fanning one chain out to several targets.</p>
+<div class="note">The broker trades latency and throughput for the <strong>decoupled-transport</strong> property. If your source and target <em>can</em> reach each other directly, <a href="/docs/commands/#sync-start">sync start</a> is lower-latency and higher-throughput — use it instead. The broker is for moderate volumes with decoupled transport.</div>
+
+<h2 id="produce">1. Produce the chain</h2>
+<p>On the source side, take a full backup to root the chain, then keep it fed with incrementals. On Postgres add <code>--chain-slot</code> to the full so it provisions the replication slot that anchors the chain (incrementals then chain with zero gap):</p>
+<pre><code><span class="k">sluice</span> backup full <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...source...' \
+    <span class="f">--target</span> s3://my-bucket/app-chain \
+    <span class="f">--backup-endpoint</span> https://&lt;account&gt;.r2.cloudflarestorage.com \
+    <span class="f">--backup-region</span> auto <span class="f">--backup-path-style</span> \
+    <span class="f">--chain-slot</span></code></pre>
+<p>Then feed it. Either run periodic incrementals from a scheduler:</p>
+<pre><code><span class="k">sluice</span> backup incremental <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...source...' \
+    <span class="f">--target</span> s3://my-bucket/app-chain \
+    <span class="f">--backup-endpoint</span> https://&lt;account&gt;.r2.cloudflarestorage.com \
+    <span class="f">--backup-region</span> auto <span class="f">--backup-path-style</span></code></pre>
+<p>…or run a continuous producer that commits rolling incrementals on a cadence (a long-lived process — run it under systemd / k8s). <code>--rollover-window</code> sets how often it commits an incremental; <code>--retain-rotate-at-chain-length</code> rotates into a fresh segment to keep segments compact for pruning:</p>
+<pre><code><span class="k">sluice</span> backup stream run <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...source...' \
+    <span class="f">--target</span> s3://my-bucket/app-chain \
+    <span class="f">--backup-endpoint</span> https://&lt;account&gt;.r2.cloudflarestorage.com \
+    <span class="f">--backup-region</span> auto <span class="f">--backup-path-style</span> \
+    <span class="f">--rollover-window</span> 10s \
+    <span class="f">--retain-rotate-at-chain-length</span> 20</code></pre>
+
+<h2 id="replay">2. Replay it into the target</h2>
+<p>On the consumer side, point the broker at the same chain. It reads the chain's catalog every <code>--poll-interval</code>, applies any incrementals newer than its persisted position in chain order, and persists progress in the target's <code>sluice_cdc_state</code>. The <code>--stream-id</code> is required so it can resume cleanly after a restart:</p>
+<pre><code><span class="k">sluice</span> sync from-backup run \
+    <span class="f">--backup-target</span> s3://my-bucket/app-chain \
+    <span class="f">--backup-endpoint</span> https://&lt;account&gt;.r2.cloudflarestorage.com \
+    <span class="f">--backup-region</span> auto <span class="f">--backup-path-style</span> \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...target...' \
+    <span class="f">--stream-id</span> app-broker \
+    <span class="f">--apply-concurrency</span> 4 \
+    <span class="f">--poll-interval</span> 10s</code></pre>
+<div class="note"><strong><code>--apply-concurrency</code> matters for cross-region targets.</strong> Each incremental's merged change stream is fanned across <code>W</code> in-order PK-hash lanes (same key → same lane → applied in source order), each committing concurrently on its own connection. Without it, a large incremental replayed into a high-latency target applies through a single RTT-bound stream and the broker falls behind. <code>0</code> (default) = <code>auto:4</code>; <code>1</code> = explicit serial; <code>W&gt;1</code> honored. Exactly-once is preserved — every change in an incremental carries the same chain position, so the lanes persist the identical resume position the serial path would.</div>
+
+<h2 id="coldstart">3. Cold-start vs warm-resume</h2>
+<p>On its <strong>first</strong> launch against a chain, the broker has no <code>sluice_cdc_state</code> row for the chosen <code>--stream-id</code>, so it doesn't know where in the chain to begin and refuses loudly. There are two ways past that, mutually exclusive:</p>
+<ul>
+  <li><strong><code>--reset-target-data</code></strong> — drop the target's tables, run a chain restore (full + every incremental up to the tail), then transition to live polling. The full from-the-chain rebuild; suitable when the target is empty or you want a clean rebuild. Prompts (type <code>reset</code>) unless <code>--yes</code>.</li>
+  <li><strong><code>--at-chain-id &lt;ID&gt;</code></strong> — operator-asserted resume: tell the broker the target is already at chain ID <code>&lt;ID&gt;</code> (e.g. you just ran a manual <a href="/docs/commands/#restore">sluice restore</a> to bring the target up to a known checkpoint). It writes a fresh state row and tails forward from there — no re-bulking.</li>
+</ul>
+<p>The common case is the post-<code>restore</code> cold-start: bulk-copy the chain once with <code>sluice restore</code>, then launch the broker with <code>--at-chain-id</code> set to that restore's tail manifest. Pass the flag <strong>only on the first launch</strong>; every subsequent restart warm-resumes from <code>sluice_cdc_state</code> automatically and needs neither flag:</p>
+<pre><code><span class="c"># first launch after a fresh restore</span>
+<span class="k">sluice</span> sync from-backup run <span class="f">--backup-target</span> s3://my-bucket/app-chain \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...target...' \
+    <span class="f">--stream-id</span> app-broker <span class="f">--apply-concurrency</span> 4 <span class="f">--poll-interval</span> 10s \
+    <span class="f">--at-chain-id</span> 9b12b8ccdc3e7fa9725825ab032e6d6d41d3db09
+
+<span class="c"># every restart after that — warm-resume, no recovery flag</span>
+<span class="k">sluice</span> sync from-backup run <span class="f">--backup-target</span> s3://my-bucket/app-chain \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...target...' \
+    <span class="f">--stream-id</span> app-broker <span class="f">--apply-concurrency</span> 4 <span class="f">--poll-interval</span> 10s</code></pre>
+
+<h2 id="stop">4. Stopping cleanly</h2>
+<p>Stop the broker by writing a stop signal to the chain destination — the running process observes it on its next tick and exits cleanly. Because the signal lives in the store, you can stop a broker from a different host without process access (both sides agree on the chain, not on the host):</p>
+<pre><code><span class="k">sluice</span> sync from-backup stop <span class="f">--backup-target</span> s3://my-bucket/app-chain</code></pre>
+<div class="note">The broker follows segment-rotation seams automatically and is restart-resilient on both sides — its idempotent applier absorbs any overlap on resume. Two consumers must use <strong>distinct</strong> <code>--stream-id</code>s for distinct targets, or they'll race on position writes. To rest the chain encrypted, the broker accepts the same encryption flags as the rest of the backup family — see the <a href="/docs/commands/#backup">backup reference</a>.</div>
+
+    <div class="pager"><a class="prev" href="/docs/getting-started/">← Getting started</a><a class="next" href="/docs/commands/">Command reference →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+</body>
+</html>

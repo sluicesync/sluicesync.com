@@ -23,7 +23,7 @@
   </div>
 </header>
 <div class="layout">
-  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk active" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk active" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
   <main class="content">
     <h1>Getting started</h1>
     <p class="subtitle">Install sluice, point it at a source and target, and run your first migration and continuous sync.</p>
@@ -92,9 +92,48 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=disabl
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...</code></pre>
 <p><code>verify</code> compares row counts by default and can escalate to per-row hashing — see the <a href="/docs/commands/#verify">verify reference</a>.</p>
 
+<h2 id="backups">Set up backups</h2>
+<p>sluice takes <strong>logical</strong> backups — a full snapshot that roots a chain, plus incrementals appended onto it — to a local directory or any S3/GCS/Azure object store. It's the same binary; no separate backup daemon. Take a full backup first; on Postgres, add <code>--chain-slot</code> so the full provisions the replication slot that anchors the chain (incrementals then chain with zero gap, no manual slot setup):</p>
+<pre><code><span class="c"># full snapshot to a local directory (chain root)</span>
+<span class="k">sluice</span> backup full <span class="f">--source-driver</span> postgres <span class="f">--source</span> ... \
+    <span class="f">--output-dir</span> /var/backups/app <span class="f">--chain-slot</span>
+
+<span class="c"># append an incremental onto the chain</span>
+<span class="k">sluice</span> backup incremental <span class="f">--source-driver</span> postgres <span class="f">--source</span> ... \
+    <span class="f">--output-dir</span> /var/backups/app</code></pre>
+<p>Backups are compressed with <strong>zstd by default</strong> (<code>--compression none|gzip|zstd</code>). To rest the chain encrypted, add the encryption flags — a passphrase (read from an env var or file, not the command line) or a cloud KMS key (<code>--kms-key-arn</code> / <code>--gcp-kms-key-resource</code> / <code>--azure-key-vault-id</code>); see the <a href="/docs/commands/#backup">backup reference</a>.</p>
+<p>For <strong>object storage</strong>, swap <code>--output-dir</code> for <code>--target &lt;url&gt;</code> (<code>s3://</code>, <code>gs://</code>, <code>azblob://</code>, <code>file:///</code>). S3-compatible providers — Cloudflare R2, Backblaze B2, MinIO, Wasabi, Tigris — take three extra knobs: <code>--backup-endpoint</code> (the provider's endpoint), <code>--backup-region</code>, and <code>--backup-path-style</code> (bucket-in-path addressing, which most non-AWS providers require):</p>
+<pre><code><span class="c"># full backup to Cloudflare R2 (an S3-compatible store)</span>
+<span class="k">sluice</span> backup full <span class="f">--source-driver</span> postgres <span class="f">--source</span> ... \
+    <span class="f">--target</span> s3://my-bucket/app-chain \
+    <span class="f">--backup-endpoint</span> https://&lt;account&gt;.r2.cloudflarestorage.com \
+    <span class="f">--backup-region</span> auto \
+    <span class="f">--backup-path-style</span> \
+    <span class="f">--chain-slot</span></code></pre>
+<div class="note">Credentials follow the cloud SDK's normal resolution (e.g. <code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code> for any S3-compatible endpoint). To run continuously instead of one incremental at a time, use <code>sluice backup stream run</code> (rolling incrementals) — and replay a chain into a live target with the <a href="/docs/from-backup-sync/">broker tutorial</a>.</div>
+
+<h2 id="trigger-cdc">Trigger-based CDC (no replication slot / Bucardo-style)</h2>
+<p>When the source is a managed Postgres that blocks logical replication slots — Heroku Postgres, RDS without the right grants, Supabase / Crunchy starter tiers — sluice can capture changes with <strong>plpgsql triggers</strong> instead. Per-table triggers write into a <code>sluice_change_log</code> capture table; the <code>postgres-trigger</code> engine tails the log. The lifecycle is explicit — <strong>setup → run → teardown</strong> — so the source-side DDL is visible at the CLI, not silently applied on first sync.</p>
+<p><strong>1. Install the capture triggers</strong> (<code>--tables</code> is required; on a tier that denies event-trigger creation, add <code>--allow-polled-fingerprint</code> to opt into the polled schema-fingerprint fallback):</p>
+<pre><code><span class="k">sluice</span> trigger setup \
+    <span class="f">--dsn</span> 'postgres://user:pass@host:5432/app?sslmode=require' \
+    <span class="f">--tables</span>=orders,customers \
+    <span class="f">--allow-polled-fingerprint</span></code></pre>
+<p><strong>2. Stream with the trigger engine</strong> — the source driver is <code>postgres-trigger</code>; everything else is an ordinary <code>sync start</code>:</p>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> postgres-trigger \
+    <span class="f">--source</span> 'postgres://user:pass@host:5432/app?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...target...' \
+    <span class="f">--stream-id</span> app</code></pre>
+<p><strong>3. Tear down cleanly</strong> when the stream is finished — this drops every per-table trigger and (by default) the <code>sluice_change_log</code> table, leaving the source with zero residue. Pass <code>--keep-data</code> to retain the change-log for forensics, or <code>--yes</code> to skip the confirmation prompt:</p>
+<pre><code><span class="k">sluice</span> trigger teardown \
+    <span class="f">--dsn</span> 'postgres://user:pass@host:5432/app?sslmode=require' <span class="f">--yes</span></code></pre>
+<div class="note">The slot-based PG CDC reader refuses loudly when the source role lacks the <code>REPLICATION</code> attribute rather than silently degrading to polling — the trigger engine is the deliberate slot-less path. See the <a href="/docs/commands/#trigger">trigger reference</a>.</div>
+
 <h2 id="next">Next steps</h2>
 <ul>
   <li><a href="/docs/commands/">Command reference</a> — the full flag set for every command.</li>
+  <li><a href="/docs/from-backup-sync/">Continuous sync from a backup chain</a> — replay a chain into a target as a long-running broker (decoupled transport).</li>
   <li><a href="/docs/commands/#cutover">cutover</a> — prime target sequences before switching traffic, so the first post-cutover <code>INSERT</code> can't collide.</li>
   <li><a href="/docs/configuration/">Configuration</a> — YAML config, env vars, type/expression overrides, and PII redaction.</li>
 </ul>
