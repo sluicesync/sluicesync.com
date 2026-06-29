@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import SQLite or Cloudflare D1 — sluice docs</title>
+<meta name="description" content="Move a SQLite file, a wrangler D1 export, or a live Cloudflare D1 into Postgres or MySQL — losslessly.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk active" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
+  <main class="content">
+    <h1>Import SQLite or Cloudflare D1</h1>
+    <p class="subtitle">Move a SQLite file, a wrangler D1 export, or a live Cloudflare D1 into Postgres or MySQL — losslessly.</p>
+    
+<p>sluice imports SQLite and <a href="https://developers.cloudflare.com/d1/">Cloudflare D1</a> into Postgres or MySQL through the same <a href="/docs/migrate-mysql-to-postgres/">migrate</a> pipeline as everything else — parallel copy, cross-engine type translation, deferred indexes, <code>--dry-run</code>, <code>verify</code> — with no pgloader or external tool. Reach for this when you're graduating a SQLite/D1 app onto a server database, or pulling D1 data into an analytics warehouse. There are three source shapes; pick by what you have.</p>
+
+<h2 id="file">A local SQLite file</h2>
+<p>Point <code>--source-driver sqlite</code> at the file (a bare path, a <code>file:</code> URI, or a <code>sqlite://</code> URL — opened read-only) and migrate as usual:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> sqlite   <span class="f">--source</span> ./app.db \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@host:5432/db?sslmode=require'</code></pre>
+<p>Large tables parallel-copy automatically (PK-range / keyset chunks, tuned by <code>--bulk-parallelism</code>), the same as any other source. A <code>.db</code> file is read byte-exact — sluice reads the int64 straight from the file.</p>
+
+<h2 id="dump">A wrangler D1 export (.sql dump)</h2>
+<p><code>wrangler d1 export</code> emits a <code>.sql</code> text dump. sluice ingests one directly — it sniffs the file's header, materializes the dump in-process (no <code>sqlite3</code> CLI), and auto-skips D1's internal <code>_cf_*</code> tables. So the import is two commands:</p>
+<pre><code>wrangler d1 export &lt;db&gt; <span class="f">--remote</span> <span class="f">--output</span> dump.sql
+<span class="k">sluice</span> migrate <span class="f">--source-driver</span> sqlite <span class="f">--source</span> dump.sql \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> '&lt;pg-dsn&gt;'</code></pre>
+<div class="note warn"><strong>The export rounds big integers.</strong> Both of D1's <em>default</em> extraction paths — the <code>wrangler d1 export</code> dump and the bare query API — silently lose integers larger than 2<sup>53</sup> (≈ 9 ×10<sup>15</sup>): D1 serializes them through a JavaScript double before sluice ever sees them. For Snowflake-style IDs (Discord/Twitter 64-bit IDs), nanosecond timestamps, or large counters, use the live query-API reader below — it's the only lossless path. For a D1 database <em>without</em> integers that large (the common case), the export path is exact and simple.</div>
+
+<h2 id="live">A live Cloudflare D1 (lossless)</h2>
+<p><code>--source-driver d1</code> reads a live D1 over its HTTP query API and is the <strong>lossless</strong> import. It projects every column through <code>typeof()</code> + <code>CAST(… AS TEXT)</code> / <code>hex()</code>, so integers above 2<sup>53</sup> round-trip exactly, INTEGER is distinguished from REAL, and BLOBs decode from hex. Reads don't take D1 offline. The API token is read from the environment only — never a flag, never logged:</p>
+<pre><code>export CLOUDFLARE_API_TOKEN=...        # required
+export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN
+
+<span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> d1       <span class="f">--source</span> 'd1://&lt;account_id&gt;/&lt;database_id&gt;' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> '&lt;pg-dsn&gt;'</code></pre>
+<p>DSN forms are <code>d1://&lt;account_id&gt;/&lt;database_id&gt;</code> or the short <code>d1://&lt;database_id&gt;</code> (account from <code>CLOUDFLARE_ACCOUNT_ID</code>). A missing token, account, or database id is refused loudly at startup, before any request.</p>
+
+<h2 id="dates">Dates, times, and booleans</h2>
+<p>SQLite and D1 have no native temporal or boolean storage. sluice maps a column whose <em>declared</em> type names one (<code>DATE</code> / <code>DATETIME</code> / <code>TIMESTAMP</code> / <code>TIME</code>, <code>BOOL</code> / <code>BOOLEAN</code>) to the right target type, and you tell it how the <em>values</em> are encoded with <code>--sqlite-date-encoding</code>:</p>
+<table><thead><tr><th>Encoding</th><th>Temporal values stored as</th></tr></thead><tbody>
+<tr><td><code>iso</code> (default)</td><td class="desc">ISO-8601 <strong>TEXT</strong>, e.g. <code>'2024-01-02 03:04:05'</code></td></tr>
+<tr><td><code>unixepoch</code></td><td class="desc">INTEGER unix <strong>seconds</strong></td></tr>
+<tr><td><code>unixmillis</code></td><td class="desc">INTEGER/REAL unix <strong>milliseconds</strong></td></tr>
+<tr><td><code>julian</code></td><td class="desc">REAL/INTEGER <strong>Julian day</strong></td></tr>
+</tbody></table>
+<p>A value whose storage class doesn't match the chosen encoding — or ISO text matching no layout, or a non-truthy boolean — is <strong>refused loudly, naming the row</strong>, never a silently-wrong date. Carry a genuine outlier raw with <code>--type-override &lt;col&gt;=text</code>. Preview the resolved types first with <a href="/docs/preview-and-validate/">schema preview</a>.</p>
+
+<h2 id="target">SQLite as a target</h2>
+<p>SQLite is also a migrate <strong>target</strong> (<code>--target-driver sqlite</code>) — emit a <code>.db</code> from any source (decimals are stored byte-exact as <code>TEXT</code> affinity, not lossy <code>REAL</code>), e.g. to then run <code>wrangler d1 import</code>. D1 itself is not a write target; produce a SQLite <code>.db</code> and import it with wrangler.</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> '&lt;pg-dsn&gt;' \
+    <span class="f">--target-driver</span> sqlite   <span class="f">--target</span> ./out.db</code></pre>
+
+<h2 id="continuous">Continuous sync (trigger-CDC)</h2>
+<p>The base <code>sqlite</code> and <code>d1</code> engines are migrate-only — SQLite has no logical change stream (its WAL is a physical page-log). For <strong>continuous</strong> sync, sluice captures changes with triggers, via the <code>sqlite-trigger</code> (local file) and <code>d1-trigger</code> (live D1) engines. The lifecycle is explicit — <strong>setup → sync → teardown</strong>:</p>
+<pre><code><span class="c"># 1. install per-table capture triggers + the change-log (each table needs a PRIMARY KEY)</span>
+<span class="k">sluice</span> trigger setup <span class="f">--source-driver</span> sqlite-trigger <span class="f">--dsn</span> ./app.db <span class="f">--tables</span>=users,orders
+
+<span class="c"># 2. cold-start snapshot, then stream changes continuously</span>
+<span class="k">sluice</span> sync start <span class="f">--source-driver</span> sqlite-trigger <span class="f">--source</span> ./app.db \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@host:5432/db?sslmode=require'
+
+<span class="c"># 3. remove every trigger + the change-log when done (--keep-data to retain it)</span>
+<span class="k">sluice</span> trigger teardown <span class="f">--source-driver</span> sqlite-trigger <span class="f">--dsn</span> ./app.db <span class="f">--yes</span></code></pre>
+<p>Big integers and BLOBs round-trip exactly through capture and CDC (the trigger encodes each column as a <code>(typeof, text/hex)</code> pair). Enable <code>PRAGMA journal_mode=WAL</code> on a local source so the poller never blocks the app's writes. Because SQLite has no DDL triggers, a source <code>ALTER TABLE</code> isn't auto-captured — re-run <code>trigger setup</code> after a schema change; <code>sync start</code> refuses loudly on schema drift rather than silently dropping a new column. The live <code>d1-trigger</code> path is identical over the HTTP query API (the token is a D1:Edit token); mind D1's per-write billing and the change-log growth — run <code>sluice trigger prune</code> periodically. Full detail: <a href="https://github.com/sluicesync/sluice/blob/main/docs/operator/sqlite-d1-import.md">the SQLite/D1 operator doc</a>.</p>
+
+    <div class="pager"><a class="prev" href="/docs/zero-downtime-cutover/">← Zero-downtime migration</a><a class="next" href="/docs/multi-database/">Migrate many databases or schemas →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+</body>
+</html>

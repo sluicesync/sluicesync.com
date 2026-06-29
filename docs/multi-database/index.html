@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrate many databases or schemas at once — sluice docs</title>
+<meta name="description" content="Fan a whole MySQL server or a multi-schema Postgres source out to same-named target namespaces in one run.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk active" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
+  <main class="content">
+    <h1>Migrate many databases or schemas at once</h1>
+    <p class="subtitle">Fan a whole MySQL server or a multi-schema Postgres source out to same-named target namespaces in one run.</p>
+    
+<p>By default <code>migrate</code> and <code>sync start</code> move the one database (MySQL) or schema (Postgres) named in the source DSN. The multi-namespace flags move <strong>all</strong> of a server's databases, or all of a Postgres source's schemas, in a single run — snapshot and CDC both — fanning each source namespace out to a <strong>same-named</strong> target namespace. Reach for this with a multi-tenant MySQL server (one database per tenant), a Postgres database holding several application schemas, or any "migrate the whole server" job.</p>
+<p>The unifying idea is that <em>a MySQL database is the rough equivalent of a Postgres schema</em>. So there's one internal routing with two spellings: use the <code>--*-database</code> form on a <strong>MySQL source</strong> and the <code>--*-schema</code> form on a <strong>Postgres source</strong>. They're synonyms — mixing both spellings in one invocation is a loud error.</p>
+<table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>--all-databases</code> / <code>--all-schemas</code></td><td class="desc">Every non-system namespace on the source.</td></tr>
+<tr><td><code>--include-database</code> / <code>--include-schema</code></td><td class="desc">Only these (comma-separated, repeatable; glob patterns allowed, e.g. <code>app_*</code>).</td></tr>
+<tr><td><code>--exclude-database</code> / <code>--exclude-schema</code></td><td class="desc">Every non-system namespace except these.</td></tr>
+</tbody></table>
+<p>Within a form, include / exclude / all are mutually exclusive. System namespaces are always excluded (<code>information_schema</code>, <code>performance_schema</code>, <code>mysql</code>, <code>sys</code> on MySQL; <code>pg_catalog</code>, <code>information_schema</code>, <code>pg_toast</code>, <code>pg_temp*</code> on Postgres). When any namespace-scope flag is set, the source DSN's database/schema is <strong>optional</strong> — sluice connects to the server (or, on PG, to the database) rather than a single namespace.</p>
+
+<h2 id="pg-schemas">Postgres source: every schema in one run</h2>
+<p>A Postgres database holding <code>sales</code>, <code>billing</code>, <code>inventory</code> → one Postgres target, each schema recreated (auto-created if absent) under its own name:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://user:pw@src/appdb?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pw@dst/appdb?sslmode=require' \
+    <span class="f">--all-schemas</span></code></pre>
+<p>Continuous sync is identical — just <code>sync start</code> with a <code>--stream-id</code>. Scope with globs, or take everything except a couple:</p>
+<pre><code><span class="c"># only the app_* schemas (plus public)</span>
+<span class="k">sluice</span> migrate ... <span class="f">--include-schema</span> 'app_*,public'
+
+<span class="c"># everything except the staging schemas</span>
+<span class="k">sluice</span> migrate ... <span class="f">--exclude-schema</span> 'scratch,tmp_load'</code></pre>
+
+<h2 id="mysql-databases">MySQL server: every database → Postgres in one run</h2>
+<p>A MySQL server hosting one database per tenant/service → a single Postgres target, <strong>each MySQL database recreated as a same-named PG schema</strong> (auto-created). Note the source DSN has no database after the <code>/</code> — with <code>--all-databases</code> it's a server connection:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:pw@tcp(src:3306)/' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pw@dst/warehouse?sslmode=require' \
+    <span class="f">--all-databases</span></code></pre>
+<p>MySQL <code>shop</code> / <code>crm</code> / <code>analytics</code> land as PG schemas <code>shop</code> / <code>crm</code> / <code>analytics</code> under <code>warehouse</code>. When the target is also MySQL, each source database is recreated via <code>CREATE DATABASE IF NOT EXISTS</code> — same names, no manual pre-creation.</p>
+
+<h2 id="fan-in">Fan-IN: many sources → one target namespace</h2>
+<p>The reverse shape — several independent source databases (e.g. per-microservice MySQL databases) consolidated into <strong>one</strong> Postgres analytics schema. This isn't a <code>--all-*</code> fan-out; it's N separate runs, each pinned to the same target namespace with <code>--target-schema</code> (Postgres-target-only; it prefixes every emitted object and auto-creates the schema):</p>
+<pre><code><span class="c"># service A → warehouse.analytics</span>
+<span class="k">sluice</span> migrate <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'root:pw@tcp(svc-a:3306)/orders' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pw@dst/warehouse?sslmode=require' \
+    <span class="f">--target-schema</span> analytics
+
+<span class="c"># service B → the SAME warehouse.analytics (run separately)</span>
+<span class="k">sluice</span> migrate <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'root:pw@tcp(svc-b:3306)/users' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pw@dst/warehouse?sslmode=require' \
+    <span class="f">--target-schema</span> analytics</code></pre>
+<div class="note">To avoid table-name collisions across services landing in one schema, pair <code>--target-schema</code> with <code>--inject-shard-column NAME=VALUE</code>, which adds a per-source discriminator and a composite PK. See the <a href="/docs/commands/#migrate">migrate reference</a>.</div>
+
+<h2 id="edges">The documented edges</h2>
+<ul>
+  <li><strong>Cross-database / cross-schema foreign keys are refused loudly.</strong> A fan-out validates that FK referents are inside the selected set; an out-of-scope FK fails loudly at the deferred FK pass (after the copy), never silently dropped.</li>
+  <li><strong>Separate Postgres <em>databases</em> are one run each.</strong> A PG connection is scoped to a single database, so <code>--all-schemas</code> covers every schema <em>within</em> the connected database; moving N separate PG databases is N runs (one <code>--source</code> DSN each).</li>
+  <li><strong>PlanetScale-MySQL is a single keyspace</strong> and isn't a multi-namespace target — fanning several source databases into one PS-MySQL branch would collapse and collide. PlanetScale-Postgres behaves like regular Postgres and takes <code>--all-schemas</code> fine.</li>
+  <li><strong>Routing is same-name today.</strong> Each source namespace lands in a target namespace of the same name; a rename-on-the-way flag is a planned follow-on. Use a same-named target, or <code>--target-schema</code> for the fan-IN shape.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/import-sqlite-d1/">← Import SQLite or Cloudflare D1</a><a class="next" href="/docs/from-backup-sync/">Sync from a backup chain →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+</body>
+</html>

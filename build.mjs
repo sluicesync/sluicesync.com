@@ -35,6 +35,11 @@ const NAV = [
   {
     group: "Guides",
     items: [
+      { slug: "migrate-mysql-to-postgres", label: "Migrate MySQL → Postgres" },
+      { slug: "preview-and-validate", label: "Preview & validate before you migrate" },
+      { slug: "zero-downtime-cutover", label: "Zero-downtime migration (continuous sync)" },
+      { slug: "import-sqlite-d1", label: "Import SQLite or Cloudflare D1" },
+      { slug: "multi-database", label: "Migrate many databases or schemas" },
       { slug: "from-backup-sync", label: "Sync from a backup chain" },
     ],
   },
@@ -86,8 +91,16 @@ function sidebar(activeSlug) {
 
 function page({ slug, title, subtitle, body, prev, next }) {
   const desc = subtitle || "sluice documentation";
-  const top =
-    '<a class="' + (slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "from-backup-sync" || slug === "" ? "active" : "") + '" href="/docs/">Docs</a>';
+  const guideSlugs = [
+    "from-backup-sync",
+    "migrate-mysql-to-postgres",
+    "preview-and-validate",
+    "zero-downtime-cutover",
+    "import-sqlite-d1",
+    "multi-database",
+  ];
+  const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "" || guideSlugs.includes(slug);
+  const top = '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>';
   let pager = "";
   if (prev || next) {
     pager = '<div class="pager">';
@@ -802,6 +815,318 @@ ${pre(`sluice migrate -c sluice.yaml --source-driver mysql --source ... --target
   })
 );
 
+// ---- Guide: migrate MySQL -> Postgres ------------------------------------
+write(
+  "migrate-mysql-to-postgres",
+  page({
+    slug: "migrate-mysql-to-postgres",
+    title: "Migrate MySQL → Postgres",
+    subtitle: "The flagship first migration: connect, preview the plan, copy the data, and verify it landed.",
+    body: `
+<p>A one-shot <a href="/docs/commands/#migrate">migrate</a> translates the source schema, creates the target tables, bulk-copies the rows, then builds indexes and constraints — in that order, so the bulk load runs against constraint-free tables and finishes fast. This guide walks MySQL → Postgres end to end, but the same shape works in <strong>all four directions</strong> (just swap the <code>--source-driver</code> / <code>--target-driver</code> pair). Reach for <code>migrate</code> when you can take a short write-freeze on the source; if you need a zero-downtime cutover, run the <a href="/docs/zero-downtime-cutover/">continuous-sync</a> flow instead — but even then a clean <code>migrate</code> is the fastest way to learn how sluice translates your schema.</p>
+<div class="note">Before a production cutover, freeze writes on the source (or accept that rows written during the copy won't be captured — <code>migrate</code> is a point-in-time copy, not a stream). To keep writes flowing throughout, use <a href="/docs/zero-downtime-cutover/">continuous sync</a>.</div>
+
+<h2 id="connect">1. Point sluice at both databases</h2>
+<p>Source and target are each a <strong>driver name</strong> plus a <strong>DSN</strong>. Because DSNs carry credentials, pass them through the environment to keep them out of your shell history:</p>
+${pre(`export SLUICE_SOURCE='root:rootpw@tcp(localhost:3306)/app'
+export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=require'
+
+sluice engines      # confirm 'mysql' and 'postgres' are registered`)}
+<p>The MySQL DSN is <code>user:pass@tcp(host:3306)/dbname</code>; the Postgres DSN is a <code>postgres://</code> URL. See <a href="/docs/configuration/#connection-strings">Configuration</a> for every engine's DSN format.</p>
+
+<h2 id="dry-run">2. Dry-run the plan first</h2>
+<p><code>--dry-run</code> (<code>-n</code>) reads the source schema and prints exactly what sluice would do — tables, row estimates, the translated types — <strong>without touching the target</strong>. Always do this first:</p>
+${pre(`sluice migrate \\
+    --source-driver mysql    --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --dry-run`)}
+<p>For the actual target DDL sluice will emit — column by column, with cross-engine translation notes — use <a href="/docs/preview-and-validate/">schema preview</a>. That's where you'll catch a type you want to steer with <code>--type-override</code> before any data moves.</p>
+
+<h2 id="run">3. Run the migration</h2>
+<p>When the plan looks right, drop <code>--dry-run</code>:</p>
+${pre(`sluice migrate \\
+    --source-driver mysql    --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"`)}
+<p>sluice copies each table, then builds secondary indexes and constraints in deferred phases. On large schemas it copies several tables at once and splits big tables into parallel chunks automatically — see <code>--table-parallelism</code> / <code>--bulk-parallelism</code> in the <a href="/docs/commands/#migrate">migrate reference</a> if you want to tune the connection budget.</p>
+<div class="note"><strong>Cold-start safety.</strong> sluice refuses to bulk-copy into a non-empty target by default — an <code>INSERT</code> into a populated table would collide on the primary key. That refusal is the safety net, not an error to suppress: it means the target already has data. Start from an empty target, or see the recovery flags below.</div>
+
+<h2 id="resume">4. If it's interrupted, resume</h2>
+<p>Migration state is checkpointed per table on the target. If a run dies partway (network blip, OOM, Ctrl-C), re-run the identical command with <code>--resume</code> (<code>-r</code>) and it continues from the last committed checkpoint rather than starting over:</p>
+${pre(`sluice migrate \\
+    --source-driver mysql    --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --resume`)}
+<p>To deliberately start clean over an already-populated target, <code>--reset-target-data</code> drops the source-schema tables on the target and re-copies (it prompts for a typed <code>reset</code> confirmation unless you add <code>--yes</code>). It's mutually exclusive with <code>--resume</code>.</p>
+
+<h2 id="verify">5. Verify the copy</h2>
+<p>Once the migration finishes, confirm source and target agree. <a href="/docs/commands/#verify">verify</a> compares per-table row counts by default and returns a non-zero exit code on any mismatch (CI-friendly):</p>
+${pre(`sluice verify \\
+    --source-driver mysql    --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --depth count`)}
+<p>For content checking — not just counts — escalate to <code>--depth sample</code> (per-table sampled-row content hashes; ~99% confidence on a 5%+ corruption rate). See the <a href="/docs/preview-and-validate/#verify">validate guide</a> for the depth ladder.</p>
+
+<h2 id="legacy">Migrating legacy MySQL data?</h2>
+<p>sluice forces a strict <code>sql_mode</code> on every MySQL connection to close the silent-clamp / silent-zero-date class of corruption. Data that was only storable under a relaxed mode — pre-5.7 zero-dates (<code>0000-00-00</code>), silently-truncated values — will <strong>refuse loudly</strong> rather than land subtly wrong. That's deliberate. Two knobs let you decide how to carry it:</p>
+<ul>
+  <li><code>--zero-date=null</code> carries zero/partial dates as <code>NULL</code> (refused on a <code>NOT NULL</code> column), or <code>--zero-date=epoch</code> substitutes <code>1970-01-01</code>.</li>
+  <li><code>--mysql-sql-mode=''</code> (explicit empty) falls all the way through to the server's default <code>sql_mode</code> for the broadest legacy tolerance.</li>
+</ul>
+<p>Both are <a href="/docs/configuration/#global-flags">global flags</a> — see Configuration for the full discussion.</p>
+`,
+    prev: { href: "/docs/getting-started/", label: "Getting started" },
+    next: { href: "/docs/preview-and-validate/", label: "Preview & validate" },
+  })
+);
+
+// ---- Guide: preview & validate -------------------------------------------
+write(
+  "preview-and-validate",
+  page({
+    slug: "preview-and-validate",
+    title: "Preview & validate before you migrate",
+    subtitle: "See the exact target DDL, steer the type translation, and confirm the copy — without guessing.",
+    body: `
+<p>sluice is correctness-first: it would rather refuse loudly than land data subtly wrong. The flip side is that you can see <em>everything</em> it intends to do before it does it. This guide covers the three read-only inspection commands — <a href="/docs/commands/#schema">schema preview</a>, <a href="/docs/commands/#schema">schema diff</a>, and <a href="/docs/commands/#verify">verify</a> — plus <code>--type-override</code>, the one knob that steers translation when you disagree with a default. Reach for this guide whenever a migration touches types you care about (money, JSON, UUIDs, SQLite's untyped columns) or before any production cutover.</p>
+
+<h2 id="preview">1. Preview the target DDL</h2>
+<p><code>schema preview</code> reads the source schema, runs the full cross-engine translation, and prints the <strong>exact DDL the target engine would emit</strong> — with advisory notes on anything non-obvious. It never connects to the target to write; the target DSN is only used to construct the right dialect's writer:</p>
+${pre(`sluice schema preview \\
+    --source-driver mysql    --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"`)}
+<p>Scope it with <code>--include-table</code> / <code>--exclude-table</code> (glob-aware), write it to a file with <code>-o ddl.sql</code>, or get machine-readable output with <code>--format json</code>. This is where you eyeball how each MySQL type maps to Postgres before a single row moves.</p>
+
+<h2 id="override">2. Steer a type with --type-override</h2>
+<p>When you disagree with a default mapping — say you want a MySQL <code>JSON</code> column to land as Postgres <code>jsonb</code> rather than <code>json</code>, or a free-form column forced to <code>text</code> — override it per column. The format is <code>TABLE.COLUMN=TYPE</code>, repeatable, and it's accepted by <code>preview</code>, <code>migrate</code>, and <code>sync start</code> alike, so you can preview the override and then migrate with the identical flag:</p>
+${pre(`sluice schema preview \\
+    --source-driver mysql --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --type-override products.attrs=text \\
+    --type-override events.payload=jsonb`)}
+<div class="note">For target-type options that need more than a type name — e.g. <code>jsonb</code> with <code>binary: true</code> — use the YAML <code>mappings:</code> block instead of the CLI flag (the CLI form takes a bare type). See <a href="/docs/configuration/#config-file">Configuration → YAML config</a>.</div>
+
+<h2 id="affinity">SQLite & D1: declared types vs stored affinity</h2>
+<p>SQLite (and Cloudflare D1) don't store strict types — a column has a <em>declared</em> type but values live under SQLite's loose <em>affinity</em> rules. sluice infers the target type from the declared type, but two cases need an explicit decision because guessing would risk a silently-wrong value:</p>
+<ul>
+  <li><strong>Dates &amp; times.</strong> A column <em>declared</em> <code>DATE</code> / <code>DATETIME</code> / <code>TIMESTAMP</code> / <code>TIME</code> could hold ISO text, unix seconds/millis, or a Julian day. You name the encoding with <code>--sqlite-date-encoding</code> (<code>iso</code> default, or <code>unixepoch</code> / <code>unixmillis</code> / <code>julian</code>). A value whose storage class doesn't match is <strong>refused loudly, naming the row</strong> — never coerced to a wrong date.</li>
+  <li><strong>Outliers.</strong> If one column genuinely holds raw text you don't want interpreted, carry it as-is with <code>--type-override &lt;col&gt;=text</code>.</li>
+</ul>
+<p>Preview an import the same way you'd preview any source — point <code>--source-driver</code> at <code>sqlite</code> or <code>d1</code> — to see the resolved target types before committing. Full detail is in the <a href="/docs/import-sqlite-d1/">SQLite/D1 guide</a>.</p>
+
+<h2 id="diff">3. Diff a live target against the source</h2>
+<p>When the target already exists — a previous migration, an Atlas/Liquibase-managed schema, a hand-built warehouse — <code>schema diff</code> compares what's actually on the target against what sluice <em>would</em> produce from the source, and reports the drift with copy-paste DDL suggestions. It exits non-zero on any difference, so it gates cleanly in CI:</p>
+${pre(`sluice schema diff \\
+    --source-driver mysql    --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"`)}
+
+<h2 id="verify">4. Verify the data landed</h2>
+<p>After a migration (or once a <a href="/docs/zero-downtime-cutover/">sync</a> has caught up), <code>verify</code> compares the data itself. It has a depth ladder — start cheap, escalate only if you need stronger guarantees:</p>
+<table><thead><tr><th>Depth</th><th>What it does</th></tr></thead><tbody>
+<tr><td><code>--depth count</code> (default)</td><td class="desc">Per-table row-count comparison. Fast, catches whole-table and bulk-row loss.</td></tr>
+<tr><td><code>--depth sample</code></td><td class="desc">Counts <em>plus</em> per-table sampled-row content hashes — ~99% confidence of catching a 5%+ corruption rate at the default 100 rows/table. Raise <code>--sample-rows-per-table</code> for rarer anomalies; <code>--strict-hash</code> switches the row hash from MD5 to SHA-256.</td></tr>
+</tbody></table>
+${pre(`# fast count check, CI-gated (non-zero exit on mismatch)
+sluice verify --source-driver mysql --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" --depth count
+
+# content sampling with a larger sample
+sluice verify --source-driver mysql --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --depth sample --sample-rows-per-table 500`)}
+<p>Both modes accept <code>--format json</code> and <code>-o FILE</code> for piping into a CI gate or alertmanager. A full per-row hash mode is planned but not yet shipped.</p>
+`,
+    prev: { href: "/docs/migrate-mysql-to-postgres/", label: "Migrate MySQL → Postgres" },
+    next: { href: "/docs/zero-downtime-cutover/", label: "Zero-downtime migration" },
+  })
+);
+
+// ---- Guide: zero-downtime cutover ----------------------------------------
+write(
+  "zero-downtime-cutover",
+  page({
+    slug: "zero-downtime-cutover",
+    title: "Zero-downtime migration with continuous sync",
+    subtitle: "Cold-start the data, let CDC catch up while the app keeps writing, then cut over in a brief, controlled window.",
+    body: `
+<p>A one-shot <a href="/docs/migrate-mysql-to-postgres/">migrate</a> is a point-in-time copy: rows written after it starts are missed. <a href="/docs/commands/#sync-start">sync start</a> closes that gap — it takes a consistent snapshot, bulk-copies it, then <strong>streams ongoing changes</strong> (change-data-capture) so the target tracks the source live. That lets you keep the application running on the source the whole time and flip traffic over in a short, controlled window. This is the core "sync, not just migrate" workflow; reach for it whenever downtime isn't acceptable.</p>
+<div class="note"><strong>Source prerequisites.</strong> CDC reads the source's native change stream. Postgres needs logical replication (a replication slot + <code>REPLICATION</code> role); MySQL needs the binlog (<code>ROW</code> format). On a managed Postgres that blocks slots (Heroku, some RDS tiers), use the slot-less <a href="/docs/commands/#trigger">trigger engine</a> instead — sluice refuses loudly rather than silently degrading to polling.</div>
+
+<h2 id="start">1. Start the stream</h2>
+<p>A stream is identified by <code>--stream-id</code> so it can resume after a restart. The first launch cold-starts (snapshot → bulk copy), then transitions seamlessly into live CDC and keeps running until you stop it:</p>
+${pre(`sluice sync start \\
+    --source-driver mysql    --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --stream-id app-prod`)}
+<p>Restarting with the same <code>--stream-id</code> warm-resumes from the persisted position — it does not re-run the snapshot. To run it as a long-lived service with a health endpoint and an idle-source heartbeat (so the slot/binlog can't be evicted past the consumer during quiet periods), add <code>--metrics-listen :9090</code> and <code>--source-heartbeat-interval 30s</code>; see <a href="https://github.com/sluicesync/sluice/blob/main/docs/operator/running-as-a-service.md">running as a service</a> and the <a href="/docs/commands/#sync-start">sync start reference</a>.</p>
+
+<h2 id="watch">2. Watch it catch up</h2>
+<p>From another shell, check the stream's position and freshness. <code>sync health</code> returns a cron-friendly exit code so you can script "are we caught up yet?":</p>
+${pre(`sluice sync status --stream-id app-prod --target-driver postgres --target "$SLUICE_TARGET"
+
+# exit non-zero if the last apply was more than 5s ago
+sluice sync health --stream-id app-prod --target-driver postgres --target "$SLUICE_TARGET" \\
+    --max-stale-seconds 5`)}
+<p>Once <code>sync health</code> reports fresh under a tight threshold, the target is tracking the source within seconds — you're ready to cut over. (On a PG→PG pair, also pass <code>--source-driver</code>/<code>--source</code> to expose <code>--max-lag-bytes</code> for byte-distance lag.)</p>
+
+<h2 id="drain">3. Quiesce and drain</h2>
+<p>At your chosen cutover moment, stop writes to the source application (the brief window), then drain the last in-flight changes. <code>sync stop --wait</code> blocks until the streamer has applied everything queued and exited cleanly:</p>
+${pre(`sluice sync stop --stream-id app-prod \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --wait --timeout 10m`)}
+<p>On timeout the CLI exits non-zero and the stop request stays in place — so a scripted cutover fails safe rather than proceeding on a half-drained target.</p>
+
+<h2 id="cutover">4. Prime sequences (cutover)</h2>
+<p>CDC replicates row changes, not catalog-level sequence positions. So after the drain, the target's <code>SERIAL</code> / <code>AUTO_INCREMENT</code> counters can lag behind the IDs that already exist in its rows — and the first post-cutover <code>INSERT</code> would collide on the primary key. <a href="/docs/commands/#cutover">cutover</a> closes that gap: it re-reads the source sequence state and applies it to the target with a safety margin:</p>
+${pre(`sluice cutover \\
+    --source-driver mysql    --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --sequence-margin 1000`)}
+<div class="note"><code>cutover</code> is idempotent and fails safe: a re-run within the margin reports every table as <code>noop</code>, and if the target's sequence is already <em>ahead</em> of the source by more than the margin it <strong>refuses</strong> (exit code 2) rather than risk a collision — the signal that something already wrote to the target. Run it after the drain and before pointing application traffic at the target.</div>
+
+<h2 id="verify">5. Verify, then flip traffic</h2>
+<p>Confirm the data agrees, then point your application at the target:</p>
+${pre(`sluice verify --source-driver mysql --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" --depth count`)}
+<p>The full sequence: <strong>start the stream → wait for fresh → freeze source writes → <code>sync stop --wait</code> → <code>cutover</code> → <code>verify</code> → repoint the app</strong>. Only the last three steps fall inside the write-freeze window, so downtime is measured in seconds-to-minutes, not the length of the copy.</p>
+<div class="note"><strong>Schema changes during a long-running sync.</strong> By default a stream forwards unambiguous source DDL (ADD/DROP/ALTER COLUMN, CREATE/DROP INDEX, …) onto the target automatically so it stays online through schema evolution — including a destructive <code>DROP COLUMN</code>. To gate DDL through a separate change process, start with <code>--schema-changes=refuse</code>. See the warning box in the <a href="/docs/commands/#sync-start">sync start reference</a>.</div>
+`,
+    prev: { href: "/docs/preview-and-validate/", label: "Preview & validate" },
+    next: { href: "/docs/import-sqlite-d1/", label: "Import SQLite or Cloudflare D1" },
+  })
+);
+
+// ---- Guide: import SQLite / Cloudflare D1 --------------------------------
+write(
+  "import-sqlite-d1",
+  page({
+    slug: "import-sqlite-d1",
+    title: "Import SQLite or Cloudflare D1",
+    subtitle: "Move a SQLite file, a wrangler D1 export, or a live Cloudflare D1 into Postgres or MySQL — losslessly.",
+    body: `
+<p>sluice imports SQLite and <a href="https://developers.cloudflare.com/d1/">Cloudflare D1</a> into Postgres or MySQL through the same <a href="/docs/migrate-mysql-to-postgres/">migrate</a> pipeline as everything else — parallel copy, cross-engine type translation, deferred indexes, <code>--dry-run</code>, <code>verify</code> — with no pgloader or external tool. Reach for this when you're graduating a SQLite/D1 app onto a server database, or pulling D1 data into an analytics warehouse. There are three source shapes; pick by what you have.</p>
+
+<h2 id="file">A local SQLite file</h2>
+<p>Point <code>--source-driver sqlite</code> at the file (a bare path, a <code>file:</code> URI, or a <code>sqlite://</code> URL — opened read-only) and migrate as usual:</p>
+${pre(`sluice migrate \\
+    --source-driver sqlite   --source ./app.db \\
+    --target-driver postgres --target 'postgres://user:pass@host:5432/db?sslmode=require'`)}
+<p>Large tables parallel-copy automatically (PK-range / keyset chunks, tuned by <code>--bulk-parallelism</code>), the same as any other source. A <code>.db</code> file is read byte-exact — sluice reads the int64 straight from the file.</p>
+
+<h2 id="dump">A wrangler D1 export (.sql dump)</h2>
+<p><code>wrangler d1 export</code> emits a <code>.sql</code> text dump. sluice ingests one directly — it sniffs the file's header, materializes the dump in-process (no <code>sqlite3</code> CLI), and auto-skips D1's internal <code>_cf_*</code> tables. So the import is two commands:</p>
+${pre(`wrangler d1 export <db> --remote --output dump.sql
+sluice migrate --source-driver sqlite --source dump.sql \\
+    --target-driver postgres --target '<pg-dsn>'`)}
+<div class="note warn"><strong>The export rounds big integers.</strong> Both of D1's <em>default</em> extraction paths — the <code>wrangler d1 export</code> dump and the bare query API — silently lose integers larger than 2<sup>53</sup> (≈ 9 ×10<sup>15</sup>): D1 serializes them through a JavaScript double before sluice ever sees them. For Snowflake-style IDs (Discord/Twitter 64-bit IDs), nanosecond timestamps, or large counters, use the live query-API reader below — it's the only lossless path. For a D1 database <em>without</em> integers that large (the common case), the export path is exact and simple.</div>
+
+<h2 id="live">A live Cloudflare D1 (lossless)</h2>
+<p><code>--source-driver d1</code> reads a live D1 over its HTTP query API and is the <strong>lossless</strong> import. It projects every column through <code>typeof()</code> + <code>CAST(… AS TEXT)</code> / <code>hex()</code>, so integers above 2<sup>53</sup> round-trip exactly, INTEGER is distinguished from REAL, and BLOBs decode from hex. Reads don't take D1 offline. The API token is read from the environment only — never a flag, never logged:</p>
+${pre(`export CLOUDFLARE_API_TOKEN=...        # required
+export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN
+
+sluice migrate \\
+    --source-driver d1       --source 'd1://<account_id>/<database_id>' \\
+    --target-driver postgres --target '<pg-dsn>'`)}
+<p>DSN forms are <code>d1://&lt;account_id&gt;/&lt;database_id&gt;</code> or the short <code>d1://&lt;database_id&gt;</code> (account from <code>CLOUDFLARE_ACCOUNT_ID</code>). A missing token, account, or database id is refused loudly at startup, before any request.</p>
+
+<h2 id="dates">Dates, times, and booleans</h2>
+<p>SQLite and D1 have no native temporal or boolean storage. sluice maps a column whose <em>declared</em> type names one (<code>DATE</code> / <code>DATETIME</code> / <code>TIMESTAMP</code> / <code>TIME</code>, <code>BOOL</code> / <code>BOOLEAN</code>) to the right target type, and you tell it how the <em>values</em> are encoded with <code>--sqlite-date-encoding</code>:</p>
+<table><thead><tr><th>Encoding</th><th>Temporal values stored as</th></tr></thead><tbody>
+<tr><td><code>iso</code> (default)</td><td class="desc">ISO-8601 <strong>TEXT</strong>, e.g. <code>'2024-01-02 03:04:05'</code></td></tr>
+<tr><td><code>unixepoch</code></td><td class="desc">INTEGER unix <strong>seconds</strong></td></tr>
+<tr><td><code>unixmillis</code></td><td class="desc">INTEGER/REAL unix <strong>milliseconds</strong></td></tr>
+<tr><td><code>julian</code></td><td class="desc">REAL/INTEGER <strong>Julian day</strong></td></tr>
+</tbody></table>
+<p>A value whose storage class doesn't match the chosen encoding — or ISO text matching no layout, or a non-truthy boolean — is <strong>refused loudly, naming the row</strong>, never a silently-wrong date. Carry a genuine outlier raw with <code>--type-override &lt;col&gt;=text</code>. Preview the resolved types first with <a href="/docs/preview-and-validate/">schema preview</a>.</p>
+
+<h2 id="target">SQLite as a target</h2>
+<p>SQLite is also a migrate <strong>target</strong> (<code>--target-driver sqlite</code>) — emit a <code>.db</code> from any source (decimals are stored byte-exact as <code>TEXT</code> affinity, not lossy <code>REAL</code>), e.g. to then run <code>wrangler d1 import</code>. D1 itself is not a write target; produce a SQLite <code>.db</code> and import it with wrangler.</p>
+${pre(`sluice migrate \\
+    --source-driver postgres --source '<pg-dsn>' \\
+    --target-driver sqlite   --target ./out.db`)}
+
+<h2 id="continuous">Continuous sync (trigger-CDC)</h2>
+<p>The base <code>sqlite</code> and <code>d1</code> engines are migrate-only — SQLite has no logical change stream (its WAL is a physical page-log). For <strong>continuous</strong> sync, sluice captures changes with triggers, via the <code>sqlite-trigger</code> (local file) and <code>d1-trigger</code> (live D1) engines. The lifecycle is explicit — <strong>setup → sync → teardown</strong>:</p>
+${pre(`# 1. install per-table capture triggers + the change-log (each table needs a PRIMARY KEY)
+sluice trigger setup --source-driver sqlite-trigger --dsn ./app.db --tables=users,orders
+
+# 2. cold-start snapshot, then stream changes continuously
+sluice sync start --source-driver sqlite-trigger --source ./app.db \\
+    --target-driver postgres --target 'postgres://user:pass@host:5432/db?sslmode=require'
+
+# 3. remove every trigger + the change-log when done (--keep-data to retain it)
+sluice trigger teardown --source-driver sqlite-trigger --dsn ./app.db --yes`)}
+<p>Big integers and BLOBs round-trip exactly through capture and CDC (the trigger encodes each column as a <code>(typeof, text/hex)</code> pair). Enable <code>PRAGMA journal_mode=WAL</code> on a local source so the poller never blocks the app's writes. Because SQLite has no DDL triggers, a source <code>ALTER TABLE</code> isn't auto-captured — re-run <code>trigger setup</code> after a schema change; <code>sync start</code> refuses loudly on schema drift rather than silently dropping a new column. The live <code>d1-trigger</code> path is identical over the HTTP query API (the token is a D1:Edit token); mind D1's per-write billing and the change-log growth — run <code>sluice trigger prune</code> periodically. Full detail: <a href="https://github.com/sluicesync/sluice/blob/main/docs/operator/sqlite-d1-import.md">the SQLite/D1 operator doc</a>.</p>
+`,
+    prev: { href: "/docs/zero-downtime-cutover/", label: "Zero-downtime migration" },
+    next: { href: "/docs/multi-database/", label: "Migrate many databases or schemas" },
+  })
+);
+
+// ---- Guide: many databases / schemas in one run --------------------------
+write(
+  "multi-database",
+  page({
+    slug: "multi-database",
+    title: "Migrate many databases or schemas at once",
+    subtitle: "Fan a whole MySQL server or a multi-schema Postgres source out to same-named target namespaces in one run.",
+    body: `
+<p>By default <code>migrate</code> and <code>sync start</code> move the one database (MySQL) or schema (Postgres) named in the source DSN. The multi-namespace flags move <strong>all</strong> of a server's databases, or all of a Postgres source's schemas, in a single run — snapshot and CDC both — fanning each source namespace out to a <strong>same-named</strong> target namespace. Reach for this with a multi-tenant MySQL server (one database per tenant), a Postgres database holding several application schemas, or any "migrate the whole server" job.</p>
+<p>The unifying idea is that <em>a MySQL database is the rough equivalent of a Postgres schema</em>. So there's one internal routing with two spellings: use the <code>--*-database</code> form on a <strong>MySQL source</strong> and the <code>--*-schema</code> form on a <strong>Postgres source</strong>. They're synonyms — mixing both spellings in one invocation is a loud error.</p>
+<table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>--all-databases</code> / <code>--all-schemas</code></td><td class="desc">Every non-system namespace on the source.</td></tr>
+<tr><td><code>--include-database</code> / <code>--include-schema</code></td><td class="desc">Only these (comma-separated, repeatable; glob patterns allowed, e.g. <code>app_*</code>).</td></tr>
+<tr><td><code>--exclude-database</code> / <code>--exclude-schema</code></td><td class="desc">Every non-system namespace except these.</td></tr>
+</tbody></table>
+<p>Within a form, include / exclude / all are mutually exclusive. System namespaces are always excluded (<code>information_schema</code>, <code>performance_schema</code>, <code>mysql</code>, <code>sys</code> on MySQL; <code>pg_catalog</code>, <code>information_schema</code>, <code>pg_toast</code>, <code>pg_temp*</code> on Postgres). When any namespace-scope flag is set, the source DSN's database/schema is <strong>optional</strong> — sluice connects to the server (or, on PG, to the database) rather than a single namespace.</p>
+
+<h2 id="pg-schemas">Postgres source: every schema in one run</h2>
+<p>A Postgres database holding <code>sales</code>, <code>billing</code>, <code>inventory</code> → one Postgres target, each schema recreated (auto-created if absent) under its own name:</p>
+${pre(`sluice migrate \\
+    --source-driver postgres --source 'postgres://user:pw@src/appdb?sslmode=require' \\
+    --target-driver postgres --target 'postgres://user:pw@dst/appdb?sslmode=require' \\
+    --all-schemas`)}
+<p>Continuous sync is identical — just <code>sync start</code> with a <code>--stream-id</code>. Scope with globs, or take everything except a couple:</p>
+${pre(`# only the app_* schemas (plus public)
+sluice migrate ... --include-schema 'app_*,public'
+
+# everything except the staging schemas
+sluice migrate ... --exclude-schema 'scratch,tmp_load'`)}
+
+<h2 id="mysql-databases">MySQL server: every database → Postgres in one run</h2>
+<p>A MySQL server hosting one database per tenant/service → a single Postgres target, <strong>each MySQL database recreated as a same-named PG schema</strong> (auto-created). Note the source DSN has no database after the <code>/</code> — with <code>--all-databases</code> it's a server connection:</p>
+${pre(`sluice migrate \\
+    --source-driver mysql    --source 'root:pw@tcp(src:3306)/' \\
+    --target-driver postgres --target 'postgres://user:pw@dst/warehouse?sslmode=require' \\
+    --all-databases`)}
+<p>MySQL <code>shop</code> / <code>crm</code> / <code>analytics</code> land as PG schemas <code>shop</code> / <code>crm</code> / <code>analytics</code> under <code>warehouse</code>. When the target is also MySQL, each source database is recreated via <code>CREATE DATABASE IF NOT EXISTS</code> — same names, no manual pre-creation.</p>
+
+<h2 id="fan-in">Fan-IN: many sources → one target namespace</h2>
+<p>The reverse shape — several independent source databases (e.g. per-microservice MySQL databases) consolidated into <strong>one</strong> Postgres analytics schema. This isn't a <code>--all-*</code> fan-out; it's N separate runs, each pinned to the same target namespace with <code>--target-schema</code> (Postgres-target-only; it prefixes every emitted object and auto-creates the schema):</p>
+${pre(`# service A → warehouse.analytics
+sluice migrate --source-driver mysql --source 'root:pw@tcp(svc-a:3306)/orders' \\
+    --target-driver postgres --target 'postgres://user:pw@dst/warehouse?sslmode=require' \\
+    --target-schema analytics
+
+# service B → the SAME warehouse.analytics (run separately)
+sluice migrate --source-driver mysql --source 'root:pw@tcp(svc-b:3306)/users' \\
+    --target-driver postgres --target 'postgres://user:pw@dst/warehouse?sslmode=require' \\
+    --target-schema analytics`)}
+<div class="note">To avoid table-name collisions across services landing in one schema, pair <code>--target-schema</code> with <code>--inject-shard-column NAME=VALUE</code>, which adds a per-source discriminator and a composite PK. See the <a href="/docs/commands/#migrate">migrate reference</a>.</div>
+
+<h2 id="edges">The documented edges</h2>
+<ul>
+  <li><strong>Cross-database / cross-schema foreign keys are refused loudly.</strong> A fan-out validates that FK referents are inside the selected set; an out-of-scope FK fails loudly at the deferred FK pass (after the copy), never silently dropped.</li>
+  <li><strong>Separate Postgres <em>databases</em> are one run each.</strong> A PG connection is scoped to a single database, so <code>--all-schemas</code> covers every schema <em>within</em> the connected database; moving N separate PG databases is N runs (one <code>--source</code> DSN each).</li>
+  <li><strong>PlanetScale-MySQL is a single keyspace</strong> and isn't a multi-namespace target — fanning several source databases into one PS-MySQL branch would collapse and collide. PlanetScale-Postgres behaves like regular Postgres and takes <code>--all-schemas</code> fine.</li>
+  <li><strong>Routing is same-name today.</strong> Each source namespace lands in a target namespace of the same name; a rename-on-the-way flag is a planned follow-on. Use a same-named target, or <code>--target-schema</code> for the fan-IN shape.</li>
+</ul>
+`,
+    prev: { href: "/docs/import-sqlite-d1/", label: "Import SQLite or Cloudflare D1" },
+    next: { href: "/docs/from-backup-sync/", label: "Sync from a backup chain" },
+  })
+);
+
 // ---- Guide: continuous sync from a backup chain --------------------------
 write(
   "from-backup-sync",
@@ -868,7 +1193,7 @@ sluice sync from-backup run --backup-target s3://my-bucket/app-chain \\
 ${pre(`sluice sync from-backup stop --backup-target s3://my-bucket/app-chain`)}
 <div class="note">The broker follows segment-rotation seams automatically and is restart-resilient on both sides — its idempotent applier absorbs any overlap on resume. Two consumers must use <strong>distinct</strong> <code>--stream-id</code>s for distinct targets, or they'll race on position writes. To rest the chain encrypted, the broker accepts the same encryption flags as the rest of the backup family — see the <a href="/docs/commands/#backup">backup reference</a>.</div>
 `,
-    prev: { href: "/docs/getting-started/", label: "Getting started" },
+    prev: { href: "/docs/multi-database/", label: "Migrate many databases or schemas" },
     next: { href: "/docs/commands/", label: "Command reference" },
   })
 );
