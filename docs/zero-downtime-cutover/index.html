@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zero-downtime migration with continuous sync — sluice docs</title>
+<meta name="description" content="Cold-start the data, let CDC catch up while the app keeps writing, then cut over in a brief, controlled window.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk active" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
+  <main class="content">
+    <h1>Zero-downtime migration with continuous sync</h1>
+    <p class="subtitle">Cold-start the data, let CDC catch up while the app keeps writing, then cut over in a brief, controlled window.</p>
+    
+<p>A one-shot <a href="/docs/migrate-mysql-to-postgres/">migrate</a> is a point-in-time copy: rows written after it starts are missed. <a href="/docs/commands/#sync-start">sync start</a> closes that gap — it takes a consistent snapshot, bulk-copies it, then <strong>streams ongoing changes</strong> (change-data-capture) so the target tracks the source live. That lets you keep the application running on the source the whole time and flip traffic over in a short, controlled window. This is the core "sync, not just migrate" workflow; reach for it whenever downtime isn't acceptable.</p>
+<div class="note"><strong>Source prerequisites.</strong> CDC reads the source's native change stream. Postgres needs logical replication (a replication slot + <code>REPLICATION</code> role); MySQL needs the binlog (<code>ROW</code> format). On a managed Postgres that blocks slots (Heroku, some RDS tiers), use the slot-less <a href="/docs/commands/#trigger">trigger engine</a> instead — sluice refuses loudly rather than silently degrading to polling.</div>
+
+<h2 id="start">1. Start the stream</h2>
+<p>A stream is identified by <code>--stream-id</code> so it can resume after a restart. The first launch cold-starts (snapshot → bulk copy), then transitions seamlessly into live CDC and keeps running until you stop it:</p>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
+    <span class="f">--stream-id</span> app-prod</code></pre>
+<p>Restarting with the same <code>--stream-id</code> warm-resumes from the persisted position — it does not re-run the snapshot. To run it as a long-lived service with a health endpoint and an idle-source heartbeat (so the slot/binlog can't be evicted past the consumer during quiet periods), add <code>--metrics-listen :9090</code> and <code>--source-heartbeat-interval 30s</code>; see <a href="https://github.com/sluicesync/sluice/blob/main/docs/operator/running-as-a-service.md">running as a service</a> and the <a href="/docs/commands/#sync-start">sync start reference</a>.</p>
+
+<h2 id="watch">2. Watch it catch up</h2>
+<p>From another shell, check the stream's position and freshness. <code>sync health</code> returns a cron-friendly exit code so you can script "are we caught up yet?":</p>
+<pre><code><span class="k">sluice</span> sync status <span class="f">--stream-id</span> app-prod <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET"
+
+<span class="c"># exit non-zero if the last apply was more than 5s ago</span>
+<span class="k">sluice</span> sync health <span class="f">--stream-id</span> app-prod <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
+    <span class="f">--max-stale-seconds</span> 5</code></pre>
+<p>Once <code>sync health</code> reports fresh under a tight threshold, the target is tracking the source within seconds — you're ready to cut over. (On a PG→PG pair, also pass <code>--source-driver</code>/<code>--source</code> to expose <code>--max-lag-bytes</code> for byte-distance lag.)</p>
+
+<h2 id="drain">3. Quiesce and drain</h2>
+<p>At your chosen cutover moment, stop writes to the source application (the brief window), then drain the last in-flight changes. <code>sync stop --wait</code> blocks until the streamer has applied everything queued and exited cleanly:</p>
+<pre><code><span class="k">sluice</span> sync stop <span class="f">--stream-id</span> app-prod \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
+    <span class="f">--wait</span> <span class="f">--timeout</span> 10m</code></pre>
+<p>On timeout the CLI exits non-zero and the stop request stays in place — so a scripted cutover fails safe rather than proceeding on a half-drained target.</p>
+
+<h2 id="cutover">4. Prime sequences (cutover)</h2>
+<p>CDC replicates row changes, not catalog-level sequence positions. So after the drain, the target's <code>SERIAL</code> / <code>AUTO_INCREMENT</code> counters can lag behind the IDs that already exist in its rows — and the first post-cutover <code>INSERT</code> would collide on the primary key. <a href="/docs/commands/#cutover">cutover</a> closes that gap: it re-reads the source sequence state and applies it to the target with a safety margin:</p>
+<pre><code><span class="k">sluice</span> cutover \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
+    <span class="f">--sequence-margin</span> 1000</code></pre>
+<div class="note"><code>cutover</code> is idempotent and fails safe: a re-run within the margin reports every table as <code>noop</code>, and if the target's sequence is already <em>ahead</em> of the source by more than the margin it <strong>refuses</strong> (exit code 2) rather than risk a collision — the signal that something already wrote to the target. Run it after the drain and before pointing application traffic at the target.</div>
+
+<h2 id="verify">5. Verify, then flip traffic</h2>
+<p>Confirm the data agrees, then point your application at the target:</p>
+<pre><code><span class="k">sluice</span> verify <span class="f">--source-driver</span> mysql <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" <span class="f">--depth</span> count</code></pre>
+<p>The full sequence: <strong>start the stream → wait for fresh → freeze source writes → <code>sync stop --wait</code> → <code>cutover</code> → <code>verify</code> → repoint the app</strong>. Only the last three steps fall inside the write-freeze window, so downtime is measured in seconds-to-minutes, not the length of the copy.</p>
+<div class="note"><strong>Schema changes during a long-running sync.</strong> By default a stream forwards unambiguous source DDL (ADD/DROP/ALTER COLUMN, CREATE/DROP INDEX, …) onto the target automatically so it stays online through schema evolution — including a destructive <code>DROP COLUMN</code>. To gate DDL through a separate change process, start with <code>--schema-changes=refuse</code>. See the warning box in the <a href="/docs/commands/#sync-start">sync start reference</a>.</div>
+
+    <div class="pager"><a class="prev" href="/docs/preview-and-validate/">← Preview & validate</a><a class="next" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1 →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+</body>
+</html>
