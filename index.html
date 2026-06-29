@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sluice — open-source enterprise-class CDC for MySQL ↔ Postgres</title>
-<meta name="description" content="sluice is an open-source tool for migrating and continuously syncing databases between MySQL and Postgres, in all four directions. Correctness-first, loud failure by default.">
+<title>sluice — open-source CDC & migration for MySQL, Postgres, SQLite & Cloudflare D1</title>
+<meta name="description" content="sluice is an open-source tool for migrating and continuously syncing databases between MySQL and Postgres in all four directions — and for importing SQLite files and live Cloudflare D1 into either. Correctness-first, loud failure by default.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#0d1b22">
-<meta property="og:title" content="sluice — open-source enterprise-class CDC for MySQL ↔ Postgres">
-<meta property="og:description" content="Migrate and continuously sync MySQL and Postgres in all four directions. Correctness-first, loud failure by default.">
+<meta property="og:title" content="sluice — open-source CDC & migration for MySQL, Postgres, SQLite & Cloudflare D1">
+<meta property="og:description" content="Migrate and continuously sync MySQL and Postgres in all four directions, and import SQLite files and live Cloudflare D1 into either. Correctness-first, loud failure by default.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://sluicesync.com/">
 <meta property="og:image" content="https://sluicesync.com/og-image.png">
@@ -110,10 +110,11 @@
 <div class="hero">
   <div class="wrap">
     <img class="logo" src="/sluice-logo-dark.png" alt="sluice">
-    <h1>Open-source enterprise-class CDC for MySQL&nbsp;↔&nbsp;Postgres</h1>
+    <h1>Open-source enterprise-class CDC for MySQL&nbsp;↔&nbsp;Postgres — plus SQLite&nbsp;&amp;&nbsp;Cloudflare&nbsp;D1</h1>
     <p class="sub">Migrate and continuously sync databases between MySQL and Postgres in all four
       directions — initial snapshot, CDC catch-up, and operator-driven cutover in one tool,
-      opinionated about correctness.</p>
+      opinionated about correctness. SQLite files and live Cloudflare D1 databases import into
+      Postgres or MySQL too, and SQLite is also a migrate target.</p>
     <div class="install">
       <span class="dollar">$</span>
       <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code>
@@ -131,7 +132,10 @@
     <p class="lead">Schema-evolution, cutover-priming, and slot-health capabilities usually found only in
       commercial/enterprise CDC tools — Apache&nbsp;2.0, a single static binary, no daemon, no SaaS dependency.</p>
     <div class="grid">
-      <div class="feat"><h3>🔄 Bidirectional</h3><p>MySQL → Postgres, Postgres → MySQL, and same-engine in both directions. PlanetScale flavors included.</p></div>
+      <div class="feat"><h3>🔄 Bidirectional</h3><p>MySQL → Postgres, Postgres → MySQL, and same-engine in both directions. PlanetScale and self-hosted Vitess flavors included.</p></div>
+      <div class="feat"><h3>🗃️ SQLite &amp; Cloudflare D1</h3><p>Import a SQLite file or a <code>wrangler d1 export</code> <code>.sql</code> dump (<code>--source-driver sqlite</code>), or read a live D1 over its HTTP query API (<code>--source-driver d1</code>), into Postgres or MySQL — big integers above 2<sup>53</sup> round-trip exactly. SQLite is also a migrate <strong>target</strong>; <code>sqlite-trigger</code> / <code>d1-trigger</code> add trigger-based continuous sync.</p></div>
+      <div class="feat"><h3>🗂️ Multi-database / multi-schema</h3><p>Move a whole MySQL server's databases or a Postgres source's schemas in one run with <code>--all-databases</code> / <code>--all-schemas</code> (each to a same-named, auto-created target namespace), or fan into one schema with <code>--target-schema</code> — on both <code>migrate</code> and <code>sync start</code>.</p></div>
+      <div class="feat"><h3>🌐 WAN-fast MySQL apply</h3><p>Cross-region / PlanetScale-MySQL CDC apply folds consecutive same-shape INSERTs into one multi-row statement and coalesces UPDATE / DELETE batches, turning N round trips into one so high-latency apply keeps up.</p></div>
       <div class="feat"><h3>🔌 Slot-less Postgres sources</h3><p>Managed Postgres that blocks logical replication (e.g. Heroku) still streams via a trigger-based CDC engine — no replication slot or <code>REPLICATION</code> role required.</p></div>
       <div class="feat"><h3>🪶 Schema evolution</h3><p><code>ADD COLUMN</code> forwards automatically; every other shape refuses loudly with a structured drift diff naming the column that changed.</p></div>
       <div class="feat"><h3>🩺 Operational telemetry</h3><p>Pre-emptive slot-health warnings, a source-side heartbeat writer, and a Prometheus <code>/metrics</code> + <code>/readyz</code> endpoint for k8s health checks.</p></div>
@@ -160,7 +164,17 @@
     <span class="f">--stream-id</span> myapp-prod
 
 <span class="c"># Cutover-time sequence priming (post-snapshot, pre-traffic-switch)</span>
-<span class="k">sluice cutover</span> <span class="f">--config</span> sluice.yaml <span class="f">--cutover-sequence-margin</span>=1000</pre>
+<span class="k">sluice cutover</span> <span class="f">--config</span> sluice.yaml <span class="f">--cutover-sequence-margin</span>=1000
+
+<span class="c"># Import a SQLite file (or a `wrangler d1 export` .sql dump) → Postgres</span>
+<span class="k">sluice migrate</span> \
+    <span class="f">--source-driver</span> sqlite   <span class="f">--source</span> ./app.db \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...?sslmode=disable'
+
+<span class="c"># Import a LIVE Cloudflare D1 → Postgres (token via CLOUDFLARE_API_TOKEN)</span>
+<span class="k">sluice migrate</span> \
+    <span class="f">--source-driver</span> d1       <span class="f">--source</span> 'd1://&lt;account_id&gt;/&lt;database_id&gt;' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...?sslmode=disable'</pre>
   </div>
 </section>
 
@@ -169,7 +183,7 @@
     <h2>Three surfaces, independently runnable</h2>
     <p class="lead">sluice is built around three product surfaces — use one, or all three end to end.</p>
     <div class="surfaces">
-      <div class="surf"><span class="tag">Migrate</span><h3>Schema &amp; data</h3><p>Read source schema, create target tables, bulk-copy rows, then build indexes and constraints — deferred for fast copy, resumable per-table.</p></div>
+      <div class="surf"><span class="tag">Migrate</span><h3>Schema &amp; data</h3><p>Read source schema, create target tables, bulk-copy rows, then build indexes and constraints — deferred for fast copy, resumable per-table. Many databases / schemas in one run, including SQLite files and live Cloudflare D1.</p></div>
       <div class="surf"><span class="tag">Sync</span><h3>Change data capture</h3><p>Snapshot → CDC handoff with resumable checkpoints, schema-drift detection, and slot-health telemetry against quiet sources.</p></div>
       <div class="surf"><span class="tag">Operate</span><h3>Run as a service</h3><p>Long-running sync behind <code>/healthz</code>, <code>/readyz</code>, and <code>/metrics</code>, or one-shot jobs in CI and CronJobs via the container image.</p></div>
     </div>

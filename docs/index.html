@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Documentation — sluice docs</title>
-<meta name="description" content="Migrate and continuously sync MySQL and Postgres — correctness-first, loud failure by default.">
+<meta name="description" content="Migrate and continuously sync MySQL and Postgres, and import SQLite / Cloudflare D1 — correctness-first, loud failure by default.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -26,10 +26,13 @@
   <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk active" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a></aside>
   <main class="content">
     <h1>Documentation</h1>
-    <p class="subtitle">Migrate and continuously sync MySQL and Postgres — correctness-first, loud failure by default.</p>
+    <p class="subtitle">Migrate and continuously sync MySQL and Postgres, and import SQLite / Cloudflare D1 — correctness-first, loud failure by default.</p>
     
 <p>sluice is an open-source tool for moving and keeping databases in sync between <strong>MySQL</strong> and
-<strong>Postgres</strong>, in all four directions. It is built around three surfaces you can use independently or end to end:</p>
+<strong>Postgres</strong>, in all four directions. <strong>SQLite</strong> files (and a <code>wrangler d1 export</code> <code>.sql</code> dump)
+and live <strong>Cloudflare D1</strong> databases also import into Postgres or MySQL, and SQLite is itself a migrate target —
+nine engines are registered today (run <code>sluice engines</code> to list them). It is built around three surfaces you can
+use independently or end to end:</p>
 <ul>
   <li><strong>Migrate</strong> — a one-shot schema + data copy, with deferred indexes/constraints for fast bulk load and per-table resume.</li>
   <li><strong>Sync</strong> — change-data-capture streaming with a snapshot → CDC handoff and resumable checkpoints.</li>
