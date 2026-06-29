@@ -46,8 +46,9 @@
 <h2 id="prerequisites">Prerequisites</h2>
 <ul>
   <li>A <strong>source</strong> and a <strong>target</strong> database you can reach over the network.</li>
-  <li>Engines available out of the box: <code>mysql</code>, <code>postgres</code>, and the <code>planetscale</code> MySQL flavor. Run <code>sluice engines</code> to confirm what your binary supports.</li>
+  <li>Engines available out of the box (nine — run <code>sluice engines</code> to confirm): <code>mysql</code>, the <code>planetscale</code> and self-hosted <code>vitess</code> MySQL flavors, <code>postgres</code>, <code>sqlite</code> and <code>d1</code> (migrate sources; <code>sqlite</code> is also a target), and the trigger-CDC engines <code>postgres-trigger</code>, <code>sqlite-trigger</code>, <code>d1-trigger</code>.</li>
   <li>For continuous sync from Postgres, the source normally needs logical replication (a replication slot). Managed Postgres that blocks slots (e.g. Heroku) can use the slot-less <a href="/docs/commands/#trigger">trigger engine</a> instead.</li>
+  <li>SQLite and Cloudflare D1 are <strong>migrate sources</strong> (a local file, a <code>.sql</code> dump, or a live D1 over the HTTP query API) into Postgres or MySQL; SQLite is also a <strong>target</strong>. Their base engines are migrate-only — for continuous sync use the trigger-CDC variants <code>sqlite-trigger</code> / <code>d1-trigger</code>.</li>
 </ul>
 
 <h2 id="connecting">Connecting to your databases</h2>
@@ -57,6 +58,8 @@
 <tbody>
 <tr><td><code>mysql</code></td><td><code>user:pass@tcp(host:3306)/dbname</code></td></tr>
 <tr><td><code>postgres</code></td><td><code>postgres://user:pass@host:5432/dbname?sslmode=require</code></td></tr>
+<tr><td><code>sqlite</code></td><td>A file path (<code>./app.db</code>) or a <code>wrangler d1 export</code> <code>.sql</code> dump (auto-detected). Also a target driver.</td></tr>
+<tr><td><code>d1</code></td><td><code>d1://&lt;account_id&gt;/&lt;database_id&gt;</code> (or <code>d1://&lt;database_id&gt;</code> + <code>CLOUDFLARE_ACCOUNT_ID</code>); API token via <code>CLOUDFLARE_API_TOKEN</code>.</td></tr>
 </tbody>
 </table>
 <p>DSNs often contain credentials, so you can supply them via environment variables instead of flags:</p>
@@ -73,6 +76,21 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=disabl
 <p>When the plan looks right, drop <code>--dry-run</code> to apply it. If a migration is interrupted, re-run with <code>--resume</code> — state is checkpointed per table on the target, so it picks up where it left off:</p>
 <pre><code><span class="k">sluice</span> migrate <span class="f">--source-driver</span> mysql <span class="f">--source</span> ... <span class="f">--target-driver</span> postgres <span class="f">--target</span> ... <span class="f">--resume</span></code></pre>
 <div class="note"><strong>Cold-start safety.</strong> sluice refuses to bulk-copy into a non-empty target by default (an <code>INSERT</code> into a populated table would collide on the primary key). Use <code>--resume</code> to continue a prior run, or read the <a href="/docs/commands/#migrate">migrate reference</a> for the recovery flags.</div>
+
+<h2 id="sqlite-d1">Import a SQLite file or Cloudflare D1</h2>
+<p>SQLite and Cloudflare D1 are migrate sources into Postgres or MySQL. Point <code>--source-driver sqlite</code> at a local <code>.db</code> file — or at a <code>wrangler d1 export</code> <code>.sql</code> dump, which is auto-detected — and migrate as usual:</p>
+<pre><code><span class="c"># SQLite file (or a wrangler d1 export .sql dump) → Postgres</span>
+<span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> sqlite   <span class="f">--source</span> ./app.db \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://postgres:pgpw@localhost:5432/app?sslmode=disable'</code></pre>
+<p>To read a <strong>live</strong> Cloudflare D1, use <code>--source-driver d1</code> with a <code>d1://</code> DSN; the API token is read from <code>CLOUDFLARE_API_TOKEN</code> (env-only, never a flag). The reader projects each column through <code>typeof()</code> + <code>CAST(… AS TEXT)</code> / <code>hex()</code> so integers above 2<sup>53</sup> and BLOBs round-trip exactly (no JavaScript 52-bit rounding), and the reads don't take D1 offline:</p>
+<pre><code><span class="c"># Live Cloudflare D1 → Postgres</span>
+export CLOUDFLARE_API_TOKEN=...
+<span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> d1       <span class="f">--source</span> 'd1://&lt;account_id&gt;/&lt;database_id&gt;' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...?sslmode=disable'</code></pre>
+<p>SQLite is also a migrate <strong>target</strong> (<code>--target-driver sqlite</code>) — emit a <code>.db</code> from any source (decimals are stored byte-exact as <code>TEXT</code>), e.g. to then run <code>wrangler d1 import</code>. D1 itself is not a target; emit a SQLite <code>.db</code> and import it with wrangler.</p>
+<div class="note"><strong>Declared dates are an explicit choice.</strong> SQLite has no native temporal storage, so columns <em>declared</em> <code>DATE</code> / <code>DATETIME</code> are decoded per <code>--sqlite-date-encoding</code> (<code>iso</code> default, or <code>unixepoch</code> / <code>unixmillis</code> / <code>julian</code>) — a value whose storage class doesn't match is refused loudly, never a silently-wrong date. For continuous (not one-shot) sync from SQLite / D1, use the <a href="/docs/commands/#trigger">trigger-CDC engines</a> <code>sqlite-trigger</code> / <code>d1-trigger</code>.</div>
 
 <h2 id="first-sync">Your first continuous sync</h2>
 <p>Continuous sync captures a consistent snapshot, bulk-copies it, then streams ongoing changes. Streams are identified by a <code>--stream-id</code> so they can resume after a restart:</p>
