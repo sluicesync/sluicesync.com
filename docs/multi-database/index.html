@@ -71,12 +71,23 @@
     <span class="f">--target-schema</span> analytics</code></pre>
 <div class="note">To avoid table-name collisions across services landing in one schema, pair <code>--target-schema</code> with <code>--inject-shard-column NAME=VALUE</code>, which adds a per-source discriminator and a composite PK. See the <a href="/docs/commands/#migrate">migrate reference</a>.</div>
 
+<h2 id="rename">Rename a namespace on the way</h2>
+<p>By default every source namespace lands in a <strong>same-named</strong> target. To route one to a differently-named target — consolidating <code>legacy_app</code> into <code>app</code>, or namespacing each tenant under a prefix — pass <code>--map-database SRC=DST</code> (MySQL source) or <code>--map-schema SRC=DST</code> (Postgres source), repeatable, for both snapshot and CDC:</p>
+<pre><code><span class="c"># MySQL databases shop / crm → PG schemas storefront / sales (analytics keeps its name)</span>
+<span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:pw@tcp(src:3306)/' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pw@dst/warehouse?sslmode=require' \
+    <span class="f">--all-databases</span> \
+    <span class="f">--map-database</span> shop=storefront \
+    <span class="f">--map-database</span> crm=sales</code></pre>
+<p>The spelling rule matches the fan-out flags — <code>--map-database</code> on a MySQL source, <code>--map-schema</code> on a Postgres source; mixing both in one run is a loud error. The rename is purely a target-side routing: source-keyed <code>--redact</code> and <code>--type-override</code> still match on the <em>original</em> source name, so a remap never quietly disables a redaction rule.</p>
+
 <h2 id="edges">The documented edges</h2>
 <ul>
   <li><strong>Cross-database / cross-schema foreign keys are refused loudly.</strong> A fan-out validates that FK referents are inside the selected set; an out-of-scope FK fails loudly at the deferred FK pass (after the copy), never silently dropped.</li>
   <li><strong>Separate Postgres <em>databases</em> are one run each.</strong> A PG connection is scoped to a single database, so <code>--all-schemas</code> covers every schema <em>within</em> the connected database; moving N separate PG databases is N runs (one <code>--source</code> DSN each).</li>
   <li><strong>PlanetScale-MySQL is a single keyspace</strong> and isn't a multi-namespace target — fanning several source databases into one PS-MySQL branch would collapse and collide. PlanetScale-Postgres behaves like regular Postgres and takes <code>--all-schemas</code> fine.</li>
-  <li><strong>Routing is same-name today.</strong> Each source namespace lands in a target namespace of the same name; a rename-on-the-way flag is a planned follow-on. Use a same-named target, or <code>--target-schema</code> for the fan-IN shape.</li>
+  <li><strong>Default routing is same-name; rename with <code>--map-database</code> / <code>--map-schema</code>.</strong> Each source namespace lands in a target namespace of the same name unless you remap it (see below). For the fan-IN shape use <code>--target-schema</code>.</li>
 </ul>
 
     <div class="pager"><a class="prev" href="/docs/import-sqlite-d1/">← Import SQLite or Cloudflare D1</a><a class="next" href="/docs/from-backup-sync/">Sync from a backup chain →</a></div>
