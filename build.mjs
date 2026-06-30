@@ -67,6 +67,7 @@ const NAV = [
           ["diagnose", "diagnose"],
         ],
       },
+      { slug: "database-objects", label: "Objects sluice creates" },
     ],
   },
 ];
@@ -99,7 +100,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "import-sqlite-d1",
     "multi-database",
   ];
-  const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "" || guideSlugs.includes(slug);
+  const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
   const top = '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>';
   let pager = "";
   if (prev || next) {
@@ -310,7 +311,7 @@ ${pre(`sluice sync start \\
     --source 'postgres://user:pass@host:5432/app?sslmode=require' \\
     --target-driver postgres --target 'postgres://...target...' \\
     --stream-id app`)}
-<p><strong>3. Tear down cleanly</strong> when the stream is finished — this drops every per-table trigger and (by default) the <code>sluice_change_log</code> table, leaving the source with zero residue. Pass <code>--keep-data</code> to retain the change-log for forensics, or <code>--yes</code> to skip the confirmation prompt:</p>
+<p><strong>3. Tear down cleanly</strong> when the stream is finished — this drops every per-table trigger and (by default) the <code>sluice_change_log</code> table, leaving the source with zero residue (the full set of objects setup installs is listed under <a href="/docs/database-objects/#trigger-source">Objects sluice creates</a>). Pass <code>--keep-data</code> to retain the change-log for forensics, or <code>--yes</code> to skip the confirmation prompt:</p>
 ${pre(`sluice trigger teardown \\
     --dsn 'postgres://user:pass@host:5432/app?sslmode=require' --yes`)}
 <div class="note">The slot-based PG CDC reader refuses loudly when the source role lacks the <code>REPLICATION</code> attribute rather than silently degrading to polling — the trigger engine is the deliberate slot-less path. See the <a href="/docs/commands/#trigger">trigger reference</a>.</div>
@@ -813,6 +814,74 @@ ${pre(`sluice migrate -c sluice.yaml --source-driver mysql --source ... --target
 <li>A Go-runtime block — <code>sluice_go_goroutines</code>, <code>sluice_go_gomaxprocs</code>, heap (<code>sluice_go_memstats_heap_*</code>), and GC stats.</li>
 <li>The <code>sluice_target_*</code> gauge family — target CPU / memory / storage utilisation and replica lag — <strong>when PlanetScale telemetry is configured</strong> (<code>--planetscale-org</code> + the metrics-token flags). Without telemetry these gauges are simply absent.</li>
 </ul>
+
+<h2 id="created-objects">What sluice creates in your databases</h2>
+<p>To make migrations resumable and continuous sync durable, sluice writes a small, predictable set of <code>sluice_</code>-prefixed bookkeeping objects — state tables on the target, and a replication slot / publication / triggers on the source. They're excluded from <code>schema diff</code> and <code>verify</code>, so they never look like drift. For the full inventory — what each object is, when it appears, and how to remove it — see <a href="/docs/database-objects/">Objects sluice creates</a>.</p>
+`,
+    prev: { href: "/docs/commands/", label: "Command reference" },
+  })
+);
+
+// ---- Reference: objects sluice creates -----------------------------------
+write(
+  "database-objects",
+  page({
+    slug: "database-objects",
+    title: "Objects sluice creates in your databases",
+    subtitle: "The full inventory of sluice's bookkeeping tables, slots, publications, and triggers — what each is for, when it appears, and how to remove it.",
+    body: `
+<p>To make migrations resumable and continuous sync durable, sluice creates a small, predictable set of bookkeeping objects in your source and target databases. Every one is prefixed <code>sluice_</code> so you can always find them, and the schema readers <strong>exclude them from <a href="/docs/commands/#schema">schema diff</a> and <a href="/docs/commands/#verify">verify</a></strong> (ADR-0029) so they never register as drift or count against a row comparison. Nothing here is hidden — this page is the complete list of what sluice writes, which command writes it, why, and how to clean it up.</p>
+
+<div class="note"><strong>Where they live.</strong> On <strong>Postgres targets</strong> the bookkeeping tables are created in the target DSN's <code>schema</code> parameter (default <code>public</code>) — they follow <code>--target-schema</code>, they are <em>not</em> hardcoded to <code>public</code>. On <strong>MySQL targets</strong> they live in the connection's default database. The source-side object names (<code>sluice_slot</code>, <code>sluice_pub</code>, <code>sluice_heartbeat</code>) are defaults and all overridable. Every object below is created idempotently (<code>IF NOT EXISTS</code> / <code>CREATE OR REPLACE</code>), so a re-run never errors on an existing one.</div>
+
+<h2 id="target">Target database — bookkeeping tables</h2>
+<p>These hold the state that makes <code>migrate --resume</code> and <code>sync start</code> warm-resume work. They persist between runs by design (that's the durable resume frontier); the only built-in way to drop them is the destructive <a href="/docs/commands/#migrate"><code>--reset-target-data</code></a> recovery path, which clears the relevant state and the tables sluice manages.</p>
+<table><thead><tr><th>Object</th><th>Created by</th><th>When &amp; why</th><th>Cleaned up by</th></tr></thead><tbody>
+<tr><td><code>sluice_cdc_state</code></td><td class="desc"><code>sync start</code></td><td class="desc">At CDC stream open. One row per <code>--stream-id</code>: the durable CDC source position, slot name, source-DSN fingerprint, and stop flag — the warm-resume frontier.</td><td class="desc"><code>--reset-target-data</code> (clears the row); otherwise persists.</td></tr>
+<tr><td><code>sluice_migrate_state</code></td><td class="desc"><code>migrate</code></td><td class="desc">At bulk-copy start. One header row per <code>--migration-id</code> for resumable bulk migration (ADR-0082).</td><td class="desc"><code>--reset-target-data</code>; otherwise persists.</td></tr>
+<tr><td><code>sluice_migrate_table_progress</code></td><td class="desc"><code>migrate</code></td><td class="desc">At bulk-copy start. One row per table — per-table progress / keyset checkpoint so <code>--resume</code> picks up mid-copy (ADR-0082).</td><td class="desc"><code>--reset-target-data</code>; otherwise persists.</td></tr>
+<tr><td><code>sluice_cdc_schema_history</code></td><td class="desc"><code>sync start</code></td><td class="desc">At CDC stream open; rows written only at a real DDL/schema-delta boundary. Position-anchored schema versions so each event decodes in the schema in effect at its position — resume-after-DDL without a re-snapshot (ADR-0049). Grows with DDL count (tiny).</td><td class="desc">Compacted on demand below the retention floor by <a href="/docs/commands/#backup"><code>backup prune</code></a>; <code>--reset-target-data</code>.</td></tr>
+<tr><td><code>sluice_target_metrics_history</code></td><td class="desc"><code>sync start</code> <em>(telemetry only)</em></td><td class="desc">Only when <a href="/docs/commands/#sync-start">PlanetScale telemetry</a> is configured (<code>--planetscale-org</code>). A bounded rolling history of polled target-health snapshots (CPU/mem/storage/lag) so <a href="/docs/commands/#diagnose"><code>diagnose</code></a> can show the recent trend (ADR-0107). Advisory — never affects the sync.</td><td class="desc">Rows <strong>auto-pruned</strong> to a rolling window; table via <code>--reset-target-data</code>. Disable with <code>--suppress-target-metrics-history</code>.</td></tr>
+<tr><td><code>sluice_shard_consolidation_lease</code></td><td class="desc"><code>sync start</code> <em>(consolidation only)</em></td><td class="desc">Only when consolidating a multi-shard Vitess/PlanetScale source onto one target with cross-shard DDL coordination (ADR-0054). One row per consolidated table records which shard-stream owns applying a coordinated DDL.</td><td class="desc">Lease rows GC-swept automatically; table via <code>--reset-target-data</code>.</td></tr>
+</tbody></table>
+<div class="note"><code>--reset-target-data</code> is destructive: it clears the relevant state row(s) <em>and</em> drops every source-schema table sluice manages on that target, then cold-starts. Other tables on the target are untouched. See <a href="/docs/commands/#migrate">the migrate reference</a> and ADR-0023.</div>
+
+<h2 id="pg-source">Source database — Postgres logical CDC</h2>
+<p>The native <code>postgres</code> CDC engine reads the WAL through a logical replication slot. It creates two persistent server objects plus two optional/transient ones. Full operational detail — failover, slot invalidation, sizing — is in <a href="https://github.com/sluicesync/sluice/blob/main/docs/postgres-source-prep.md">the Postgres source-prep guide</a>.</p>
+<table><thead><tr><th>Object</th><th>Kind</th><th>When &amp; why</th><th>Cleaned up by</th></tr></thead><tbody>
+<tr><td><code>sluice_slot</code></td><td class="desc">replication slot</td><td class="desc">Created lazily on the first CDC connect (cold-start). Pins WAL and holds the resume LSN (<code>confirmed_flush_lsn</code>). pgoutput plugin; failover-aware on PG 17+.</td><td class="desc"><strong>Never auto-dropped</strong> — explicit <a href="/docs/commands/#slot"><code>sluice slot drop &lt;name&gt;</code></a>. (Auto-dropped only if cold-start <em>setup</em> itself fails.)</td></tr>
+<tr><td><code>sluice_pub</code></td><td class="desc">publication</td><td class="desc">Ensured on demand when missing, by <code>migrate</code> and <code>sync start</code>. Defines the table set pgoutput streams — scoped <code>FOR TABLE …</code> by default (ADR-0021), <code>FOR ALL TABLES</code> for multi-schema CDC.</td><td class="desc">No dedicated command — manual <code>DROP PUBLICATION</code> (a <code>DROP SCHEMA</code> won't remove it). sluice rescopes/recreates it itself.</td></tr>
+<tr><td><code>sluice_heartbeat</code></td><td class="desc">table</td><td class="desc"><strong>Opt-in</strong> via <code>--source-heartbeat-interval</code> (default off). A periodic INSERT generates WAL so the consumer position keeps advancing on an idle source — preventing slot-invalidation / binlog-purge silent loss. <em>Also created on a MySQL source</em> under the same flag.</td><td class="desc">Rows <strong>auto-pruned</strong> (<code>--source-heartbeat-prune-window</code>, default <code>1h</code>); the table itself is left in place — drop manually.</td></tr>
+<tr><td><code>sluice_backup_anchor_&lt;ts&gt;</code></td><td class="desc">temporary slot</td><td class="desc">Created by <a href="/docs/commands/#backup"><code>backup</code></a> at snapshot start to pin a consistent export point for the run.</td><td class="desc"><strong>Transient</strong> — the server auto-drops it when the session closes (even on crash). Legacy leaked anchors are auto-swept on the next backup.</td></tr>
+</tbody></table>
+<p><strong>MySQL source:</strong> native MySQL CDC reads the binlog and creates <em>nothing</em> on the source except the opt-in <code>sluice_heartbeat</code> table above — there is no slot or publication concept.</p>
+
+<h2 id="trigger-source">Source database — trigger-based CDC</h2>
+<p>The slot-less trigger engines capture changes with database triggers instead of a log stream. <a href="/docs/commands/#trigger"><code>trigger setup</code></a> installs every object below; <a href="/docs/commands/#trigger"><code>trigger teardown</code></a> removes all of them (pass <code>--keep-data</code> to retain the change-log for forensics), and <code>trigger prune</code> reaps applied change-log rows. They live in the source schema (<code>--schema</code>, default <code>public</code> on Postgres).</p>
+
+<h3 id="pgtrigger">Postgres trigger engine (<code>postgres-trigger</code>, ADR-0066)</h3>
+<table><thead><tr><th>Object</th><th>Kind</th><th>Why</th></tr></thead><tbody>
+<tr><td><code>sluice_change_log</code> + <code>sluice_change_log_meta</code></td><td class="desc">tables (+ indexes)</td><td class="desc">Append-only captured-change log (txid, op, PK + before/after JSONB) and a singleton schema-version pin.</td></tr>
+<tr><td><code>sluice_capture_change()</code>, <code>sluice_capture_truncate_fn()</code>, <code>sluice_capture_ddl()</code></td><td class="desc">functions</td><td class="desc">Row-capture (payload mode set by <code>--capture-payload</code>), TRUNCATE companion, and the DDL event-trigger handler.</td></tr>
+<tr><td><code>sluice_capture</code>, <code>sluice_capture_truncate</code> (per table); <code>sluice_capture_ddl_trg</code></td><td class="desc">triggers</td><td class="desc">One combined <code>AFTER INSERT/UPDATE/DELETE</code> trigger and a TRUNCATE trigger per table, plus one cluster DDL event trigger.</td></tr>
+</tbody></table>
+
+<h3 id="sqlitetrigger">SQLite / Cloudflare-D1 trigger engines (<code>sqlite-trigger</code> / <code>d1-trigger</code>, ADR-0135/0136)</h3>
+<table><thead><tr><th>Object</th><th>Kind</th><th>Why</th></tr></thead><tbody>
+<tr><td><code>sluice_change_log</code> + <code>sluice_change_log_meta</code></td><td class="desc">tables</td><td class="desc">Captured-change log with a monotonic <code>id</code> watermark, and a schema-version pin.</td></tr>
+<tr><td><code>sluice_change_log_columns</code></td><td class="desc">table</td><td class="desc">Captured-column fingerprint — since SQLite/D1 have no DDL triggers, a source <code>ALTER</code> is caught here and <code>sync start</code> refuses loudly rather than dropping a new column silently.</td></tr>
+<tr><td><code>sluice_capture_&lt;table&gt;_&lt;ins|upd|del&gt;</code></td><td class="desc">triggers</td><td class="desc">Three per table (SQLite has no combined-event trigger form), each writing into the change-log.</td></tr>
+</tbody></table>
+<div class="note">The two families differ in trigger naming: <code>postgres-trigger</code> uses one combined trigger literally named <code>sluice_capture</code> per table, whereas <code>sqlite-trigger</code>/<code>d1-trigger</code> use three separate <code>sluice_capture_&lt;table&gt;_&lt;op&gt;</code> triggers. Both are fully removed by <code>trigger teardown</code>.</div>
+
+<h2 id="cleanup">Cleanup quick reference</h2>
+<table><thead><tr><th>Command</th><th>Removes</th></tr></thead><tbody>
+<tr><td><code>sluice slot drop &lt;name&gt;</code></td><td class="desc">The PG source replication slot (the one object sluice never drops on its own).</td></tr>
+<tr><td><code>sluice trigger teardown</code></td><td class="desc">Every trigger-engine object on the source; <code>--keep-data</code> retains the change-log.</td></tr>
+<tr><td><code>sluice trigger prune</code> / <code>backup prune</code></td><td class="desc">Old change-log rows / below-floor <code>sluice_cdc_schema_history</code> rows (the tables stay).</td></tr>
+<tr><td><code>sluice sync start --reset-target-data</code></td><td class="desc">The target bookkeeping state + every source-schema table sluice manages on the target (destructive recovery).</td></tr>
+<tr><td><em>manual</em></td><td class="desc"><code>sluice_pub</code> (<code>DROP PUBLICATION</code>), and the <code>sluice_heartbeat</code> table once heartbeats are no longer needed.</td></tr>
+</tbody></table>
 `,
     prev: { href: "/docs/commands/", label: "Command reference" },
   })
@@ -1197,7 +1266,7 @@ ${pre(`sluice sync from-backup run \\
 <div class="note"><strong><code>--apply-concurrency</code> matters for cross-region targets.</strong> Each incremental's merged change stream is fanned across <code>W</code> in-order PK-hash lanes (same key → same lane → applied in source order), each committing concurrently on its own connection. Without it, a large incremental replayed into a high-latency target applies through a single RTT-bound stream and the broker falls behind. <code>0</code> (default) = <code>auto:4</code>; <code>1</code> = explicit serial; <code>W&gt;1</code> honored. Exactly-once is preserved — every change in an incremental carries the same chain position, so the lanes persist the identical resume position the serial path would.</div>
 
 <h2 id="coldstart">3. Cold-start vs warm-resume</h2>
-<p>On its <strong>first</strong> launch against a chain, the broker has no <code>sluice_cdc_state</code> row for the chosen <code>--stream-id</code>, so it doesn't know where in the chain to begin and refuses loudly. There are two ways past that, mutually exclusive:</p>
+<p>On its <strong>first</strong> launch against a chain, the broker has no <a href="/docs/database-objects/#target"><code>sluice_cdc_state</code></a> row for the chosen <code>--stream-id</code>, so it doesn't know where in the chain to begin and refuses loudly. There are two ways past that, mutually exclusive:</p>
 <ul>
   <li><strong><code>--reset-target-data</code></strong> — drop the target's tables, run a chain restore (full + every incremental up to the tail), then transition to live polling. The full from-the-chain rebuild; suitable when the target is empty or you want a clean rebuild. Prompts (type <code>reset</code>) unless <code>--yes</code>.</li>
   <li><strong><code>--at-chain-id &lt;ID&gt;</code></strong> — operator-asserted resume: tell the broker the target is already at chain ID <code>&lt;ID&gt;</code> (e.g. you just ran a manual <a href="/docs/commands/#restore">sluice restore</a> to bring the target up to a known checkpoint). It writes a fresh state row and tails forward from there — no re-bulking.</li>
