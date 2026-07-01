@@ -36,10 +36,18 @@ const NAV = [
     group: "Guides",
     items: [
       { slug: "migrate-mysql-to-postgres", label: "Migrate MySQL → Postgres" },
+      { slug: "how-sluice-copies", label: "How sluice copies your data" },
       { slug: "preview-and-validate", label: "Preview & validate before you migrate" },
+      { slug: "verify-reconcile", label: "Verify & reconcile" },
       { slug: "zero-downtime-cutover", label: "Zero-downtime migration (continuous sync)" },
+      { slug: "schema-changes", label: "Schema changes during a sync" },
+      { slug: "redact-pii", label: "Redact PII" },
       { slug: "import-sqlite-d1", label: "Import SQLite or Cloudflare D1" },
       { slug: "multi-database", label: "Migrate many databases or schemas" },
+      { slug: "postgres-source-prep", label: "Prepare a Postgres source" },
+      { slug: "planetscale-vitess", label: "PlanetScale & Vitess" },
+      { slug: "operate-fleet", label: "Operate a sync fleet" },
+      { slug: "encrypted-backups", label: "Take encrypted backups" },
       { slug: "from-backup-sync", label: "Sync from a backup chain" },
     ],
   },
@@ -99,6 +107,14 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "zero-downtime-cutover",
     "import-sqlite-d1",
     "multi-database",
+    "how-sluice-copies",
+    "verify-reconcile",
+    "schema-changes",
+    "redact-pii",
+    "postgres-source-prep",
+    "planetscale-vitess",
+    "operate-fleet",
+    "encrypted-backups",
   ];
   const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
   const top = '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>';
@@ -948,7 +964,7 @@ ${pre(`sluice verify \\
 <p>Both are <a href="/docs/configuration/#global-flags">global flags</a> — see Configuration for the full discussion.</p>
 `,
     prev: { href: "/docs/getting-started/", label: "Getting started" },
-    next: { href: "/docs/preview-and-validate/", label: "Preview & validate" },
+    next: { href: "/docs/how-sluice-copies/", label: "How sluice copies your data" },
   })
 );
 
@@ -1008,8 +1024,8 @@ sluice verify --source-driver mysql --source "$SLUICE_SOURCE" \\
     --depth sample --sample-rows-per-table 500`)}
 <p>Both modes accept <code>--format json</code> and <code>-o FILE</code> for piping into a CI gate or alertmanager. A full per-row hash mode is planned but not yet shipped.</p>
 `,
-    prev: { href: "/docs/migrate-mysql-to-postgres/", label: "Migrate MySQL → Postgres" },
-    next: { href: "/docs/zero-downtime-cutover/", label: "Zero-downtime migration" },
+    prev: { href: "/docs/how-sluice-copies/", label: "How sluice copies your data" },
+    next: { href: "/docs/verify-reconcile/", label: "Verify & reconcile" },
   })
 );
 
@@ -1063,8 +1079,8 @@ ${pre(`sluice verify --source-driver mysql --source "$SLUICE_SOURCE" \\
 <p>The full sequence: <strong>start the stream → wait for fresh → freeze source writes → <code>sync stop --wait</code> → <code>cutover</code> → <code>verify</code> → repoint the app</strong>. Only the last three steps fall inside the write-freeze window, so downtime is measured in seconds-to-minutes, not the length of the copy.</p>
 <div class="note"><strong>Schema changes during a long-running sync.</strong> By default a stream forwards unambiguous source DDL (ADD/DROP/ALTER COLUMN, CREATE/DROP INDEX, …) onto the target automatically so it stays online through schema evolution — including a destructive <code>DROP COLUMN</code>. To gate DDL through a separate change process, start with <code>--schema-changes=refuse</code>. See the warning box in the <a href="/docs/commands/#sync-start">sync start reference</a>.</div>
 `,
-    prev: { href: "/docs/preview-and-validate/", label: "Preview & validate" },
-    next: { href: "/docs/import-sqlite-d1/", label: "Import SQLite or Cloudflare D1" },
+    prev: { href: "/docs/verify-reconcile/", label: "Verify & reconcile" },
+    next: { href: "/docs/schema-changes/", label: "Schema changes during a sync" },
   })
 );
 
@@ -1144,7 +1160,7 @@ sluice sync start --source-driver sqlite-trigger --source ./app.db \\
 sluice trigger teardown --source-driver sqlite-trigger --dsn ./app.db --yes`)}
 <p>Big integers and BLOBs round-trip exactly through capture and CDC (the trigger encodes each column as a <code>(typeof, text/hex)</code> pair). Enable <code>PRAGMA journal_mode=WAL</code> on a local source so the poller never blocks the app's writes. Because SQLite has no DDL triggers, a source <code>ALTER TABLE</code> isn't auto-captured — re-run <code>trigger setup</code> after a schema change; <code>sync start</code> refuses loudly on schema drift rather than silently dropping a new column. The live <code>d1-trigger</code> path is identical over the HTTP query API (the token is a D1:Edit token); mind D1's per-write billing and the change-log growth — run <code>sluice trigger prune</code> periodically. Full detail: <a href="https://github.com/sluicesync/sluice/blob/main/docs/operator/sqlite-d1-import.md">the SQLite/D1 operator doc</a>.</p>
 `,
-    prev: { href: "/docs/zero-downtime-cutover/", label: "Zero-downtime migration" },
+    prev: { href: "/docs/redact-pii/", label: "Redact PII" },
     next: { href: "/docs/multi-database/", label: "Migrate many databases or schemas" },
   })
 );
@@ -1220,7 +1236,7 @@ sluice migrate \\
 </ul>
 `,
     prev: { href: "/docs/import-sqlite-d1/", label: "Import SQLite or Cloudflare D1" },
-    next: { href: "/docs/from-backup-sync/", label: "Sync from a backup chain" },
+    next: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
   })
 );
 
@@ -1290,8 +1306,919 @@ sluice sync from-backup run --backup-target s3://my-bucket/app-chain \\
 ${pre(`sluice sync from-backup stop --backup-target s3://my-bucket/app-chain`)}
 <div class="note">The broker follows segment-rotation seams automatically and is restart-resilient on both sides — its idempotent applier absorbs any overlap on resume. Two consumers must use <strong>distinct</strong> <code>--stream-id</code>s for distinct targets, or they'll race on position writes. To rest the chain encrypted, the broker accepts the same encryption flags as the rest of the backup family — see the <a href="/docs/commands/#backup">backup reference</a>.</div>
 `,
-    prev: { href: "/docs/multi-database/", label: "Migrate many databases or schemas" },
+    prev: { href: "/docs/encrypted-backups/", label: "Take encrypted backups" },
     next: { href: "/docs/commands/", label: "Command reference" },
+  })
+);
+
+
+// nav-label: How sluice copies your data
+write(
+  "how-sluice-copies",
+  page({
+    slug: "how-sluice-copies",
+    title: "How sluice copies your data",
+    subtitle: "Same-engine vs cross-engine: which internal path a copy takes, and why the fast path never trades correctness for speed.",
+    body: `
+<p>Every migration and sync moves rows through one of two internal paths. Which one runs is automatic — you don't pick it — but the distinction explains sluice's performance profile and, more importantly, why it never trades correctness for speed.</p>
+
+<h2 id="ir-path">The IR path — the default, and the only path for cross-engine</h2>
+<p>Everything cross-engine — MySQL → Postgres, Postgres → MySQL, SQLite → anything — flows through sluice's <strong>internal representation</strong> (IR): a typed, dialect-neutral model of your schema and values. The source reader decodes each row into IR; the target writer encodes IR into the target's wire format. The IR is where every cross-engine capability lives: type translation (MySQL <code>TINYINT(1)</code> ↔ PG <code>BOOLEAN</code>; PG <code>UUID</code> / <code>INET</code> / <code>ARRAY</code> ↔ their MySQL equivalents), <a href="/docs/redact-pii/">PII redaction</a>, <code>--type-override</code> / <code>--expr-override</code>, and the value-fidelity checks that refuse loudly rather than silently coerce. That generality is the point of sluice — but it has a cost: every value is decoded and re-encoded, even when source and target are the same engine and nothing needs to change.</p>
+
+<h2 id="pg-fast-lane">Postgres → Postgres — the fast lane that skips the round trip</h2>
+<p>When both sides are Postgres and there is no transformation to apply, the bytes the source emits are exactly the bytes the target wants, so the decode → IR → re-encode round trip buys nothing. sluice detects this and byte-pipes the server's native <code>COPY</code> stream straight from source to target (<code>COPY (SELECT …) TO STDOUT</code> → <code>COPY … FROM STDIN</code>), never materializing an IR row. This is the same tactic <a href="https://github.com/planetscale/pgcopydb">pgcopydb</a> uses, and it closes most of the per-stream throughput gap against it. It composes with sluice's parallel copy — each table, and each primary-key-range chunk of a large table, byte-pipes independently.</p>
+
+<h2 id="mysql-same-engine">MySQL → MySQL — no translation to do, plus a native loader</h2>
+<p>A same-engine MySQL copy still flows through the IR (there is no raw byte-pipe for MySQL today), but with source and target identical there is nothing to <em>translate</em> — every type round-trips exactly — and sluice writes through MySQL's native bulk loader (<code>LOAD DATA LOCAL INFILE</code>) on the parallel copy path, the fastest ingest MySQL offers. (PlanetScale blocks <code>LOAD DATA LOCAL</code>, so a PlanetScale target falls back to batched multi-row <code>INSERT</code>.)</p>
+
+<h2 id="same-fidelity">The fast lane is not "more accurate" — it is the same fidelity, less work</h2>
+<p>Worth stating plainly: the Postgres byte-pipe is <strong>not a more exact copy</strong> than the IR path. Both are exact. It is faster precisely <em>because</em> it only runs when there is provably nothing to change — so it can move bytes instead of re-deriving them.</p>
+
+<h2 id="safety-gate">The safety gate — why speed never costs you correctness</h2>
+<p>The Postgres byte-pipe is guarded by one auditable check that proves there is no transform to skip. The moment any of these is present, sluice falls back to the IR path automatically — <strong>per table</strong>, without you configuring anything:</p>
+<ul>
+  <li><code>--redact</code> (PII redaction)</li>
+  <li><code>--type-override</code> or <code>--expr-override</code></li>
+  <li>shard-column injection (<code>--inject-shard-column</code>)</li>
+  <li>an OID / wire-format-sensitive type — extension types like pgvector / hstore, <code>bit</code>, or PostGIS <code>geometry</code> — whose per-type codec must run</li>
+</ul>
+<p>Add a redaction rule to a Postgres → Postgres migrate and the raw lane silently steps aside for exactly the tables that need it; drop the rule and it re-engages. The fast lane is opportunistic and conservative by construction.</p>
+
+<div class="note"><strong>Scope today.</strong> The Postgres byte-pipe runs on the cold-copy phase of <code>migrate</code> (not the <code>sync</code> cold-start or a resume yet). Format is text by default (safe across Postgres major versions); binary is opt-in on matched server majors.</div>
+${pre(`# same-engine PG->PG migrate; the raw COPY lane engages automatically
+sluice migrate \\
+    --source-driver postgres --source 'postgres://user:pass@src:5432/app?sslmode=require' \\
+    --target-driver postgres --target 'postgres://user:pass@dst:5432/app?sslmode=require' \\
+    --raw-copy-format auto      # text (default) | binary | auto (binary when majors match)`)}
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/commands/#migrate">migrate reference</a> — the parallelism flags (<code>--table-parallelism</code>, <code>--bulk-parallelism</code>) and <code>--raw-copy-format</code>.</li>
+  <li><a href="/docs/redact-pii/">Redact PII</a> — the transforms that route a copy onto the IR path.</li>
+  <li><a href="/docs/preview-and-validate/">Preview &amp; validate</a> — see the plan before you run it.</li>
+</ul>
+`,
+    prev: { href: "/docs/migrate-mysql-to-postgres/", label: "Migrate MySQL → Postgres" },
+    next: { href: "/docs/preview-and-validate/", label: "Preview & validate before you migrate" },
+  })
+);
+
+// nav-label: Verify & reconcile after
+write(
+  "verify-reconcile",
+  page({
+    slug: "verify-reconcile",
+    title: "Verify & reconcile after a migration",
+    subtitle: "Confirm every row landed and no structural drift crept in — then know exactly what to do when it didn't.",
+    body: `
+<p><a href="/docs/preview-and-validate/">Preview &amp; validate</a> is the <em>pre</em>-migration companion to this guide: it shows the DDL and steers translation before a row moves. This guide is the <em>post</em>-migration half — after <code>migrate</code> finishes, or after a <a href="/docs/zero-downtime-cutover/">sync</a> has caught up, you want proof that the data actually landed and that the target's shape still matches what sluice would produce. Two read-only commands give you that proof: <a href="/docs/commands/#verify">verify</a> compares the rows, <a href="/docs/commands/#schema">schema diff</a> compares the structure. Both exit non-zero on a discrepancy, so either one drops straight into a cron job or a CI gate.</p>
+
+<h2 id="verify-data">1. Verify the rows landed</h2>
+<p><code>verify</code> compares the data itself, on a depth ladder — start cheap, escalate only when you need a stronger guarantee. It never writes to the target.</p>
+<table><thead><tr><th>Depth</th><th>What it does</th></tr></thead><tbody>
+<tr><td><code>--depth count</code> (default)</td><td class="desc">Per-table row-count comparison. Fast, works across engines, and catches whole-table loss and bulk-row loss.</td></tr>
+<tr><td><code>--depth sample</code></td><td class="desc">Counts <em>plus</em> per-table sampled-row content hashes — ~99% confidence of catching a 5%+ corruption rate at the default 100 rows/table. <strong>Same-engine only</strong> (see below).</td></tr>
+</tbody></table>
+<p>For a cross-engine migration (MySQL&nbsp;→&nbsp;Postgres and the like), <code>count</code> is the mode you run. Server-side row hashing renders values in each engine's own text format, so a cross-engine sample would report false mismatches; sluice refuses <code>--depth=sample</code> loudly when the source and target engines differ rather than hand you a misleading result. Sample mode is for same-engine checks (MySQL&nbsp;→&nbsp;MySQL, Postgres&nbsp;→&nbsp;Postgres).</p>
+${pre(`# cross-engine: row-count parity, the everyday post-migrate check
+sluice verify --source-driver mysql    --source "$SLUICE_SOURCE" \\
+              --target-driver postgres --target "$SLUICE_TARGET" \\
+              --depth count
+
+# same-engine: escalate to sampled content hashing
+sluice verify --source-driver postgres --source "$SLUICE_SOURCE" \\
+              --target-driver postgres --target "$SLUICE_TARGET" \\
+              --depth sample --sample-rows-per-table 500`)}
+<p>Tune sample mode with <code>--sample-rows-per-table</code> (raise it for tables with rare anomalies), <code>--sample-seed</code> (deterministic — the same seed picks the same rows on both sides; change it to reshuffle), and <code>--strict-hash</code> (SHA-256 instead of MD5, for an extra confidence margin or a compliance posture that requires it). Scope any run with <code>--include-table</code> / <code>--exclude-table</code> (glob-aware, mutually exclusive).</p>
+<div class="note"><strong>Full per-row hashing is planned, not yet shipped.</strong> Today the ladder stops at <code>sample</code>; <code>count</code> plus a well-sized same-engine sample is the strongest check available.</div>
+
+<h2 id="json-exit">2. JSON output and cron-friendly exit codes</h2>
+<p>Both depths accept <code>--format json</code> and <code>-o FILE</code>, so <code>verify</code> pipes cleanly into a CI gate or an alertmanager pipeline. The JSON carries per-table deltas — source vs target counts, sampled-row count, and the mismatched primary keys when sample mode finds drift — so you get the offending rows, not just a red/green.</p>
+${pre(`sluice verify --source-driver mysql    --source "$SLUICE_SOURCE" \\
+              --target-driver postgres --target "$SLUICE_TARGET" \\
+              --depth count --format json -o verify.json`)}
+<p>The exit code is the contract for automation:</p>
+<table><thead><tr><th>Exit</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>0</code></td><td class="desc">Clean — every checked table matched.</td></tr>
+<tr><td><code>1</code></td><td class="desc">Mismatch — at least one table differs (a count delta, or a sampled-row hash mismatch).</td></tr>
+<tr><td><code>2</code></td><td class="desc">Operational error — couldn't connect, unsupported engine, bad flags. Distinct from <code>1</code> so a gate never conflates "the data differs" with "the check couldn't run".</td></tr>
+</tbody></table>
+<div class="note"><strong>Redacted migrations.</strong> If you migrated with <code>--redact</code>, the target values differ from the source <em>by design</em> — so a same-engine <code>--depth=sample</code> run will report those rows as content mismatches. Verify redacted migrations with <code>--depth=count</code> (row parity is still meaningful), or scope the sample to unredacted tables with <code>--include-table</code>.</div>
+
+<h2 id="schema-drift">3. Confirm no structural drift</h2>
+<p>Row parity doesn't prove the <em>shape</em> is right — an index that failed to build, a column that came back with the wrong type, a constraint that never applied. <code>schema diff</code> reads the live target and compares it against what sluice would produce from the source, then prints the delta with <strong>copy-paste DDL suggestions</strong> to reconcile it. It's read-only — there is no <code>--apply</code> flag by design (ADR-0029); the DDL is for you to review and run. Like <code>verify</code>, it exits non-zero on any difference.</p>
+${pre(`sluice schema diff --source-driver mysql    --source "$SLUICE_SOURCE" \\
+                   --target-driver postgres --target "$SLUICE_TARGET"`)}
+<p>Its exit codes mirror <code>verify</code>: <code>0</code> clean, <code>1</code> drift detected (the gate fails; a one-line summary goes to stderr, the full diff to stdout or <code>-o FILE</code>), <code>2</code> operational error. Trim the noise when part of the target is managed out-of-band: <code>--ignore-charset-collation</code> suppresses MySQL charset/collation diffs, <code>--ignore-extras</code> hides tables/columns/indexes that exist only on the target, and <code>--skip-views</code> drops view comparison entirely. <code>--format json</code> is available for CI. If you steered any types at migrate time with <code>--type-override</code>, pass the identical flags here so the diff compares against the schema you actually intended.</p>
+
+<h2 id="on-mismatch">4. What to do on a mismatch</h2>
+<p>A non-zero exit tells you <em>where</em> — the table, and (in sample mode) the mismatched primary keys. From there:</p>
+<ul>
+  <li><strong>Structural drift (<code>schema diff</code> flagged it).</strong> Read the suggested DDL. If it's a missing index or constraint on an otherwise-correct table, applying the suggestion is often enough. If a column type is wrong, fix it with a <code>--type-override</code> and re-migrate that table rather than hand-patching.</li>
+  <li><strong>A count shortfall on a fresh migration.</strong> Re-run <code>migrate</code>. A plain re-run is idempotent for tables that copied cleanly and fills the gap. If the target table is in a partially-written state you want to discard, <code>migrate --reset-target-data</code> is the destructive recovery: it deletes the migrate-state row, drops every source-schema table on the target, and runs a fresh cold-start (it prompts for confirmation — type <code>reset</code>, or pass <code>--yes</code> in automation). See <a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0023-reset-target-data.md">ADR-0023</a>.</li>
+  <li><strong>A drift that appears on a <a href="/docs/zero-downtime-cutover/">running sync</a>.</strong> The equivalent recovery is <code>sync start --reset-target-data</code> — drop the target, restore, then transition back to live polling. Don't reach for it on a transient lag; let the sync catch up and re-verify first.</li>
+  <li><strong>The mismatch is on the source side.</strong> If <code>verify</code> reports the <em>target</em> has more rows, or the counts drift on every re-run, suspect the source: rows written after the copy started, a source table still taking writes without a sync, or a filter (<code>--include-table</code>) that differs between the migrate and the verify. Re-verify with the same table scope you migrated.</li>
+</ul>
+
+<h2 id="decision-table">5. Symptom → first look</h2>
+<table><thead><tr><th>Symptom</th><th>First look</th></tr></thead><tbody>
+<tr><td class="desc"><code>verify --depth=count</code> exits 1, target has fewer rows</td><td class="desc">Re-run <code>migrate</code>; if partially written, <code>migrate --reset-target-data</code>.</td></tr>
+<tr><td class="desc">Target has <em>more</em> rows than source</td><td class="desc">Source took writes after the copy — reconcile the window, or move to continuous sync before cutover.</td></tr>
+<tr><td class="desc"><code>--depth=sample</code> exits 1 on a redacted migration</td><td class="desc">Expected — redacted target content differs. Use <code>--depth=count</code>.</td></tr>
+<tr><td class="desc"><code>verify</code> exits 2 (not 1)</td><td class="desc">Operational, not data: connectivity, engine name, or flags. Check the DSNs and <code>--*-driver</code> values.</td></tr>
+<tr><td class="desc"><code>schema diff</code> exits 1, missing index/constraint</td><td class="desc">Apply the suggested DDL from the diff output.</td></tr>
+<tr><td class="desc"><code>schema diff</code> flags a wrong column type</td><td class="desc">Re-migrate the table with a <code>--type-override</code>; don't hand-patch.</td></tr>
+<tr><td class="desc"><code>--depth=sample</code> refused for a cross-engine pair</td><td class="desc">By design — use <code>--depth=count</code> across engines.</td></tr>
+</tbody></table>
+
+<h2 id="next-steps">Next steps</h2>
+<ul>
+  <li><a href="/docs/preview-and-validate/">Preview &amp; validate before you migrate</a> — the pre-migration half: DDL preview and type steering.</li>
+  <li><a href="/docs/commands/#verify">Command reference: verify</a> and <a href="/docs/commands/#schema">schema preview / diff</a> — every flag in one place.</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a> — when the source keeps taking writes, verify after the sync catches up.</li>
+</ul>
+`,
+    prev: { href: "/docs/preview-and-validate/", label: "Preview & validate before you migrate" },
+    next: { href: "/docs/zero-downtime-cutover/", label: "Zero-downtime migration (continuous sync)" },
+  })
+);
+
+// nav-label: Schema changes during sync
+write(
+  "schema-changes",
+  page({
+    slug: "schema-changes",
+    title: "Schema changes during a live sync",
+    subtitle: "How sluice keeps a running sync online while the source schema evolves — what forwards automatically, what refuses loudly, and how to recover.",
+    body: `
+<p>A source schema rarely stands still. Columns get added, types get widened, indexes come and go while a continuous sync is running. sluice does not manage those migrations for you — tools like Atlas, sqitch, Flyway, and liquibase do that — but it does keep the stream online through them. By default it forwards the operator's own committed DDL onto the target, so a routine <code>ALTER TABLE</code> no longer wedges the sync. This page covers what forwards automatically, the narrow set of changes that still refuse loudly, and the drained-migrate recovery when one does.</p>
+
+<h2 id="the-flag">The control: --schema-changes</h2>
+<p>A single tristate flag on <code>sync start</code> (and per-sync in a <code>sync run</code> fleet spec) governs the behavior, introduced in <a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0091-default-on-schema-change-forwarding.md">ADR-0091</a>:</p>
+<table>
+<thead><tr><th>Mode</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td><code>--schema-changes=forward</code> <em>(default)</em></td><td class="desc">Apply every unambiguous source schema change on the target automatically, logging each applied DDL at INFO. The sync stays online through routine schema evolution.</td></tr>
+<tr><td><code>--schema-changes=refuse</code></td><td class="desc">The conservative pre-v0.92 behavior: any source DDL surfaces loudly with a structured drift diff and the drained-model recovery hint. For operators who gate DDL through a separate change-management process.</td></tr>
+</tbody>
+</table>
+<div class="note"><strong>This is a behavior change on upgrade.</strong> A stream that previously refused on source DDL now forwards it. Set <code>--schema-changes=refuse</code> to keep the old drained-model default. Note also that <code>--schema-changes</code> is a no-op under Shape A (<code>--inject-shard-column</code>): the multi-shard boundary router already forwards every shape via its lease. The older <code>--forward-schema-add-column</code> boolean is deprecated — forwarding is on by default and covers every shape, so the flag is subsumed; setting it logs a deprecation warning and forwards.</div>
+
+<h2 id="what-forwards">What forwards, by source engine</h2>
+<p>Under <code>forward</code>, the intercept can emit any shape's DDL, but a change only reaches the target if the source's CDC stream actually carries its detail on the wire. Postgres logical replication (pgoutput) carries less than MySQL's <code>information_schema</code> re-read, so the honest matrix differs by <em>source</em> engine. This is the ground-truth table from ADR-0091 §1d — do not assume a shape forwards without checking it:</p>
+<table>
+<thead><tr><th>Shape</th><th>MySQL source</th><th>Postgres source</th></tr></thead>
+<tbody>
+<tr><td>ADD COLUMN</td><td class="desc">forwards</td><td class="desc">forwards</td></tr>
+<tr><td>DROP COLUMN</td><td class="desc">forwards</td><td class="desc">forwards</td></tr>
+<tr><td>ALTER COLUMN TYPE (same- or cross-engine)</td><td class="desc">forwards</td><td class="desc">forwards</td></tr>
+<tr><td>ALTER NULLABILITY</td><td class="desc">forwards</td><td class="desc">refuses<sup>1</sup></td></tr>
+<tr><td>Column REORDER</td><td class="desc">no-op<sup>2</sup></td><td class="desc">no-op<sup>2</sup></td></tr>
+<tr><td>CREATE / DROP INDEX</td><td class="desc">refuses<sup>3</sup></td><td class="desc">refuses<sup>1</sup></td></tr>
+<tr><td>ADD / DROP / MODIFY CHECK</td><td class="desc">refuses<sup>3</sup></td><td class="desc">refuses<sup>1</sup></td></tr>
+<tr><td>RENAME COLUMN</td><td class="desc">refuses (§rename)</td><td class="desc">forwards via attnum<sup>4</sup></td></tr>
+<tr><td>RENAME TABLE / multi-shape combo</td><td class="desc">refuses</td><td class="desc">refuses</td></tr>
+</tbody>
+</table>
+<p style="font-size:0.9em">
+<sup>1</sup> pgoutput's relation message carries only column name + type + the replica-identity key flag — no nullability flag, no secondary-index or CHECK metadata. The wire never signals these on a Postgres source, so they produce no boundary to forward. A resulting incompatibility surfaces as a loud apply error on the next affected row, not silent corruption.<br>
+<sup>2</sup> sluice decodes rows by column name, never by position, so a pure reorder needs no DDL — it is a safe no-op.<br>
+<sup>3</sup> MySQL's CDC projection reads only <code>{schema, name, columns, primary key}</code> on a DDL boundary; it does not project secondary indexes or CHECK constraints. Forwarding them would need a new catalog projection (perf-only for indexes; cross-engine expression-translation-hazardous for checks), so both are deferred.<br>
+<sup>4</sup> A Postgres RENAME is proven via the stable <code>pg_attribute.attnum</code> — see <a href="#rename">RENAME COLUMN</a>.
+</p>
+<p>Every forwarded DDL is logged at INFO as it lands, so the applied change is visible in the sync's log stream. Cross-engine type ALTERs are retargeted through the same translation path a cold-start <code>CREATE TABLE</code> uses; a widening ALTER forwards cleanly, while a narrowing or incompatible one is rejected by the target engine and surfaces as a loud, retryable refuse (position not advanced).</p>
+
+<h2 id="always-refuses">What always refuses, even under forward</h2>
+<p>Two shapes never auto-apply, because forwarding the wrong guess would silently lose data:</p>
+
+<h3 id="rename">RENAME COLUMN</h3>
+<p>A column rename and a <code>DROP x + ADD y</code> of the same type are <strong>indistinguishable from the replication stream alone</strong> — both present as exactly one dropped column and one added column. Guessing RENAME when the truth is drop+add keeps stale data under the new name; guessing drop+add when the truth is RENAME drops the column's data on the target. The only safe disambiguation is a stable column identity that survives a rename:</p>
+<ul>
+  <li><strong>Postgres has one</strong> — <code>pg_attribute.attnum</code> is stable across a rename. The PG CDC reader carries it as the column's stable id; the intercept forwards a rename <em>only</em> when the before and after columns share the same non-zero attnum (proven rename, data preserved) and refuses otherwise. Because the proof is definitive, a bug here can only ever refuse safely, never mis-forward.</li>
+  <li><strong>MySQL has no equivalent</strong> — <code>ORDINAL_POSITION</code> changes on reorder and there is no creation id, so a MySQL-source rename is fundamentally unprovable from catalog state. It refuses, permanently. Drain and rename on both ends explicitly.</li>
+</ul>
+
+<h3 id="volatile-default">ADD COLUMN with a computed / volatile DEFAULT</h3>
+<p>An <code>ADD COLUMN</code> whose DEFAULT is a non-deterministic function is refused, because evaluating it in the target's session diverges from the per-row values the source already inserted (ADR-0058 §2a). The refused functions include <code>NOW()</code> / <code>CURRENT_TIMESTAMP</code> / <code>clock_timestamp()</code>, <code>nextval()</code>, <code>gen_random_uuid()</code>, <code>random()</code>, and MySQL's <code>UUID()</code> / <code>RAND()</code> — matched schema-qualified or bare, and detected even when wrapped (e.g. <code>COALESCE(NULL, NOW())</code>). A constant DEFAULT forwards normally. If the probe of a column's default can't be read at all, sluice refuses on uncertainty rather than risk a wrong value.</p>
+<p>Multi-shape combos (more than one structural change in a single boundary) also refuse — the IR delta can't be unambiguously ordered — as does a target DDL apply that fails on lock contention, permissions, or an unrecognized type. Every one of these leaves the CDC position un-advanced, so a retry replays the boundary once you've reconciled by hand.</p>
+
+<h2 id="drift-diff">The refusal message</h2>
+<p>When a change refuses, the error is deliberately greppable and names the specific offending object plus the operator action. It carries three parts: the classify error (which shape / how many changes), a structured drift diff that names the exact columns / indexes / constraints that differ, and a recovery hint. The hint spells out the drained model:</p>
+<ul>
+  <li>Run <code>sluice sync stop --wait</code> to drain in-flight changes.</li>
+  <li>Apply the schema change on the target (manually, or via <code>sluice schema migrate</code>).</li>
+  <li>Resume with <code>sluice sync start --resume</code>.</li>
+  <li>It also notes that <code>--schema-changes=refuse</code> keeps the drained model as the default for any subsequent source DDL.</li>
+</ul>
+
+<h2 id="drained-migrate">Operator runbook: recovering a refused change</h2>
+<p>When a change refuses — or when you run <code>--schema-changes=refuse</code> deliberately — the recovery is the drained-schema-migrate sequence. Stop the stream with <code>--wait</code> so the CLI blocks until the streamer confirms a graceful drain (the in-flight batch is committed and the CDC position is persisted past the last applied event), apply the DDL to whichever side needs it, then resume from the persisted position:</p>
+${pre(`# 1. Drain and stop — --wait blocks until the drain is confirmed
+sluice sync stop --wait \\
+    --stream-id app-prod \\
+    --target-driver postgres --target 'postgres://...target...'
+
+# 2. Apply the schema change on source and/or target as appropriate
+psql "$SOURCE_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
+psql "$TARGET_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
+
+# 3. Resume from the persisted CDC position
+sluice sync start --resume \\
+    --stream-id app-prod \\
+    --source-driver mysql    --source 'root:rootpw@tcp(localhost:3306)/app' \\
+    --target-driver postgres --target 'postgres://...target...'`)}
+<p>The <code>--resume</code> flag picks up the persisted CDC position (source LSN / GTID set / VStream cursor), so pre-stop events apply cleanly and the first event after resume sees the new shape on both sides. Without <code>--resume</code>, sluice refuses to bulk-copy into a populated target. The order "stop &rarr; ALTER source &rarr; ALTER target &rarr; start" is robust regardless of which side commits the DDL first, as long as both sides carry the new shape before resume.</p>
+<div class="note"><strong>Plan the target-side change first.</strong> <code>sluice schema diff</code> runs the source schema through sluice's translation pipeline and reports drift against the target's actual schema — apply the ALTER on the source, run the diff, and it surfaces the missing-on-target columns / type mismatches with suggested <code>ALTER</code> statements as a starting point. It does not know your data volume or lock duration, so review them before running.</div>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/commands/#sync-start">sync start reference</a> — the <code>--schema-changes</code> row and the full sync flag set.</li>
+  <li><a href="/docs/migrate-mysql-to-postgres/">Migrate MySQL to Postgres</a> — the one-shot migration the drained model resumes onto.</li>
+  <li><a href="/docs/commands/#schema">schema diff / schema migrate</a> — pre-flight drift and apply the target-side change.</li>
+</ul>
+`,
+    prev: { href: "/docs/zero-downtime-cutover/", label: "Zero-downtime migration (continuous sync)" },
+    next: { href: "/docs/redact-pii/", label: "Redact PII" },
+  })
+);
+
+// nav-label: Redact PII
+write(
+  "redact-pii",
+  page({
+    slug: "redact-pii",
+    title: "Redact PII while you migrate & sync",
+    subtitle: "Seed staging, dev, analytics, and vendor handoffs from production without letting personal data leave with the rows.",
+    body: `
+<p>You need a realistic copy of production in a place production data isn't allowed to go — a staging database, a developer laptop, an analytics warehouse, a vendor's environment. The schema, the row shapes, and the referential structure all have to survive; the emails, card numbers, and national IDs must not. sluice does this inline with <code>--redact</code>: PII is transformed <strong>between the source reader and the target writer</strong>, so the sensitive value never lands on the target and never touches the backup on disk. There is no separate scrubbing pass to forget to run.</p>
+
+<h2 id="how-it-works">How --redact works</h2>
+<p>Each rule names a column and a strategy:</p>
+${pre(`--redact '[schema.]table.column=STRATEGY[:options]'`)}
+<p>The flag is <strong>repeatable</strong> — pass it once per column. Rules are applied in the bulk-copy hot path and the CDC apply path alike; the strategy's output replaces the source value verbatim at the named column before it reaches the target. When no <code>--redact</code> is configured the pipeline short-circuits before any per-row work, so operators who don't use redaction pay nothing for the feature.</p>
+${pre(`sluice migrate \\
+    --source-driver postgres --source "$SRC" \\
+    --target-driver postgres --target "$DST" \\
+    --redact users.email=hash:sha256`)}
+<p>Every rule also has a YAML form under a <code>redactions:</code> block in the config file (see <a href="/docs/configuration/">Configuration</a>). CLI and YAML mix: CLI rules are processed first, YAML appends, and a duplicate on the same <code>schema.table.column</code> is last-write-wins with a WARN. Keep the bulk in version-controlled YAML; reach for the flag for per-environment overrides (<code>--redact users.email=null</code> in staging).</p>
+
+<h2 id="where-it-applies">Where redaction applies</h2>
+<p>The same rule set is honoured uniformly across every path that moves rows, so a column can't leak through a surface you forgot about:</p>
+<table>
+<thead><tr><th>Command</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>sluice migrate</code></td><td class="desc">One-shot bulk copy — every row passes through the redactor.</td></tr>
+<tr><td><code>sluice sync start</code></td><td class="desc">Both phases honour <code>--redact</code>: the cold-start snapshot copy <em>and</em> the live CDC apply stream.</td></tr>
+<tr><td><code>sluice backup full</code> / <code>incremental</code></td><td class="desc">Backup chunks are PII-clean on disk; a later restore copies them through unchanged.</td></tr>
+<tr><td><code>sluice schema preview</code></td><td class="desc">No data moves — it annotates the generated <code>CREATE TABLE</code> DDL with which columns are redacted (see below).</td></tr>
+</tbody>
+</table>
+
+<h2 id="strategies">The strategy families</h2>
+<p>sluice ships 26 strategies across five families. Pick the one that matches the column's shape.</p>
+
+<h3>Constant &amp; foundational</h3>
+<table>
+<thead><tr><th>Strategy</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>null</code></td><td class="desc">Replace with <code>NULL</code>. Refuses on <code>NOT NULL</code> columns — use <code>static:</code> there instead.</td></tr>
+<tr><td><code>static:&lt;value&gt;</code></td><td class="desc">Replace every value with one literal constant.</td></tr>
+<tr><td><code>truncate:&lt;n&gt;</code></td><td class="desc">Keep the first N runes (rune-counted; UTF-8 and emoji safe).</td></tr>
+<tr><td><code>hash:sha256</code></td><td class="desc">SHA-256 hex digest — deterministic, no key required.</td></tr>
+<tr><td><code>hash:hmac-sha256</code></td><td class="desc">Keyed HMAC-SHA256 hex digest — requires <code>--keyset-source</code> (see below).</td></tr>
+</tbody>
+</table>
+
+<h3>Format-preserving masks</h3>
+<p>Generic masks keep some characters and blank the rest (default mask char <code>X</code>):</p>
+<table>
+<thead><tr><th>Strategy</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>mask:inner:&lt;m1&gt;,&lt;m2&gt;[,&lt;char&gt;]</code></td><td class="desc">Keep first M1 + last M2 runes; mask the middle. <code>mask:inner:4,4</code> on <code>4111111111111111</code> → <code>4111XXXXXXXX1111</code>.</td></tr>
+<tr><td><code>mask:outer:&lt;m1&gt;,&lt;m2&gt;[,&lt;char&gt;]</code></td><td class="desc">Mask the first M1 + last M2; keep the middle.</td></tr>
+</tbody>
+</table>
+<p>Country- and format-specific presets validate the input shape and preserve just the non-identifying part:</p>
+<table>
+<thead><tr><th>Preset</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>mask:ssn</code></td><td class="desc">US SSN — preserve last 4 (<code>XXX-XX-NNNN</code>).</td></tr>
+<tr><td><code>mask:pan</code> / <code>mask:pan-relaxed</code></td><td class="desc">Card PAN — preserve first 6 + last 4. <code>mask:pan</code> requires a valid Luhn checksum; <code>mask:pan-relaxed</code> skips the check.</td></tr>
+<tr><td><code>mask:email</code></td><td class="desc">First char of the local part + masked middle + full <code>@domain</code>.</td></tr>
+<tr><td><code>mask:ca-sin</code></td><td class="desc">Canadian SIN — preserve last 3 (Luhn-validated).</td></tr>
+<tr><td><code>mask:uk-nin</code></td><td class="desc">UK National Insurance number — keep prefix letters + suffix, mask the digits.</td></tr>
+<tr><td><code>mask:iban</code></td><td class="desc">IBAN — preserve country code, check digits, 2 BBAN, and last 4.</td></tr>
+<tr><td><code>mask:uuid</code></td><td class="desc">UUID — preserve hyphens + first 4 + last 4 hex. See the caveat below.</td></tr>
+</tbody>
+</table>
+<div class="note"><strong><code>mask:uuid</code> on a native <code>uuid</code> column.</strong> The masked output contains <code>X</code> characters that aren't valid hex, so a target column typed <code>uuid</code> (Postgres) refuses at preflight — before any data moves — unless you also map that column to text with <code>--type-override=table.col=text</code>.</div>
+
+<h3>Realistic synthetic values (randomize)</h3>
+<p>The <code>randomize:*</code> generators produce fresh, valid-shape fake values — ideal when staging needs data that <em>looks</em> real. Output is <strong>replay-stable per source row</strong>: the same source primary key always regenerates the same target value across CDC resume, cold-start re-apply, and backup → restore (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0039-randomize-strategy-determinism.md">ADR-0039</a>).</p>
+<table>
+<thead><tr><th>Strategy</th><th>Output</th></tr></thead>
+<tbody>
+<tr><td><code>randomize:int:&lt;min&gt;,&lt;max&gt;</code></td><td class="desc">Integer in <code>[min, max]</code> inclusive.</td></tr>
+<tr><td><code>randomize:email</code></td><td class="desc"><code>rand-local@rand-domain.test</code> (IETF-reserved TLD).</td></tr>
+<tr><td><code>randomize:us-phone</code></td><td class="desc">NANP-valid <code>XXX-XXX-XXXX</code>.</td></tr>
+<tr><td><code>randomize:uuid</code></td><td class="desc">RFC 4122 UUIDv4 (passes strict UUID column validation).</td></tr>
+<tr><td><code>randomize:ssn</code></td><td class="desc">US SSN avoiding reserved ranges.</td></tr>
+<tr><td><code>randomize:pan[:&lt;brand&gt;]</code></td><td class="desc">Luhn-valid card PAN; optional <code>visa</code> / <code>mastercard</code> / <code>amex</code>.</td></tr>
+<tr><td><code>randomize:ca-sin</code></td><td class="desc">Luhn-valid Canadian SIN.</td></tr>
+<tr><td><code>randomize:uk-nin</code></td><td class="desc">UK NIN matching the HMRC prefix alphabet.</td></tr>
+<tr><td><code>randomize:iban[:&lt;country&gt;]</code></td><td class="desc">IBAN with mod-97 check digits; optional <code>DE</code> / <code>GB</code> / <code>FR</code>.</td></tr>
+</tbody>
+</table>
+<div class="note"><strong>Every <code>randomize:*</code> rule needs a primary key</strong> on the source table — the replay seed is derived from the row's PK. The pipeline refuses loudly at startup if a <code>randomize:*</code> rule targets a heap (no-PK) table; add a PK on the source, or pick a non-random strategy.</div>
+
+<h3>Dictionary strategies</h3>
+<p>Dictionary strategies map source values into a named lookup table declared in YAML (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0040-dictionary-strategy-determinism.md">ADR-0040</a>):</p>
+<table>
+<thead><tr><th>Strategy</th><th>Keyed by</th><th>Use case</th></tr></thead>
+<tbody>
+<tr><td><code>randomize:dict:&lt;name&gt;</code></td><td class="desc">Source PK (replay-stable)</td><td class="desc">Per-row random pick with controlled cardinality.</td></tr>
+<tr><td><code>tokenize:dict:&lt;name&gt;</code></td><td class="desc">Source value (HMAC)</td><td class="desc">Stable per-value surrogates — the <em>same</em> input value maps to the same dict entry in every table and column.</td></tr>
+</tbody>
+</table>
+<p>The distinction is the point: <code>randomize:dict</code> can send two rows with the same value but different PKs to different entries, whereas <code>tokenize:dict</code> guarantees every occurrence of a value (anywhere) maps to the same surrogate — so analytics joins on the redacted column stay coherent. Dictionaries must be declared in YAML; a CLI reference to an undeclared dict name refuses at parse time.</p>
+
+<h2 id="determinism">Determinism</h2>
+<p>Redaction output is deterministic, which is what makes it safe to re-run — CDC resume and backup → restore reproduce identical surrogates on the same data. There are four contracts:</p>
+<table>
+<thead><tr><th>Semantics</th><th>Strategies</th><th>Guarantee</th></tr></thead>
+<tbody>
+<tr><td class="desc">Stateless</td><td class="desc"><code>null</code>, <code>static:</code>, <code>truncate:</code>, <code>hash:sha256</code>, all <code>mask:*</code></td><td class="desc">Same input → same output on any sluice run, anywhere.</td></tr>
+<tr><td class="desc">Keyed</td><td class="desc"><code>hash:hmac-sha256</code></td><td class="desc">Same input + same keyset key → same output.</td></tr>
+<tr><td class="desc">PK-keyed replay-stable</td><td class="desc"><code>randomize:*</code> (incl. <code>randomize:dict</code>)</td><td class="desc">Same source row (table + column + PK) → same output across re-runs.</td></tr>
+<tr><td class="desc">Input-keyed cross-stream</td><td class="desc"><code>tokenize:dict</code></td><td class="desc">Same input value + same key → same output across tables, columns, and streams.</td></tr>
+</tbody>
+</table>
+<p>To correlate a redacted column <em>across</em> tables (a join key), use <code>tokenize:dict</code> or <code>hash:hmac-sha256</code>; the other strategies don't carry cross-table consistency on the same source value.</p>
+
+<h2 id="keyset">The operator keyset (--keyset-source)</h2>
+<p>The two keyed strategies — <code>hash:hmac-sha256</code> and <code>tokenize:dict</code> — resolve their HMAC secret from an operator-controlled <strong>keyset</strong> (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0041-operator-keyset-persistence.md">ADR-0041</a>). Any rule using either strategy <strong>requires</strong> <code>--keyset-source</code>; sluice refuses loudly at preflight otherwise. The keyset is a small YAML document holding one or more named keys, each with generations so old surrogates keep resolving after a rotation. It resolves from three sources:</p>
+${pre(`# keyset YAML on disk
+--keyset-source=file:/etc/sluice/keyset.yaml
+
+# keyset YAML in an env var (container / secret-manager friendly)
+--keyset-source=env:SLUICE_KEYSET
+
+# sluice-managed sluice_keysets table on a DSN — shared across streams
+--keyset-source=db:postgres://user:pw@host:5432/keysetdb`)}
+<p>A rule names which key it uses via the trailing <code>:&lt;keyname&gt;</code> segment (or a YAML <code>key:</code> field); omit it to use the keyset's declared default or its sole entry. Two rules that name the same key produce cross-consistent surrogates:</p>
+${pre(`--redact users.email=hash:hmac-sha256:customer_pii
+--redact users.first_name=tokenize:dict:first_names:customer_pii`)}
+<p>The <code>db:</code> form is the cross-stream stability primitive: two streams pointing at the same keyset DSN turn <code>alice@example.com</code> into the <em>same</em> surrogate on staging-1 and staging-2. For two independent installs to agree (cross-org exchange), install the same <code>file:</code> keyset at both ends.</p>
+<div class="note"><strong>No hot-reload.</strong> The keyset is snapshotted once at process startup; a rotation takes effect only on the next restart. After a rotation, new rows get surrogates under the new active generation while existing target rows keep theirs — a clean rotation means re-running the migration under the new key. The security model is <em>stable hashing, not secrecy</em>: protect the key bytes with your storage layer — sluice does not encrypt them at rest.</div>
+
+<h2 id="schema-preview">Preview redaction before you run</h2>
+<p><code>sluice schema preview</code> annotates the generated DDL so you can eyeball which columns are covered before moving a single row. The annotation is comment-only — the <code>CREATE TABLE</code> itself is unchanged, so the output stays drop-in usable:</p>
+${pre(`sluice schema preview \\
+    --source-driver postgres --source "$SRC" \\
+    --target-driver postgres --target "$DST" \\
+    --redact users.email=hash:sha256 \\
+    --redact users.ssn=mask:ssn`)}
+${pre(`CREATE TABLE users (
+  id    SERIAL PRIMARY KEY,
+  email TEXT NOT NULL,    -- REDACTED via hash:sha256
+  ssn   TEXT,             -- REDACTED via mask:ssn
+  ...
+);`)}
+
+<h2 id="audit-log">The audit log</h2>
+<p>Every command that moves rows emits exactly one INFO line at startup recording the configured redaction surface — the scope, the column count, and the distinct strategy names:</p>
+${pre(`sluice: redaction configured scope=migrate columns=5 strategies=[hash:sha256 mask:pan randomize:email tokenize:dict:first_names truncate:4]`)}
+<p>Per-column rules are deliberately <strong>not</strong> logged — the mapping itself is sensitive (<code>--redact billing.credit_card=truncate:4</code> reveals which column holds card numbers), and per-row surrogates are never logged. When a keyset loads, a second line records its source scheme and per-key generations, with any DSN credentials redacted.</p>
+
+<h2 id="examples">Worked examples</h2>
+<h3>Mask and hash for an analytics copy</h3>
+${pre(`sluice migrate \\
+    --source-driver postgres --source "$SRC" \\
+    --target-driver postgres --target "$DST" \\
+    --redact users.email=hash:sha256 \\
+    --redact users.phone=mask:inner:3,4 \\
+    --redact users.ssn=randomize:ssn`)}
+
+<h3>Realistic synthetic data for a live staging sync</h3>
+<p>Redaction is honoured on the CDC stream too, so staging stays continuously fresh <em>and</em> continuously scrubbed. YAML config plus a stream id:</p>
+${pre(`# sluice.yaml
+redactions:
+  - table: users.email
+    strategy: randomize
+    form: email
+  - table: users.phone
+    strategy: randomize
+    form: us-phone
+  - table: customers.pan
+    strategy: randomize
+    form: pan
+    brand: visa`)}
+${pre(`sluice sync start -c sluice.yaml \\
+    --source-driver postgres --source "$SRC" \\
+    --target-driver postgres --target "$DST" \\
+    --stream-id staging-refresh`)}
+
+<h3>Cross-table stable surrogates for a vendor handoff</h3>
+<p>Use <code>tokenize:dict</code> with one shared key so a customer's name is the same token in every table — the vendor can still join, but never sees the real value:</p>
+${pre(`# sluice.yaml
+dictionaries:
+  first_names:
+    entries: [Alpha, Bravo, Charlie, Delta, Echo, Foxtrot]
+
+redactions:
+  - table: users.first_name
+    strategy: tokenize
+    dict: first_names
+    key: customer_pii
+  - table: orders.customer_first_name
+    strategy: tokenize
+    dict: first_names
+    key: customer_pii`)}
+${pre(`sluice migrate -c sluice.yaml \\
+    --source-driver postgres --source "$SRC" \\
+    --target-driver postgres --target "$DST" \\
+    --keyset-source=file:/etc/sluice/keyset.yaml`)}
+
+<h2 id="non-goals">What redaction is not</h2>
+<ul>
+  <li><strong>Not a PII discovery scanner.</strong> sluice redacts the columns <em>you</em> name; it does not crawl the schema to find which columns hold personal data. Identifying them is your (or your compliance team's) job.</li>
+  <li><strong>Not encryption at rest.</strong> Redaction transforms values in flight so the sensitive original never reaches the target or the backup. Protecting the keyset secret and the target storage itself is your storage layer's responsibility — sluice does not encrypt the key bytes at rest.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/configuration/">Configuration</a> — the YAML <code>redactions:</code>, <code>dictionaries:</code>, and keyset blocks in full.</li>
+  <li><a href="/docs/commands/">Command reference</a> — the flag set for <code>migrate</code>, <code>sync</code>, <code>backup</code>, and <code>schema preview</code>.</li>
+  <li><a href="/docs/getting-started/">Getting started</a> — install sluice and run your first migration and sync.</li>
+</ul>
+`,
+    prev: { href: "/docs/schema-changes/", label: "Schema changes during a sync" },
+    next: { href: "/docs/import-sqlite-d1/", label: "Import SQLite or Cloudflare D1" },
+  })
+);
+
+// nav-label: Prepare a Postgres source
+write(
+  "postgres-source-prep",
+  page({
+    slug: "postgres-source-prep",
+    title: "Prepare a Postgres source",
+    subtitle: "What a Postgres source needs before it can feed a continuous sync — the required GUCs, the REPLICATION role attribute, replication-slot lifecycle, and the slot-less path for managed Postgres.",
+    body: `
+<p>A one-shot <a href="/docs/commands/#migrate">migrate</a> from Postgres needs only <code>SELECT</code> and works anywhere, including locked-down managed tiers. <strong>Continuous sync</strong> is different: sluice's default Postgres CDC engine reads changes through a logical replication slot, which needs a handful of cluster settings and a role privilege. This guide is the practical checklist — set these before <code>sync start</code>, and if your host forbids them, jump to the <a href="#slotless">slot-less trigger path</a> at the end.</p>
+
+<h2 id="required-gucs">Required GUCs</h2>
+<p>Logical replication is gated by a small set of server parameters. Check them as a superuser on the source:</p>
+${pre(`SHOW wal_level;                  -- must be 'logical'
+SHOW max_replication_slots;      -- >= 2 x replicas
+SHOW max_wal_senders;            -- >= 2 x replicas, and >= max_replication_slots
+SHOW max_slot_wal_keep_size;     -- '> 4GB' recommended; '-1' = unlimited (risky)`)}
+<ul>
+  <li><code>wal_level = logical</code> — required. Changing it needs a <strong>cluster restart</strong>; it cannot be set live.</li>
+  <li><code>max_replication_slots</code> and <code>max_wal_senders</code> — sized for your replica count; both need a restart to change.</li>
+  <li><code>max_slot_wal_keep_size</code> — strongly recommended <code>&gt; 4GB</code> (live-reloadable). The default <code>-1</code> means "retain WAL until the disk fills," which is its own bad day; a bounded cap lets a slot recover from a short consumer outage without one stuck slot filling the disk.</li>
+  <li>For PG 17+ HA, also enable <code>sync_replication_slots = on</code> and <code>hot_standby_feedback = on</code> — see <a href="#failover">slot survival under failover</a>.</li>
+</ul>
+<p>If <code>wal_level</code> is not <code>logical</code>, sluice's CDC reader fails the precondition check at startup — before it touches any slot — with a clear message rather than a mid-stream surprise:</p>
+${pre(`postgres: cdc: wal_level is "replica"; must be 'logical' for logical replication
+(set wal_level=logical in postgresql.conf and restart)`)}
+<div class="note"><strong>Logical WAL costs more.</strong> Flipping <code>wal_level</code> from <code>replica</code> to <code>logical</code> raises the WAL byte-rate — roughly 1.2x–1.6x on a typical OLTP workload, more on wide <code>TEXT</code>/<code>JSONB</code> rows under <code>REPLICA IDENTITY FULL</code>. That multiplier also applies to WAL a lagging slot retains, so budget <code>max_slot_wal_keep_size</code> (and your backup/replica bandwidth) accordingly. Measure your own workload at <code>logical</code> before depending on it in production.</div>
+
+<h2 id="replication-role">The REPLICATION role attribute</h2>
+<p>The role sluice connects as must be a superuser <strong>or</strong> carry the <code>REPLICATION</code> attribute — creating a logical slot requires it:</p>
+${pre(`ALTER ROLE sluice_user WITH REPLICATION;`)}
+<p>sluice does <strong>not</strong> silently degrade to polling when this is missing. A preflight probe (reading the world-readable <code>pg_roles.rolsuper OR rolreplication</code>) runs <em>before</em> the CDC reader opens, and refuses loudly — naming the role and every recovery path — rather than letting slot creation fail opaquely mid-cold-start with a raw <code>ERROR: permission denied to create replication slot</code> (SQLSTATE 42501):</p>
+${pre(`the source connecting role "app_user" is not a superuser and lacks the
+REPLICATION attribute. Slot-based Postgres CDC (--source-driver=postgres) creates
+a logical replication slot at cold start ... Recovery: (a) grant the attribute:
+ALTER ROLE app_user REPLICATION; (b) re-run with a superuser or replication-enabled
+role; (c) on managed Postgres that forbids the REPLICATION attribute (Heroku
+Postgres Essential, Render Basic, Supabase free), use --source-driver=postgres-trigger`)}
+<p>There is deliberately no <code>--allow-missing-replication</code> escape hatch: the role genuinely cannot create a slot, so the honest choices are to grant the attribute, swap roles, or use the <a href="#slotless">slot-less engine</a>. This refusal fires only on the slot-based CDC path — a pure bulk <code>migrate</code> is unaffected.</p>
+
+<h2 id="slot-name">The replication slot</h2>
+<p>sluice creates one logical slot per stream, named <code>sluice_slot</code> by default. Override it with <code>--slot-name</code>; sluice prepends <code>sluice_</code> if your value doesn't already start with it (so <code>--slot-name shard_a</code> creates <code>sluice_shard_a</code>). The convention lets you find every sluice-owned slot with <code>WHERE slot_name LIKE 'sluice\\_%'</code>. Give concurrent sluice instances against the same source distinct slot names — without them they collide on the default.</p>
+<p>List and drop slots from the CLI without dropping to psql:</p>
+${pre(`# List every slot on the source (columns mirror pg_replication_slots)
+sluice slot list --source-driver postgres --source 'postgres://user:pass@host:5432/app'
+
+# Drop a named slot (prompts for confirmation; --yes skips it,
+# --force drops an active slot, --if-exists treats a missing slot as success)
+sluice slot drop sluice_slot --source-driver postgres --source 'postgres://user:pass@host:5432/app'`)}
+<p>When you start a stream and setup fails partway (publication permissions, <code>START_REPLICATION</code> rejection, cancellation), the freshly-created slot is auto-dropped before the error returns — so failed cold-start attempts don't leave <code>sluice_slot</code>-named slots behind. Auto-cleanup deliberately skips a slot that pre-existed the call (it may carry someone else's progress) and a slot whose pump already emitted positioned changes (that's user data); for those, <code>sluice slot drop</code> is the explicit path.</p>
+
+<h2 id="failover">Slot survival under failover</h2>
+<p>This is the part that bites people. <strong>A logical slot is a primary-local object by default</strong> — when the primary fails over, the slot does not move to the new primary, and a slot left behind is <strong>silently</strong> lost: no error, no warning, your CDC stream just begins missing changes. Confirm one slot-preservation mechanism is actually configured before betting production on it:</p>
+<ul>
+  <li><strong>PlanetScale Postgres (Patroni):</strong> add the slot name to the <em>"Logical slot name"</em> field under <em>Cluster configuration &rarr; Parameters &rarr; Failover</em> (comma-delimited for multiple consumers). Slots not listed there are lost on failover.</li>
+  <li><strong>Self-hosted Patroni:</strong> declare it under <code>slots:</code> as a permanent logical slot (type <code>logical</code>, plugin <code>pgoutput</code>).</li>
+  <li><strong>PG 17+ native sync:</strong> <code>sync_replication_slots = on</code> plus <code>hot_standby_feedback = on</code>.</li>
+  <li><strong>Vanilla Postgres without HA:</strong> nothing to do — there's no failover — but still monitor <a href="#slot-health">slot health</a>.</li>
+</ul>
+<div class="note"><strong>The idle-slot trap.</strong> Even with all three mechanisms configured, a slot that hasn't <em>advanced</em> during the slot-sync window can still be lost on failover: the standby's copy stays at an old LSN, and promotion leaves it pointing at recycled WAL (<code>wal_status='lost'</code> on resume). The durable fix is to keep the slot advancing — run <code>sync start</code> continuously (its CDC reader sends a standby-status keepalive every 10s), and on quiet sources inject lightweight WAL. sluice has this built in.</div>
+
+<h3 id="heartbeat">Keeping an idle slot alive</h3>
+<p>Set <code>--source-heartbeat-interval</code> and sluice INSERTs a row into a source-owned table (default <code>sluice_heartbeat</code>) on each interval; the write generates WAL, advancing the consumer position against an idle source and preventing slot eviction (ADR-0061 / F17):</p>
+${pre(`sluice sync start \\
+    --source-driver postgres --source 'postgres://user:pass@host:5432/app' \\
+    --target-driver mysql    --target 'user:pass@tcp(host:3306)/app' \\
+    --stream-id app \\
+    --source-heartbeat-interval 30s`)}
+<p>It is <strong>opt-in</strong> (<code>0</code>, off, by default) because the INSERT is a behaviour change on the source that regulated systems must enable explicitly. The heartbeat table is auto-created and periodically pruned (<code>--source-heartbeat-prune-window</code>, default <code>1h</code>); on a role without <code>CREATE TABLE</code> the streamer WARNs once and continues without it. Rename the table with <code>--source-heartbeat-table-name</code>, or silence the warning with <code>--no-source-heartbeat</code>.</p>
+
+<h2 id="slot-health">Slot health and telemetry</h2>
+<p>A logical slot moves through these states, visible in <code>pg_replication_slots.wal_status</code>:</p>
+<table>
+<thead><tr><th>wal_status</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>reserved</code></td><td class="desc">Healthy — all required WAL is on disk.</td></tr>
+<tr><td><code>extended</code></td><td class="desc">Healthy but the consumer is behind; the slot holds more WAL than <code>max_wal_size</code>.</td></tr>
+<tr><td><code>unreserved</code></td><td class="desc">Required WAL has left <code>pg_wal</code> but is still recoverable.</td></tr>
+<tr><td><code>lost</code></td><td class="desc">Required WAL is gone. The slot exists but cannot be used — silent-loss-class for CDC.</td></tr>
+</tbody>
+</table>
+<p>When sluice sees a slot in <code>unreserved</code> or <code>lost</code> state it refuses to start replication and points at the recovery path — <code>sluice slot drop</code> on the source, then restart with an empty position to force a fresh snapshot, and raise <code>max_slot_wal_keep_size</code> to prevent recurrence. After dropping the slot, get past the cold-start refusal on the (partially-streamed) target with <code>sync start --reset-target-data --yes</code> (clears sluice's state and drops the source-schema tables it manages, then re-snapshots; see <a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0023-reset-target-data.md">ADR-0023</a>).</p>
+<p>For proactive monitoring, sluice surfaces PG 14+ per-slot decode-spill counters (large transactions spilling the ReorderBuffer to disk — sustained spill is what can fill <code>pg_replslot/</code> and invalidate a slot) in two places:</p>
+${pre(`# sync health prints them when the source is PG 14+ and the slot has decoded
+sluice sync health --source-driver postgres --source ... \\
+    --target-driver postgres --target ... --stream-id app
+  ...
+  spill_txns: 17
+  spill_bytes: 5242880
+
+# Prometheus /metrics (when --metrics-listen is set on sync start)
+sluice_pg_slot_spill_txns_total{stream_id="app",slot="sluice_slot"} 17
+sluice_pg_slot_spill_bytes_total{stream_id="app",slot="sluice_slot"} 5242880`)}
+<p>Both counters are cumulative since slot creation, so alert on the <em>rate</em> (<code>rate(sluice_pg_slot_spill_bytes_total[5m])</code>). sluice deliberately omits the lines — rather than printing <code>0</code> — when it can't tell (PG &lt; 14, the slot hasn't decoded yet, or a non-Postgres source), so "no signal" is never mistaken for "no spill." If they climb, raise <code>logical_decoding_work_mem</code> on the source (live-reloadable) and split oversized application transactions.</p>
+
+<h2 id="slotless">Managed / locked-down Postgres: the slot-less trigger engine</h2>
+<p>When the host forbids logical replication — Heroku Postgres, RDS without the right grants, Supabase / Crunchy starter tiers — you cannot get a replication slot at all. sluice's answer is the <code>postgres-trigger</code> engine: per-table plpgsql triggers write every change into a capture table (<code>sluice_change_log</code>) and the engine tails it — Bucardo-style CDC with no slot and no <code>REPLICATION</code> attribute (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0066-postgres-trigger-cdc.md">ADR-0066</a>). The lifecycle is explicit — <strong>setup &rarr; run &rarr; teardown</strong> — so the source-side DDL is visible at the CLI, never silently applied on first sync.</p>
+<p><strong>1. Install the capture triggers.</strong> <code>--tables</code> is required. On a tier that also denies event-trigger creation (needed for automatic DDL detection), add <code>--allow-polled-fingerprint</code> to opt into the weaker polled schema-fingerprint fallback — the command refuses loudly without it so you acknowledge the trade-off:</p>
+${pre(`sluice trigger setup \\
+    --source-driver postgres-trigger \\
+    --dsn 'postgres://user:pass@host:5432/app' \\
+    --tables orders,customers,line_items \\
+    --allow-polled-fingerprint`)}
+<p><strong>2. Stream with the trigger engine.</strong> The source driver is <code>postgres-trigger</code>; everything else is an ordinary <a href="/docs/commands/#sync-start">sync start</a>:</p>
+${pre(`sluice sync start \\
+    --source-driver postgres-trigger --source 'postgres://user:pass@host:5432/app' \\
+    --target-driver postgres         --target 'postgres://user:pass@target:5432/app?sslmode=require' \\
+    --stream-id app`)}
+<p><strong>3. Tear down cleanly</strong> when the stream is finished — this drops every per-table trigger and (by default) the <code>sluice_change_log</code> table, leaving zero residue. Pass <code>--keep-data</code> to retain the change-log for forensics, or <code>--yes</code> to skip the confirmation prompt:</p>
+${pre(`sluice trigger teardown \\
+    --source-driver postgres-trigger \\
+    --dsn 'postgres://user:pass@host:5432/app' --yes`)}
+<p>The connecting role needs <code>CREATE</code> on the target schema, <code>TRIGGER</code> on each replicated table, and <code>INSERT</code> on <code>sluice_change_log</code> — a much smaller ask than <code>REPLICATION</code>. Tune how much of each row the capture writes with <code>--capture-payload</code> (<code>full</code> / <code>changed</code> / <code>minimal</code>), and reap durably-applied change-log rows while the sync runs with <code>sluice trigger prune</code>. The full command surface is in the <a href="/docs/commands/#trigger">trigger reference</a>, and the trigger-CDC walkthrough lives in <a href="/docs/getting-started/#trigger-cdc">Getting started</a>.</p>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/commands/#sync-start">sync start</a> — every flag for the continuous-sync command, including <code>--metrics-listen</code> and the notify thresholds.</li>
+  <li><a href="/docs/commands/#trigger">trigger setup / teardown</a> — the slot-less engine's full reference.</li>
+  <li><a href="/docs/getting-started/#trigger-cdc">Getting started: trigger-based CDC</a> — a worked slot-less walkthrough.</li>
+</ul>
+`,
+    prev: { href: "/docs/multi-database/", label: "Migrate many databases or schemas" },
+    next: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
+  })
+);
+
+// nav-label: PlanetScale & Vitess
+write(
+  "planetscale-vitess",
+  page({
+    slug: "planetscale-vitess",
+    title: "PlanetScale & Vitess",
+    subtitle: "Migrate and continuously sync from PlanetScale-MySQL or any Vitess deployment through the VStream gRPC feed.",
+    body: `
+<p>PlanetScale (and self-hosted Vitess) don't expose MySQL's binary log directly — row changes come through Vitess's <strong>VStream</strong> gRPC API instead. sluice speaks that protocol through a MySQL-engine <em>flavor</em>: the same reader, decoder, and pipeline you use for vanilla MySQL, with a Vitess-shaped CDC transport and a capability set that reflects the platform's constraints. This guide covers selecting the flavor, tuning the cold-start copy, warm-resume across a purged position, and reading the throttler/lag signals that are unique to a Vitess-fronted source.</p>
+
+<h2 id="select">Selecting the flavor</h2>
+<p>Two driver names register the VStream-backed flavor; pick by deployment shape:</p>
+<table><thead><tr><th>Driver</th><th class="desc">Use for</th></tr></thead><tbody>
+<tr><td><code>planetscale</code></td><td class="desc">PlanetScale's hosted MySQL. TLS by default; auth is HTTP Basic where the username/password are your service-token <em>name</em> and <em>value</em>; the default shard convention is <code>-</code>.</td></tr>
+<tr><td><code>vitess</code></td><td class="desc">A Vitess cluster you run yourself (etcd + vtctld + vtgate + vttablets). Shares PlanetScale's VStream engine code; point it at your vtgate.</td></tr>
+</tbody></table>
+${pre(`sluice sync start \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver postgres    --target "$SLUICE_TARGET"`)}
+<div class="note"><strong>What auto-detection does — and doesn't.</strong> A <code>*.connect.psdb.cloud</code> / <code>*.private-connect.psdb.cloud</code> host is recognised automatically so sluice excludes Vitess's <code>_vt_*</code> shadow tables — <em>even</em> when you connect with the plain <code>mysql</code> driver. Choosing the transport is still explicit, though: the <code>mysql</code> driver against a PlanetScale host gives you binlog CDC, not VStream. Pass <code>--source-driver planetscale</code> to get the VStream feed. Non-PlanetScale Vitess (custom domains) needs a manual <code>--exclude-table='_vt_*'</code>.</div>
+
+<h2 id="preconditions">Source preconditions</h2>
+<p>Key constraints inherited from the Vitess platform (sluice already accounts for these — they're context, not steps):</p>
+<ul>
+  <li>No direct binlog access — CDC goes through VStream gRPC (the flavor declares <code>CDCVStream</code>, which the streamer's capability check accepts).</li>
+  <li>No <code>LOAD DATA INFILE</code>; the cold-copy uses batched inserts.</li>
+  <li>Sharded keyspaces are supported on both the standalone-CDC and snapshot→CDC paths. vtgate fans the COPY phase out per shard, then the same stream tails CDC across all shards.</li>
+</ul>
+<p>A VStream <strong>source</strong> password needs only read access. If a <strong>PlanetScale branch is the <em>target</em></strong>, the password's role must allow DDL — sluice creates the destination tables plus its control tables (<code>sluice_cdc_state</code>, <code>sluice_cdc_schema_history</code>, …) on cold-start, and a <code>reader</code>/<code>writer</code>/<code>readwriter</code> role is denied DDL on a production branch. Mint the target password with <code>pscale password create &lt;db&gt; &lt;branch&gt; --role admin</code>. If the target branch has Safe Migrations enabled, pre-create the tables and pass <code>--schema-already-applied</code>.</p>
+
+<h2 id="sharding">Sharded keyspaces</h2>
+<p>All optional; ride on the standard MySQL DSN as extra <code>?key=value</code> parameters:</p>
+<table><thead><tr><th>DSN param</th><th class="desc">Purpose</th></tr></thead><tbody>
+<tr><td><code>vstream_shards</code></td><td class="desc">Comma-separated shard list (default <code>-</code>; e.g. <code>vstream_shards=-80,80-</code>). vttestserver dev clusters typically use <code>0</code>.</td></tr>
+<tr><td><code>vstream_auto_discover_shards=true</code></td><td class="desc">Discover the layout at Open time via <code>SHOW VITESS_SHARDS LIKE '&lt;keyspace&gt;/%'</code>. Mutually exclusive with <code>vstream_shards</code>; recommended when the layout isn't known statically.</td></tr>
+<tr><td><code>vstream_endpoint</code></td><td class="desc">Override the vtgate gRPC endpoint. Default <code>&lt;sql-host&gt;:443</code>, matching PlanetScale's convention.</td></tr>
+<tr><td><code>vstream_transport</code></td><td class="desc"><code>tls</code> (default) or <code>plaintext</code> (localhost vttestserver / dev only).</td></tr>
+<tr><td><code>vstream_auth</code></td><td class="desc"><code>basic</code> (default) or <code>none</code> (vanilla Vitess with no VStream auth).</td></tr>
+</tbody></table>
+<p>A mid-stream reshard surfaces as a typed <code>ShardLayoutChangedError</code>; the continuous-sync streamer's outer loop reopens the reader on the new layout automatically.</p>
+
+<h2 id="cold-start">VStream cold-start throughput</h2>
+<p>The snapshot copy is bounded differently from a native-MySQL copy because vtgate forces a single cross-region-RTT-bound INSERT connection (it blocks <code>LOAD DATA</code>). Two axes widen it:</p>
+<table><thead><tr><th>Flag</th><th class="desc">Axis</th></tr></thead><tbody>
+<tr><td><code>--copy-fanout-degree</code></td><td class="desc"><strong>Write</strong> fan-out (ADR-0097, PlanetScale-MySQL <em>target</em>): PK-hash-partition the incoming snapshot row stream out to N concurrent batched-INSERT writers, each on its own connection. <code>0</code> = auto (4); <code>1</code> = serial. Bounded by the target connection budget.</td></tr>
+<tr><td><code>--vstream-copy-table-parallelism</code></td><td class="desc"><strong>Read</strong> axis (ADR-0099, Vitess/PlanetScale source): the number of concurrent single-table COPY streams the auto-shard cold-copy runs. <code>0</code> = fall back to the DSN <code>vstream_copy_table_parallelism</code> param, then the engine default (1 = serial). An explicit flag wins over the DSN param.</td></tr>
+</tbody></table>
+<div class="note">The generic <code>--table-parallelism</code> / <code>--bulk-parallelism</code> cold-start knobs are <strong>inert on a VStream source</strong> (setting one emits a one-time WARN). Use the two flags above instead. <code>--copy-table-parallelism</code> is for self-managed non-Vitess MySQL, not PlanetScale.</div>
+
+<h2 id="warm-resume">Warm-resume &amp; auto-resnapshot</h2>
+<p>On restart, sluice resumes from the persisted VGTID position. PlanetScale's binlog-retention window is finite, so a resume from a position older than the source's retained binlogs is routine — and by default (ADR-0093, parity with the self-hosted binlog path) sluice <strong>auto-recovers with a fresh cold-start re-snapshot</strong> rather than failing. On an idempotent VStream source the upsert copy absorbs the overlap and the target is <em>not</em> dropped.</p>
+<p>When a full re-snapshot is expensive (very large tables) and you'd rather decide deliberately, pass <code>--no-auto-resnapshot</code>. sluice then fails loudly with an actionable error naming the recovery commands (<code>--restart-from-scratch</code> / <code>--reset-target-data</code>) instead of re-copying. It gates both the pre-flight fall-through and the reactive VStream recovery.</p>
+
+<h2 id="throttler-lag">The throttler &amp; lag reality</h2>
+<p>Some VStream delays you act on; some you wait out. The measured findings reset a few intuitions:</p>
+<ul>
+  <li><strong>The #1 real-world stall is a co-tenant VReplication migration on the same keyspace</strong> (an <code>OnlineDDL</code> on a large table), not your own write rate — its copy moves the <em>shared</em> shard-lag metric that gates every app. A write-heavy primary <em>alone</em> rarely trips the default 5s lag throttler on a healthy cluster.</li>
+  <li><strong>Upsizing the cluster or vtgate does not clear a replica-lag throttle.</strong> The lever is source-side: reduce load, and avoid huge single transactions during bulk-copy and cutover.</li>
+</ul>
+<h3>The mid-stream throttle signature</h3>
+<p>When a throttle engages mid-stream, vtgate strips the in-band <code>throttled</code> flag from the events sluice sees, so the symptom is: <strong>heartbeats still flowing, zero change events, and <code>sluice_lag_seconds</code> climbing while <code>sluice_seconds_since_last_event</code> stays low</strong> (&lt; 6s). No gRPC error arrives, so the stream stays connected and catches up when the throttle clears. sluice surfaces the symptom as a rate-limited WARN — <em>"alive (heartbeats flowing) but NO change events for Ns"</em> — once per quiet spell. Out-of-band, check <code>SHOW VITESS_THROTTLED_APPS</code> on the primary. The soft window is tunable per-DSN with <code>vstream_idle_warn_timeout</code> (a Go duration; <code>0</code> disables the WARN only, not the hard liveness guards).</p>
+<div class="note"><strong>Corrected finding — a genuinely idle source does NOT fire this WARN on real PlanetScale.</strong> vtgate emits periodic idle VGTIDs that re-arm sluice's soft-idle timer, so the WARN is specific to a <em>throttle</em> or a large-transaction stall — not routine quiet. (Older guidance said an idle source produces the same WARN; on a real PlanetScale endpoint it does not.) If you see the WARN, treat it as a throttle/large-tx signal and check the throttled-apps list.</div>
+<p>A tablet failover / planned reparent terminates the stream; the streamer's outer loop reconnects from the persisted position — a single brief <code>seconds_since_last_event</code> spike is almost always transient. See the in-repo <a href="https://github.com/sluicesync/sluice/blob/main/docs/vitess-vstream-troubleshooting.md">VStream troubleshooting runbook</a> for the full cause catalogue.</p>
+
+<h2 id="storage-grow">Storage auto-grow &amp; primary reparent</h2>
+<p>A non-Metal PlanetScale instance crossing a storage boundary briefly disrupts in-flight writes while the volume grows and a new primary is promoted. sluice rides these windows automatically — <strong>no flags required</strong> — across cold-copy write, source read, and the post-copy index/constraint phase. You'll see <code>WARN</code> lines naming the transient (Vitess <code>1105 "not serving"</code> / read-only) and the retry; they're expected and self-clearing. A genuine, non-transient failure still surfaces loudly and promptly.</p>
+
+<h2 id="telemetry">Target-health telemetry (optional)</h2>
+<p>sluice can consume PlanetScale's <strong>control-plane metrics</strong> (target CPU, memory, storage, replication lag) to back off apply pressure proactively and to fire operator alerts. This reads the PlanetScale metrics API, not the database — it uses a service token that is <strong>distinct from the data-plane <code>--target</code> DSN</strong>. The opt-in is all-or-nothing: an org without a complete token pair is a loud refusal.</p>
+${pre(`export PLANETSCALE_METRICS_TOKEN_ID=...   # granted read_metrics_endpoints
+export PLANETSCALE_METRICS_TOKEN=...
+sluice sync start \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver postgres    --target "$SLUICE_TARGET" \\
+    --planetscale-org acme \\
+    --planetscale-metrics-db app \\
+    --notify-storage-util 0.85 --notify-cpu-util 0.90 \\
+    --notify-slack "$SLACK_WEBHOOK"`)}
+<p>When telemetry is on, sluice's <code>/metrics</code> export gains the <code>sluice_target_*</code> gauge family (CPU/mem/storage/lag), and the live signals clamp the startup apply-lane count and damp the AIMD high-water under pressure. The token id and secret should always come from the environment, never the command line.</p>
+<h3>Watching a database without a sync</h3>
+<p>To watch a PlanetScale database's health for dashboards or alert-only operation — with no sync attached and no database connection opened — use <a href="/docs/commands/#metrics-watch">metrics-watch</a>. It polls only the control-plane endpoint, fires the same <code>--notify-*</code> alerts, and with <code>--metrics-listen ADDR</code> becomes a standalone PlanetScale-metrics Prometheus exporter:</p>
+${pre(`sluice metrics-watch \\
+    --engine planetscale --planetscale-org acme --planetscale-metrics-db app \\
+    --notify-storage-util 0.85 --notify-slack "$SLACK_WEBHOOK" --quiet`)}
+<p>It supports <code>--once</code> (single sample, for scripts) and <code>--interval</code> (default 60s, the PlanetScale metrics granularity).</p>
+
+<h2 id="pspg-target">PlanetScale-Postgres as a target</h2>
+<p>PlanetScale-Postgres (PS-PG) is <em>not</em> Vitess-fronted for sluice's purposes — the vanilla <code>postgres</code> engine handles it cleanly, and its endpoints (<code>*.pg.psdb.cloud</code>) don't carry <code>_vt_*</code> shadow tables. One operational note: the tables sluice creates are owned by whichever role connects, and PlanetScale's non-superuser API role (<code>pscale_api_*</code>) will own them if you connect as it. If you want the tables owned by the Default <code>postgres</code> role, connect as that role. For CDC into PS-PG, ensure <code>wal_level=logical</code> and the connecting role has the <code>REPLICATION</code> attribute.</p>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/operate-fleet/">Operate a sync fleet</a> — dashboards, alerting, and lag observability across many streams.</li>
+  <li><a href="/docs/commands/#sync-start">sync start reference</a> — every flag named here, with defaults.</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the snapshot→CDC cutover flow this guide's flags feed.</li>
+</ul>
+`,
+    prev: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
+    next: { href: "/docs/operate-fleet/", label: "Operate a sync fleet" },
+  })
+);
+
+// nav-label: Operate a sync fleet
+write(
+  "operate-fleet",
+  page({
+    slug: "operate-fleet",
+    title: "Operate a sync fleet",
+    subtitle: "Supervise many continuous syncs from one process — failure-isolated, observable, and reconfigurable without a restart.",
+    body: `
+<p>Once you keep several cross-database syncs alive at once, running each <a href="/docs/commands/#sync-start">sync start</a> as its own pod or systemd unit gets unwieldy. <a href="/docs/commands/#sync-start">sync run</a> collapses that to one supervised process driven by a single fleet config: it runs N independent syncs, each with its own stream-id, and — the load-bearing property — <strong>fully failure-isolated</strong>, so one sync crashing, erroring, or even panicking can never take down its healthy peers (ADR-0122). This guide covers running a fleet, observing it, and reconfiguring it live.</p>
+
+<h2 id="config">The fleet config</h2>
+<p>A fleet is a YAML file listing each sync as a curated subset of the <code>sync start</code> flags you already know, in kebab-case. A top-level <code>restart</code> block tunes the supervisor's bounded-backoff policy:</p>
+${pre(`# syncs.yaml
+syncs:
+  - stream-id: orders
+    source-driver: postgres
+    source: postgres://user:pass@src-a:5432/app
+    target-driver: mysql
+    target: mysql://user:pass@dst:3306/app
+    slot-name: orders           # distinct per Postgres source (see below)
+    apply-concurrency: 4
+    metrics-listen: :9101
+  - stream-id: inventory
+    source-driver: mysql
+    source: mysql://user:pass@src-b:3306/inv
+    target-driver: postgres
+    target: postgres://user:pass@dst:5432/inv
+    apply-delay: 60s
+    metrics-listen: :9102
+restart:
+  backoff-base: 1s
+  backoff-cap: 30s
+  max-consecutive-failures: 0   # 0 = restart forever with capped backoff`)}
+<div class="note"><strong>Two data-corruption classes are refused at load, loudly.</strong> Two Postgres-source syncs that resolve to the same replication <code>slot-name</code> would fight over one single-consumer slot — silent corruption — so the loader refuses the config, naming both stream-ids and the slot. Duplicate stream-ids on the same target (which would clobber each other's position row) are refused the same way. When several syncs point at one target server, the loader <strong>WARNs</strong> that they share a connection budget so you can size <code>apply-concurrency</code> accordingly.</div>
+<p>Each sync's own retry (ADR-0093 re-snapshot, apply-retry backoff) is the inner loop; the supervisor's restart is the outer loop. A sync that drains cleanly (a <code>sync stop</code> or Ctrl-C) is left stopped; a sync that dies with the process still live is logged loudly, backed off, and restarted. The consecutive-failure counter resets once a sync has run longer than the healthy threshold, so a sync that ran for hours before dying carries no restart debt.</p>
+
+<h2 id="run">Run the fleet</h2>
+<p>Validate the config first with <code>--dry-run</code> (it checks required fields, stream-id and slot-name uniqueness, and retry bounds, then prints the resolved plan without starting anything), then run it:</p>
+${pre(`# validate + print the plan, start nothing
+sluice sync run --config syncs.yaml --dry-run
+
+# run the fleet, with a read-only dashboard on :9300
+sluice sync run --config syncs.yaml --dashboard-listen :9300`)}
+<p>The process blocks until every sync exits. Ctrl-C / SIGTERM stops all of them cleanly. A single-sync fleet that can never start exits non-zero, but a fleet with any healthy peer keeps running regardless of what its neighbors do.</p>
+
+<h2 id="reload">Reload without a restart (SIGHUP)</h2>
+<p>Edit <code>syncs.yaml</code> and send the running process a <code>SIGHUP</code>: sluice re-reads and re-validates the file, then reconciles the live fleet — <strong>starting</strong> newly-added syncs, <strong>draining and stopping</strong> removed ones, and <strong>restarting</strong> any whose spec changed (detected by a per-stream fingerprint, so unchanged syncs are left untouched):</p>
+${pre(`kill -HUP "$(pgrep -f 'sluice sync run')"`)}
+<div class="note"><strong>A bad reload never takes the fleet down.</strong> The reload runs the exact same validators as the initial load <em>before</em> building anything; if the new file fails to parse or validate (a slot collision, a duplicate stream-id, a missing field), the reload is refused loudly and the running fleet keeps going on the old config, unchanged. Each reload logs its outcome — the started / stopped / restarted stream-ids, or "no changes." <code>SIGHUP</code> is POSIX-only; on Windows, restart the process to change the fleet.</div>
+
+<h2 id="status">See the whole fleet at once</h2>
+<p><a href="/docs/commands/#sync-manage">sync status --all</a> rolls up every stream across every target named in the fleet config into one table — reading the target control tables directly, so no running supervisor is required. A target that can't be reached is reported inline and skipped rather than blanking the whole view:</p>
+${pre(`sluice sync status --all --config syncs.yaml --summary
+
+# live-refresh every 2s, machine-readable
+sluice sync status --all --config syncs.yaml --format json --watch 2s`)}
+
+<h2 id="metrics">Observe it: Prometheus metrics and readiness</h2>
+<p>Give each sync a <code>metrics-listen</code> address in the config (as above) and it binds a Prometheus-format <code>/metrics</code> endpoint plus <code>/healthz</code> (liveness) and <code>/readyz</code> (flips to 200 once the sync has finished its snapshot/warm-resume preamble and entered the apply loop). The exported <code>sluice_*</code> gauge families include:</p>
+<table><thead><tr><th>Gauge</th><th>What it tells you</th></tr></thead><tbody>
+<tr><td><code>sluice_sync_lag_seconds</code></td><td class="desc">Seconds the target trails the source's latest applied commit (engine-neutral apply lag; 0 when caught up).</td></tr>
+<tr><td><code>sluice_seconds_since_last_apply</code></td><td class="desc">Wall-clock seconds since this stream's most recent applier commit — the staleness signal.</td></tr>
+<tr><td><code>sluice_stream_known</code></td><td class="desc">Constant 1 per tracked stream; <code>count(sluice_stream_known)</code> gives a stream-count alert.</td></tr>
+<tr><td><code>sluice_apply_batch_size_current</code> / <code>_p95_seconds</code></td><td class="desc">The AIMD apply-batch controller's current target size and rolling p95 latency.</td></tr>
+<tr><td><code>sluice_target_*</code></td><td class="desc">Target CPU / memory / storage utilisation and replica lag — present only when <a href="/docs/planetscale-vitess/">PlanetScale telemetry</a> is configured.</td></tr>
+</tbody></table>
+<p>Because <code>/readyz</code> is a real readiness signal, it wires straight into a Kubernetes probe on the sync's metrics port:</p>
+${pre(`readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 9101
+  periodSeconds: 10`)}
+
+<h3>Pre-emptive Postgres slot-health warnings</h3>
+<p>For a Postgres source, a replication slot that outruns its retention budget gets evicted and the stream breaks. sluice watches for that ahead of time and emits severity-graded <code>slog</code> warnings: a <strong>WARN</strong> when retention pressure crosses 70% of <code>max_slot_wal_keep_size</code>, a <strong>CRITICAL</strong> at 85% (eviction imminent), and a WARN when the slot has been observed inactive for 30 minutes or more (ADR-0059). These are rate-limited and emit a "cleared" INFO when the condition resolves, so the alarm turns off visibly.</p>
+
+<h2 id="dashboards">Live dashboards: web and terminal</h2>
+<p><code>sync run --dashboard-listen ADDR</code> serves a self-contained, auto-refreshing HTML page of the live fleet — per-sync state, restart count, consecutive failures, last error, uptime — backed by a stable <code>GET /api/fleet</code> JSON API (ADR-0124). It is strictly read-only: no stop/restart controls, no data path, and it exposes only what <code>sync status --all</code> already does (stream-ids, states, error strings — no DSNs, no row data). It has <strong>no authentication</strong>, so bind it to localhost or a trusted network.</p>
+<p>For a terminal equivalent, <a href="/docs/commands/#sync-manage">sync tui --connect</a> is a full-screen client that polls that same <code>/api/fleet</code> endpoint — so it works locally or over an SSH tunnel to the dashboard port, without disturbing the fleet process:</p>
+${pre(`# terminal 1: run the fleet with the dashboard API exposed
+sluice sync run --config syncs.yaml --dashboard-listen :9300
+
+# terminal 2 (local or over an SSH tunnel): live terminal view
+sluice sync tui --connect :9300 --refresh 2s`)}
+<div class="note">The dashboard binds when the fleet starts; if the address can't be bound the command fails loudly rather than running a fleet without the dashboard you asked for. The TUI keeps the last-known fleet on screen with an "unreachable" banner if a poll fails, instead of blanking.</div>
+
+<h2 id="alerts">Threshold alerts (advisory)</h2>
+<p>The fleet can push threshold alerts to a webhook or Slack. Set the sink URL via its env var (<code>SLUICE_NOTIFY_WEBHOOK</code> / <code>SLUICE_NOTIFY_SLACK</code>), then arm one or more thresholds. Alerts are edge-triggered, cooldown'd (<code>--notify-cooldown</code>, default 15m), and <strong>advisory + failure-isolated</strong> — a dead sink is logged and swallowed, never affecting the sync:</p>
+<table><thead><tr><th>Threshold</th><th>Fires when…</th></tr></thead><tbody>
+<tr><td><code>--notify-sync-lag-seconds</code></td><td class="desc">sluice's own apply lag (<code>sluice_sync_lag_seconds</code>) is at or above N. <strong>Ungated</strong> — works on MySQL and Postgres alike, needing only a sink.</td></tr>
+<tr><td><code>--notify-lag-seconds</code></td><td class="desc">The target's control-plane replica lag is at or above N. Requires PlanetScale telemetry.</td></tr>
+<tr><td><code>--notify-storage-util</code> / <code>--notify-cpu-util</code> / <code>--notify-mem-util</code></td><td class="desc">Target utilisation (0–1 fraction) is at or above the given level. Requires PlanetScale telemetry.</td></tr>
+<tr><td><code>--notify-storage-growth-per-min</code></td><td class="desc">Storage is climbing at or above N fraction-of-capacity per minute — a pre-grow early warning. Requires telemetry.</td></tr>
+</tbody></table>
+<p>All the util / control-plane-lag / growth rules need a <a href="/docs/planetscale-vitess/">PlanetScale telemetry</a> provider (<code>--planetscale-org</code> plus the metrics-token flags); only <code>--notify-sync-lag-seconds</code> works without it. The same alerter set is also available on the standalone <a href="/docs/commands/#metrics-watch">metrics-watch</a> probe.</p>
+
+<h2 id="next-steps">Next steps</h2>
+<ul>
+<li><a href="/docs/commands/#sync-start">sync start reference</a> — the full per-sync flag surface each fleet entry is built from.</li>
+<li><a href="/docs/planetscale-vitess/">Sync to PlanetScale / Vitess</a> — the telemetry credentials the util-threshold alerts and <code>sluice_target_*</code> gauges require.</li>
+<li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the single-stream cutover flow each fleet sync runs internally.</li>
+</ul>
+`,
+    prev: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
+    next: { href: "/docs/encrypted-backups/", label: "Take encrypted backups" },
+  })
+);
+
+// nav-label: Take encrypted backups
+write(
+  "encrypted-backups",
+  page({
+    slug: "encrypted-backups",
+    title: "Take encrypted backups",
+    subtitle: "sluice's logical backup model in depth — chains, compression, encryption at rest, object stores, retention, and restore.",
+    body: `
+<p>sluice's <code>backup</code> verb takes <strong>logical, row-level, cross-engine</strong> backups: a full snapshot that roots a chain, plus CDC-based incrementals appended onto it, written to storage <em>you</em> own. Unlike a physical tool (pgBackRest, WAL-G, XtraBackup), a sluice chain restores into Postgres <em>or</em> MySQL from either, with redaction and encryption already applied in the pipeline. This guide is the reference for the model — the <a href="/docs/getting-started/#backups">getting-started section</a> is the quick tour; here we go deeper into encryption, the format-version contract, retention, and restore.</p>
+<div class="note"><strong>Logical, not physical.</strong> sluice is deliberately not in <code>pg_basebackup</code> / WAL-archive territory — those tools are excellent at same-engine PITR at scale, and that lane is theirs. sluice's value is the cross-engine, operator-owned-storage, encrypt-and-redact-at-capture angle. Many setups run both: physical for primary DR, a sluice chain for the off-vendor / cross-engine / compliance copy.</div>
+
+<h2 id="chain-model">The chain model</h2>
+<p>A backup is a <strong>chain</strong>. The <strong>full</strong> snapshot (<code>backup full</code>) is the root; each <strong>incremental</strong> (<code>backup incremental</code>) captures the change events since the previous link and appends a new segment. The full is engine-neutral (any registered source, including a <code>sqlite</code> file); incrementals need a CDC-capable source (Postgres / MySQL natively, or the <code>sqlite-trigger</code> / <code>d1-trigger</code> engines).</p>
+<p>On Postgres, the chain is anchored by a replication slot. Pass <code>--chain-slot</code> to <code>backup full</code> and the full provisions the persistent slot (named by <code>--slot-name</code>, default <code>sluice_slot</code>) as the snapshot anchor and ensures the publication exists — so the next <code>backup incremental</code> chains with <strong>zero gap</strong> by construction, no manual slot management:</p>
+${pre(`# full snapshot to a local directory, provisioning the chain anchor
+sluice backup full --source-driver postgres --source 'postgres://...' \\
+    --output-dir /var/backups/app --chain-slot
+
+# append an incremental (chains off the most recent manifest)
+sluice backup incremental --source-driver postgres --source 'postgres://...' \\
+    --output-dir /var/backups/app`)}
+<div class="note"><strong>Why <code>--chain-slot</code> matters.</strong> Creating a slot <em>after</em> a full and expecting the next incremental to fill the gap is a silent-loss trap: PostgreSQL fast-forwards <code>START_REPLICATION</code> to the slot's <code>confirmed_flush_lsn</code> without complaint, so every write in between vanishes from the chain. <code>--chain-slot</code> provisions the slot at the snapshot anchor so there is no gap; a chain-resume preflight then refuses loudly if a slot can't serve the parent position (ADR-0083). To abandon a chain, drop the slot with <code>sluice slot drop</code> — it holds source-side WAL until the next incremental consumes it.</div>
+<p>Chain off a specific parent with <code>--since &lt;backup-id&gt;</code> (default: the most recent manifest). Each incremental's window closes on <code>--window</code> (wall-clock, default <code>5m</code>) or <code>--max-changes</code> (event count), whichever fires first, and is always extended to the next transaction commit so a chain never ends mid-transaction.</p>
+
+<h2 id="compression">Compression</h2>
+<p>Chunks are compressed per segment. The codec is <code>--compression none|gzip|zstd</code>, and the default is <strong><code>zstd</code></strong> (klauspost/compress at SpeedDefault): 55–85% faster restore — the recovery-time-critical axis — for ~1–5% larger artifacts than gzip. <code>none</code> leaves chunks as human-readable <code>.jsonl</code> on a local-FS target; <code>gzip</code> is the pre-v0.67.0 codec. The codec is recorded in <code>lineage.json</code> and read back from there on restore — it is never inferred from the bytes, so a mixed-codec chain restores correctly.</p>
+
+<h2 id="encryption">Encryption at rest</h2>
+<p>Add <code>--encrypt</code> to rest the whole chain under client-side <strong>envelope encryption</strong>: sluice generates a content-encryption key (CEK), encrypts every chunk with it, and wraps the CEK under a key-encryption key (KEK) you supply. <code>--encrypt</code> requires exactly one key source — a passphrase or a cloud KMS key — and the same flag is read on the restore / verify / broker side to unwrap. The two modes are mutually exclusive and cannot be mixed within a single chain.</p>
+
+<h3>Passphrase mode</h3>
+<p>Supply the passphrase from an environment variable or a file — <strong>never</strong> on the command line, where it lands in shell history:</p>
+${pre(`export SLUICE_BACKUP_PASS='correct horse battery staple'
+sluice backup full --source-driver postgres --source 'postgres://...' \\
+    --output-dir /var/backups/app --chain-slot \\
+    --encrypt --encryption-passphrase-env SLUICE_BACKUP_PASS`)}
+<table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>--encryption-passphrase-env</code></td><td class="desc">Read the passphrase from the named environment variable. Recommended for production.</td></tr>
+<tr><td><code>--encryption-passphrase-file</code></td><td class="desc">Read the passphrase from a file path (a trailing newline is trimmed). Best for secrets-manager integrations — 1Password CLI, AWS Secrets Manager, etc.</td></tr>
+<tr><td><code>--encryption-passphrase</code></td><td class="desc">Inline passphrase. <strong>Deprecated for production</strong> — it shows up in shell history. Use one of the two above.</td></tr>
+</tbody></table>
+<p>sluice derives the KEK from the passphrase with <strong>Argon2id</strong> and records the salt + cost parameters in the chain-root manifest. Incrementals and restores re-derive the same KEK from those recorded params — so an operator only ever has to remember the passphrase, and every link in the chain unwraps consistently.</p>
+
+<h3>Cloud KMS mode</h3>
+<p>Instead of a passphrase, wrap the CEK through a cloud KMS. The KMS <em>root</em> key never leaves the provider — sluice routes only wrap/unwrap calls:</p>
+<table><thead><tr><th>Flag</th><th>Provider</th></tr></thead><tbody>
+<tr><td><code>--kms-key-arn</code></td><td class="desc">AWS KMS key ARN, alias ARN, or <code>alias/name</code>. Pair with <code>--kms-region</code> to override region resolution. Auth follows the AWS SDK (env / profile / instance role).</td></tr>
+<tr><td><code>--gcp-kms-key-resource</code></td><td class="desc">GCP Cloud KMS crypto-key resource (<code>projects/.../cryptoKeys/KEY</code>). Auth via Application Default Credentials.</td></tr>
+<tr><td><code>--azure-key-vault-id</code></td><td class="desc">Azure Key Vault key identifier URL. Override the wrap algorithm with <code>--azure-wrap-algorithm</code> (default <code>RSA-OAEP-256</code>; HSM-backed AES keys need <code>A256KW</code>). Auth via <code>DefaultAzureCredential</code>.</td></tr>
+</tbody></table>
+${pre(`# full backup to R2, envelope-encrypted under an AWS KMS key
+sluice backup full --source-driver postgres --source 'postgres://...' \\
+    --target s3://my-bucket/app-chain \\
+    --backup-endpoint https://<account>.r2.cloudflarestorage.com \\
+    --backup-region auto --backup-path-style \\
+    --chain-slot \\
+    --encrypt --kms-key-arn arn:aws:kms:us-east-1:111122223333:key/abcd-1234`)}
+<div class="note">The KMS flags are mutually exclusive with each other and with the passphrase flags. Setting a key source without <code>--encrypt</code> is a loud error, not a silent plaintext backup.</div>
+
+<h3>Per-chain vs per-chunk</h3>
+<p><code>--encrypt-mode</code> chooses the CEK granularity: <code>per-chain</code> (default) uses one CEK for the whole chain — a single KEK derive / KMS <code>Decrypt</code> per restore; <code>per-chunk</code> uses a fresh CEK per chunk for defense-in-depth at the cost of a per-chunk wrap. Most operators want the default.</p>
+
+<h2 id="format-version">The FormatVersion refuse-before-touch contract</h2>
+<p>Every chain-root manifest carries a <code>FormatVersion</code>. It exists to prevent one specific silent-loss class: an older sluice binary restoring a chain and <em>silently dropping</em> security-or-correctness metadata it doesn't understand.</p>
+<ul>
+  <li><strong><code>FormatVersion=1</code></strong> — the schema uses none of the gated features. Any sluice from v0.16.x onward restores it.</li>
+  <li><strong><code>FormatVersion=2</code></strong> — the schema contains at least one of: row-level security enabled or forced, one or more RLS policies, or one or more <code>EXCLUDE</code> constraints. Only sluice v0.94.1+ restores it.</li>
+</ul>
+<p>The rule is <strong>proportional</strong>: a manifest gets the <em>minimum</em> version safe for its actual contents, so a typical CRUD database with no RLS and no <code>EXCLUDE</code> constraints stays at <code>FormatVersion=1</code> and cross-version restore behaves exactly as before. The value is derived from the schema — there's no flag to set. Audit it with <code>jq .format_version manifest.json</code>.</p>
+<p>Point a pre-v0.94.1 binary at a <code>FormatVersion=2</code> chain and its restore preflight trips <em>before any DDL or data lands</em>: it exits with <code>manifest format version 2 is newer than this build supports (1); upgrade sluice</code> and creates zero relations on the target. The refuse-before-touch property is load-bearing — there is no code path on the older binary where the chain is partially applied with RLS or <code>EXCLUDE</code> metadata stripped. The silent-loss class is structurally impossible (Bug 116, closed in v0.94.1). Full contract: <a href="https://github.com/sluicesync/sluice/blob/main/docs/backup-format-versioning.md">backup-format-versioning.md</a>.</p>
+
+<h2 id="object-stores">Object stores</h2>
+<p>Swap <code>--output-dir</code> for <code>--target &lt;url&gt;</code> to write to an object store. Four schemes are supported:</p>
+<table><thead><tr><th>Scheme</th><th>Destination</th></tr></thead><tbody>
+<tr><td><code>s3://bucket/prefix</code></td><td class="desc">Amazon S3 or any S3-compatible provider.</td></tr>
+<tr><td><code>gs://bucket/prefix</code></td><td class="desc">Google Cloud Storage.</td></tr>
+<tr><td><code>azblob://container/prefix</code></td><td class="desc">Azure Blob Storage.</td></tr>
+<tr><td><code>file:///path</code></td><td class="desc">Local filesystem (the URL form of <code>--output-dir</code>).</td></tr>
+</tbody></table>
+<p>For <strong>S3-compatible</strong> providers — Cloudflare R2, Backblaze B2, MinIO, Wasabi, Tigris — an <code>s3://</code> URL takes three extra knobs: <code>--backup-endpoint</code> (the provider's endpoint URL), <code>--backup-region</code>, and <code>--backup-path-style</code> (bucket-in-path addressing, which most non-AWS providers require). Credentials follow the cloud SDK's normal resolution (<code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code> for any S3-compatible endpoint). These knobs apply verbatim to <code>backup incremental</code>, <code>stream</code>, <code>verify</code>, <code>prune</code>, <code>compact</code>, and <code>restore</code> too.</p>
+${pre(`# full backup to Cloudflare R2 (an S3-compatible store)
+sluice backup full --source-driver postgres --source 'postgres://...' \\
+    --target s3://my-bucket/app-chain \\
+    --backup-endpoint https://<account>.r2.cloudflarestorage.com \\
+    --backup-region auto \\
+    --backup-path-style \\
+    --chain-slot`)}
+
+<h2 id="continuous">Continuous backup</h2>
+<p>Rather than firing an incremental from cron, run <code>backup stream run</code> as a long-lived process that commits <strong>rolling incrementals</strong> at a cadence. Each rollover closes on the first of <code>--rollover-window</code> (default <code>5m</code>), <code>--rollover-max-changes</code> (default <code>100000</code>), or <code>--rollover-max-bytes</code> (default 64 MiB), and — like a manual incremental — extends to the next transaction commit:</p>
+${pre(`sluice backup stream run --source-driver postgres --source 'postgres://...' \\
+    --target s3://my-bucket/app-chain \\
+    --rollover-window 5m --rollover-max-changes 100000`)}
+<p>Stop it with SIGTERM / SIGINT (drains the in-flight rollover and exits), or cross-machine with <code>sluice backup stream stop --target &lt;url&gt;</code>, which writes a stop request the running stream observes on its next rollover tick. To bound total disk without an external wrapper, in-process rotation caps the open segment at <code>--retain-rotate-at &lt;dur&gt;</code> and/or <code>--retain-rotate-at-chain-length &lt;n&gt;</code> and opens a fresh segment over the same CDC handle (ADR-0046); pair that with <code>backup prune</code> below.</p>
+
+<h2 id="retention">Retention: prune and compact</h2>
+<p>Two explicit operator actions bound a chain's size and restore time. Neither runs automatically, and the chain root (full) is always preserved.</p>
+<p><strong><code>backup prune</code></strong> drops the oldest incrementals. Choose retention by count (<code>--keep-incrementals N</code>) or age (<code>--keep-duration DUR</code>) — exactly one is required. The first surviving incremental is re-stitched to point at the full directly, which advances the chain's earliest restorable position forward: the dropped windows are gone from the chain's restore range, so this is opt-in. Use <code>--dry-run</code> to see what would go without touching storage.</p>
+${pre(`# keep the 30 most recent incrementals; preview first
+sluice backup prune --from-dir /var/backups/app --keep-incrementals 30 --dry-run
+sluice backup prune --from-dir /var/backups/app --keep-incrementals 30`)}
+<p><strong><code>backup compact</code></strong> merges consecutive segments whose <code>CreatedAt</code> gaps fall within <code>--merge-window</code> (required) into one segment — fewer files, faster restore. By default it's a byte-level concat: bytes are never decompressed, recompressed, or re-encrypted. Mixed codecs, divergent encryption keysets, or position gaps within a group refuse loudly before any mutation. Opt into event-level collapse (INSERT+UPDATE → INSERT, etc.) with <code>--smart-compaction</code> (ADR-0064). <code>--dry-run</code> reports the plan.</p>
+
+<h2 id="restore">Restore and point-in-time</h2>
+<p><code>sluice restore</code> reads a chain from <code>--from-dir</code> / <code>--from</code>, applies the schema (retargeting cross-engine if <code>--target-driver</code> differs from the backup's source engine), bulk-copies the rows back, and creates indexes, constraints, and views. When the store contains incrementals, restore walks the chain <strong>in order</strong> from the root through every incremental present, landing the target at the chain's tip:</p>
+${pre(`sluice restore --from-dir /var/backups/app \\
+    --target-driver postgres --target 'postgres://...target...'`)}
+<p><strong>Point-in-time</strong> recovery granularity is your incremental / rollover cadence: every committed incremental is a restorable position, and restore reconstructs the target as of the newest link in the store it reads. To recover to an earlier point, restore from a store (or a copy) whose newest incremental is that point — sluice restore has no "as of timestamp T" flag; the chain's committed positions <em>are</em> the recoverable points.</p>
+<p>Restore parallelism is engine-generic: <code>--table-parallelism</code> (tables applied concurrently, auto 4) composes with <code>--bulk-parallelism</code> (a single table's chunks applied concurrently, auto min(8, NumCPU)); their product is clamped to the target's connection budget. For a chain that carries incrementals, <code>--apply-concurrency</code> fans the incremental change-replay across in-order PK-hash lanes (auto 4) — the knob that matters on a high-latency / cross-region target. Same-engine chains replay schema deltas and change chunks; cross-engine chains that carry incrementals are refused (a full-only cross-engine restore is fine).</p>
+<div class="note">To replay a chain into a <em>live, continuously-updated</em> target instead of a one-shot restore, use the broker — one process produces the chain, another tails it and applies incrementals as they land. See <a href="/docs/from-backup-sync/">Sync from a backup chain</a>.</div>
+
+<h2 id="verify">Verifying a backup</h2>
+<p><code>backup verify</code> walks a chain, recomputes every chunk's SHA-256, and reports any mismatch — a target-free integrity probe, ideal for a cron check against archived backups:</p>
+${pre(`sluice backup verify --from-dir /var/backups/app`)}
+<p>For an <strong>encrypted</strong> chain, add <code>--encrypt</code> plus the same key source you backed up with. Verify then also runs a decrypt probe on every per-chunk wrapped CEK, so a mid-chain passphrase rotation surfaces here as a clear verify failure instead of a partial-fail at restore time (Bug 117). Verify warns loudly if you point it at an encrypted chain <em>without</em> a key source — SHA-only verify can't see that class of problem.</p>
+${pre(`export SLUICE_BACKUP_PASS='correct horse battery staple'
+sluice backup verify --from-dir /var/backups/app \\
+    --encrypt --encryption-passphrase-env SLUICE_BACKUP_PASS`)}
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/from-backup-sync/">Sync from a backup chain</a> — replay a chain into a live target as a long-running broker (decoupled transport).</li>
+  <li><a href="/docs/commands/#backup">backup / restore command reference</a> — the full flag set for every subcommand.</li>
+  <li><a href="/docs/configuration/">Configuration</a> — YAML config, type/expression overrides, and PII redaction (which also applies at backup time, so on-disk chunks are PII-clean).</li>
+</ul>
+`,
+    prev: { href: "/docs/operate-fleet/", label: "Operate a sync fleet" },
+    next: { href: "/docs/from-backup-sync/", label: "Sync from a backup chain" },
   })
 );
 

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schema changes during a live sync — sluice docs</title>
+<meta name="description" content="How sluice keeps a running sync online while the source schema evolves — what forwards automatically, what refuses loudly, and how to recover.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk active" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Schema changes during a live sync</h1>
+    <p class="subtitle">How sluice keeps a running sync online while the source schema evolves — what forwards automatically, what refuses loudly, and how to recover.</p>
+    
+<p>A source schema rarely stands still. Columns get added, types get widened, indexes come and go while a continuous sync is running. sluice does not manage those migrations for you — tools like Atlas, sqitch, Flyway, and liquibase do that — but it does keep the stream online through them. By default it forwards the operator's own committed DDL onto the target, so a routine <code>ALTER TABLE</code> no longer wedges the sync. This page covers what forwards automatically, the narrow set of changes that still refuse loudly, and the drained-migrate recovery when one does.</p>
+
+<h2 id="the-flag">The control: --schema-changes</h2>
+<p>A single tristate flag on <code>sync start</code> (and per-sync in a <code>sync run</code> fleet spec) governs the behavior, introduced in <a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0091-default-on-schema-change-forwarding.md">ADR-0091</a>:</p>
+<table>
+<thead><tr><th>Mode</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td><code>--schema-changes=forward</code> <em>(default)</em></td><td class="desc">Apply every unambiguous source schema change on the target automatically, logging each applied DDL at INFO. The sync stays online through routine schema evolution.</td></tr>
+<tr><td><code>--schema-changes=refuse</code></td><td class="desc">The conservative pre-v0.92 behavior: any source DDL surfaces loudly with a structured drift diff and the drained-model recovery hint. For operators who gate DDL through a separate change-management process.</td></tr>
+</tbody>
+</table>
+<div class="note"><strong>This is a behavior change on upgrade.</strong> A stream that previously refused on source DDL now forwards it. Set <code>--schema-changes=refuse</code> to keep the old drained-model default. Note also that <code>--schema-changes</code> is a no-op under Shape A (<code>--inject-shard-column</code>): the multi-shard boundary router already forwards every shape via its lease. The older <code>--forward-schema-add-column</code> boolean is deprecated — forwarding is on by default and covers every shape, so the flag is subsumed; setting it logs a deprecation warning and forwards.</div>
+
+<h2 id="what-forwards">What forwards, by source engine</h2>
+<p>Under <code>forward</code>, the intercept can emit any shape's DDL, but a change only reaches the target if the source's CDC stream actually carries its detail on the wire. Postgres logical replication (pgoutput) carries less than MySQL's <code>information_schema</code> re-read, so the honest matrix differs by <em>source</em> engine. This is the ground-truth table from ADR-0091 §1d — do not assume a shape forwards without checking it:</p>
+<table>
+<thead><tr><th>Shape</th><th>MySQL source</th><th>Postgres source</th></tr></thead>
+<tbody>
+<tr><td>ADD COLUMN</td><td class="desc">forwards</td><td class="desc">forwards</td></tr>
+<tr><td>DROP COLUMN</td><td class="desc">forwards</td><td class="desc">forwards</td></tr>
+<tr><td>ALTER COLUMN TYPE (same- or cross-engine)</td><td class="desc">forwards</td><td class="desc">forwards</td></tr>
+<tr><td>ALTER NULLABILITY</td><td class="desc">forwards</td><td class="desc">refuses<sup>1</sup></td></tr>
+<tr><td>Column REORDER</td><td class="desc">no-op<sup>2</sup></td><td class="desc">no-op<sup>2</sup></td></tr>
+<tr><td>CREATE / DROP INDEX</td><td class="desc">refuses<sup>3</sup></td><td class="desc">refuses<sup>1</sup></td></tr>
+<tr><td>ADD / DROP / MODIFY CHECK</td><td class="desc">refuses<sup>3</sup></td><td class="desc">refuses<sup>1</sup></td></tr>
+<tr><td>RENAME COLUMN</td><td class="desc">refuses (§rename)</td><td class="desc">forwards via attnum<sup>4</sup></td></tr>
+<tr><td>RENAME TABLE / multi-shape combo</td><td class="desc">refuses</td><td class="desc">refuses</td></tr>
+</tbody>
+</table>
+<p style="font-size:0.9em">
+<sup>1</sup> pgoutput's relation message carries only column name + type + the replica-identity key flag — no nullability flag, no secondary-index or CHECK metadata. The wire never signals these on a Postgres source, so they produce no boundary to forward. A resulting incompatibility surfaces as a loud apply error on the next affected row, not silent corruption.<br>
+<sup>2</sup> sluice decodes rows by column name, never by position, so a pure reorder needs no DDL — it is a safe no-op.<br>
+<sup>3</sup> MySQL's CDC projection reads only <code>{schema, name, columns, primary key}</code> on a DDL boundary; it does not project secondary indexes or CHECK constraints. Forwarding them would need a new catalog projection (perf-only for indexes; cross-engine expression-translation-hazardous for checks), so both are deferred.<br>
+<sup>4</sup> A Postgres RENAME is proven via the stable <code>pg_attribute.attnum</code> — see <a href="#rename">RENAME COLUMN</a>.
+</p>
+<p>Every forwarded DDL is logged at INFO as it lands, so the applied change is visible in the sync's log stream. Cross-engine type ALTERs are retargeted through the same translation path a cold-start <code>CREATE TABLE</code> uses; a widening ALTER forwards cleanly, while a narrowing or incompatible one is rejected by the target engine and surfaces as a loud, retryable refuse (position not advanced).</p>
+
+<h2 id="always-refuses">What always refuses, even under forward</h2>
+<p>Two shapes never auto-apply, because forwarding the wrong guess would silently lose data:</p>
+
+<h3 id="rename">RENAME COLUMN</h3>
+<p>A column rename and a <code>DROP x + ADD y</code> of the same type are <strong>indistinguishable from the replication stream alone</strong> — both present as exactly one dropped column and one added column. Guessing RENAME when the truth is drop+add keeps stale data under the new name; guessing drop+add when the truth is RENAME drops the column's data on the target. The only safe disambiguation is a stable column identity that survives a rename:</p>
+<ul>
+  <li><strong>Postgres has one</strong> — <code>pg_attribute.attnum</code> is stable across a rename. The PG CDC reader carries it as the column's stable id; the intercept forwards a rename <em>only</em> when the before and after columns share the same non-zero attnum (proven rename, data preserved) and refuses otherwise. Because the proof is definitive, a bug here can only ever refuse safely, never mis-forward.</li>
+  <li><strong>MySQL has no equivalent</strong> — <code>ORDINAL_POSITION</code> changes on reorder and there is no creation id, so a MySQL-source rename is fundamentally unprovable from catalog state. It refuses, permanently. Drain and rename on both ends explicitly.</li>
+</ul>
+
+<h3 id="volatile-default">ADD COLUMN with a computed / volatile DEFAULT</h3>
+<p>An <code>ADD COLUMN</code> whose DEFAULT is a non-deterministic function is refused, because evaluating it in the target's session diverges from the per-row values the source already inserted (ADR-0058 §2a). The refused functions include <code>NOW()</code> / <code>CURRENT_TIMESTAMP</code> / <code>clock_timestamp()</code>, <code>nextval()</code>, <code>gen_random_uuid()</code>, <code>random()</code>, and MySQL's <code>UUID()</code> / <code>RAND()</code> — matched schema-qualified or bare, and detected even when wrapped (e.g. <code>COALESCE(NULL, NOW())</code>). A constant DEFAULT forwards normally. If the probe of a column's default can't be read at all, sluice refuses on uncertainty rather than risk a wrong value.</p>
+<p>Multi-shape combos (more than one structural change in a single boundary) also refuse — the IR delta can't be unambiguously ordered — as does a target DDL apply that fails on lock contention, permissions, or an unrecognized type. Every one of these leaves the CDC position un-advanced, so a retry replays the boundary once you've reconciled by hand.</p>
+
+<h2 id="drift-diff">The refusal message</h2>
+<p>When a change refuses, the error is deliberately greppable and names the specific offending object plus the operator action. It carries three parts: the classify error (which shape / how many changes), a structured drift diff that names the exact columns / indexes / constraints that differ, and a recovery hint. The hint spells out the drained model:</p>
+<ul>
+  <li>Run <code>sluice sync stop --wait</code> to drain in-flight changes.</li>
+  <li>Apply the schema change on the target (manually, or via <code>sluice schema migrate</code>).</li>
+  <li>Resume with <code>sluice sync start --resume</code>.</li>
+  <li>It also notes that <code>--schema-changes=refuse</code> keeps the drained model as the default for any subsequent source DDL.</li>
+</ul>
+
+<h2 id="drained-migrate">Operator runbook: recovering a refused change</h2>
+<p>When a change refuses — or when you run <code>--schema-changes=refuse</code> deliberately — the recovery is the drained-schema-migrate sequence. Stop the stream with <code>--wait</code> so the CLI blocks until the streamer confirms a graceful drain (the in-flight batch is committed and the CDC position is persisted past the last applied event), apply the DDL to whichever side needs it, then resume from the persisted position:</p>
+<pre><code><span class="c"># 1. Drain and stop — --wait blocks until the drain is confirmed</span>
+<span class="k">sluice</span> sync stop <span class="f">--wait</span> \
+    <span class="f">--stream-id</span> app-prod \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...target...'
+
+<span class="c"># 2. Apply the schema change on source and/or target as appropriate</span>
+psql "$SOURCE_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
+psql "$TARGET_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
+
+<span class="c"># 3. Resume from the persisted CDC position</span>
+<span class="k">sluice</span> sync start <span class="f">--resume</span> \
+    <span class="f">--stream-id</span> app-prod \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:rootpw@tcp(localhost:3306)/app' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...target...'</code></pre>
+<p>The <code>--resume</code> flag picks up the persisted CDC position (source LSN / GTID set / VStream cursor), so pre-stop events apply cleanly and the first event after resume sees the new shape on both sides. Without <code>--resume</code>, sluice refuses to bulk-copy into a populated target. The order "stop &rarr; ALTER source &rarr; ALTER target &rarr; start" is robust regardless of which side commits the DDL first, as long as both sides carry the new shape before resume.</p>
+<div class="note"><strong>Plan the target-side change first.</strong> <code>sluice schema diff</code> runs the source schema through sluice's translation pipeline and reports drift against the target's actual schema — apply the ALTER on the source, run the diff, and it surfaces the missing-on-target columns / type mismatches with suggested <code>ALTER</code> statements as a starting point. It does not know your data volume or lock duration, so review them before running.</div>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/commands/#sync-start">sync start reference</a> — the <code>--schema-changes</code> row and the full sync flag set.</li>
+  <li><a href="/docs/migrate-mysql-to-postgres/">Migrate MySQL to Postgres</a> — the one-shot migration the drained model resumes onto.</li>
+  <li><a href="/docs/commands/#schema">schema diff / schema migrate</a> — pre-flight drift and apply the target-side change.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/zero-downtime-cutover/">← Zero-downtime migration (continuous sync)</a><a class="next" href="/docs/redact-pii/">Redact PII →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+</body>
+</html>

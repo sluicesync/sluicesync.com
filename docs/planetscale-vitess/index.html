@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlanetScale &amp; Vitess — sluice docs</title>
+<meta name="description" content="Migrate and continuously sync from PlanetScale-MySQL or any Vitess deployment through the VStream gRPC feed.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk active" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>PlanetScale &amp; Vitess</h1>
+    <p class="subtitle">Migrate and continuously sync from PlanetScale-MySQL or any Vitess deployment through the VStream gRPC feed.</p>
+    
+<p>PlanetScale (and self-hosted Vitess) don't expose MySQL's binary log directly — row changes come through Vitess's <strong>VStream</strong> gRPC API instead. sluice speaks that protocol through a MySQL-engine <em>flavor</em>: the same reader, decoder, and pipeline you use for vanilla MySQL, with a Vitess-shaped CDC transport and a capability set that reflects the platform's constraints. This guide covers selecting the flavor, tuning the cold-start copy, warm-resume across a purged position, and reading the throttler/lag signals that are unique to a Vitess-fronted source.</p>
+
+<h2 id="select">Selecting the flavor</h2>
+<p>Two driver names register the VStream-backed flavor; pick by deployment shape:</p>
+<table><thead><tr><th>Driver</th><th class="desc">Use for</th></tr></thead><tbody>
+<tr><td><code>planetscale</code></td><td class="desc">PlanetScale's hosted MySQL. TLS by default; auth is HTTP Basic where the username/password are your service-token <em>name</em> and <em>value</em>; the default shard convention is <code>-</code>.</td></tr>
+<tr><td><code>vitess</code></td><td class="desc">A Vitess cluster you run yourself (etcd + vtctld + vtgate + vttablets). Shares PlanetScale's VStream engine code; point it at your vtgate.</td></tr>
+</tbody></table>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> postgres    <span class="f">--target</span> "$SLUICE_TARGET"</code></pre>
+<div class="note"><strong>What auto-detection does — and doesn't.</strong> A <code>*.connect.psdb.cloud</code> / <code>*.private-connect.psdb.cloud</code> host is recognised automatically so sluice excludes Vitess's <code>_vt_*</code> shadow tables — <em>even</em> when you connect with the plain <code>mysql</code> driver. Choosing the transport is still explicit, though: the <code>mysql</code> driver against a PlanetScale host gives you binlog CDC, not VStream. Pass <code>--source-driver planetscale</code> to get the VStream feed. Non-PlanetScale Vitess (custom domains) needs a manual <code>--exclude-table='_vt_*'</code>.</div>
+
+<h2 id="preconditions">Source preconditions</h2>
+<p>Key constraints inherited from the Vitess platform (sluice already accounts for these — they're context, not steps):</p>
+<ul>
+  <li>No direct binlog access — CDC goes through VStream gRPC (the flavor declares <code>CDCVStream</code>, which the streamer's capability check accepts).</li>
+  <li>No <code>LOAD DATA INFILE</code>; the cold-copy uses batched inserts.</li>
+  <li>Sharded keyspaces are supported on both the standalone-CDC and snapshot→CDC paths. vtgate fans the COPY phase out per shard, then the same stream tails CDC across all shards.</li>
+</ul>
+<p>A VStream <strong>source</strong> password needs only read access. If a <strong>PlanetScale branch is the <em>target</em></strong>, the password's role must allow DDL — sluice creates the destination tables plus its control tables (<code>sluice_cdc_state</code>, <code>sluice_cdc_schema_history</code>, …) on cold-start, and a <code>reader</code>/<code>writer</code>/<code>readwriter</code> role is denied DDL on a production branch. Mint the target password with <code>pscale password create &lt;db&gt; &lt;branch&gt; --role admin</code>. If the target branch has Safe Migrations enabled, pre-create the tables and pass <code>--schema-already-applied</code>.</p>
+
+<h2 id="sharding">Sharded keyspaces</h2>
+<p>All optional; ride on the standard MySQL DSN as extra <code>?key=value</code> parameters:</p>
+<table><thead><tr><th>DSN param</th><th class="desc">Purpose</th></tr></thead><tbody>
+<tr><td><code>vstream_shards</code></td><td class="desc">Comma-separated shard list (default <code>-</code>; e.g. <code>vstream_shards=-80,80-</code>). vttestserver dev clusters typically use <code>0</code>.</td></tr>
+<tr><td><code>vstream_auto_discover_shards=true</code></td><td class="desc">Discover the layout at Open time via <code>SHOW VITESS_SHARDS LIKE '&lt;keyspace&gt;/%'</code>. Mutually exclusive with <code>vstream_shards</code>; recommended when the layout isn't known statically.</td></tr>
+<tr><td><code>vstream_endpoint</code></td><td class="desc">Override the vtgate gRPC endpoint. Default <code>&lt;sql-host&gt;:443</code>, matching PlanetScale's convention.</td></tr>
+<tr><td><code>vstream_transport</code></td><td class="desc"><code>tls</code> (default) or <code>plaintext</code> (localhost vttestserver / dev only).</td></tr>
+<tr><td><code>vstream_auth</code></td><td class="desc"><code>basic</code> (default) or <code>none</code> (vanilla Vitess with no VStream auth).</td></tr>
+</tbody></table>
+<p>A mid-stream reshard surfaces as a typed <code>ShardLayoutChangedError</code>; the continuous-sync streamer's outer loop reopens the reader on the new layout automatically.</p>
+
+<h2 id="cold-start">VStream cold-start throughput</h2>
+<p>The snapshot copy is bounded differently from a native-MySQL copy because vtgate forces a single cross-region-RTT-bound INSERT connection (it blocks <code>LOAD DATA</code>). Two axes widen it:</p>
+<table><thead><tr><th>Flag</th><th class="desc">Axis</th></tr></thead><tbody>
+<tr><td><code>--copy-fanout-degree</code></td><td class="desc"><strong>Write</strong> fan-out (ADR-0097, PlanetScale-MySQL <em>target</em>): PK-hash-partition the incoming snapshot row stream out to N concurrent batched-INSERT writers, each on its own connection. <code>0</code> = auto (4); <code>1</code> = serial. Bounded by the target connection budget.</td></tr>
+<tr><td><code>--vstream-copy-table-parallelism</code></td><td class="desc"><strong>Read</strong> axis (ADR-0099, Vitess/PlanetScale source): the number of concurrent single-table COPY streams the auto-shard cold-copy runs. <code>0</code> = fall back to the DSN <code>vstream_copy_table_parallelism</code> param, then the engine default (1 = serial). An explicit flag wins over the DSN param.</td></tr>
+</tbody></table>
+<div class="note">The generic <code>--table-parallelism</code> / <code>--bulk-parallelism</code> cold-start knobs are <strong>inert on a VStream source</strong> (setting one emits a one-time WARN). Use the two flags above instead. <code>--copy-table-parallelism</code> is for self-managed non-Vitess MySQL, not PlanetScale.</div>
+
+<h2 id="warm-resume">Warm-resume &amp; auto-resnapshot</h2>
+<p>On restart, sluice resumes from the persisted VGTID position. PlanetScale's binlog-retention window is finite, so a resume from a position older than the source's retained binlogs is routine — and by default (ADR-0093, parity with the self-hosted binlog path) sluice <strong>auto-recovers with a fresh cold-start re-snapshot</strong> rather than failing. On an idempotent VStream source the upsert copy absorbs the overlap and the target is <em>not</em> dropped.</p>
+<p>When a full re-snapshot is expensive (very large tables) and you'd rather decide deliberately, pass <code>--no-auto-resnapshot</code>. sluice then fails loudly with an actionable error naming the recovery commands (<code>--restart-from-scratch</code> / <code>--reset-target-data</code>) instead of re-copying. It gates both the pre-flight fall-through and the reactive VStream recovery.</p>
+
+<h2 id="throttler-lag">The throttler &amp; lag reality</h2>
+<p>Some VStream delays you act on; some you wait out. The measured findings reset a few intuitions:</p>
+<ul>
+  <li><strong>The #1 real-world stall is a co-tenant VReplication migration on the same keyspace</strong> (an <code>OnlineDDL</code> on a large table), not your own write rate — its copy moves the <em>shared</em> shard-lag metric that gates every app. A write-heavy primary <em>alone</em> rarely trips the default 5s lag throttler on a healthy cluster.</li>
+  <li><strong>Upsizing the cluster or vtgate does not clear a replica-lag throttle.</strong> The lever is source-side: reduce load, and avoid huge single transactions during bulk-copy and cutover.</li>
+</ul>
+<h3>The mid-stream throttle signature</h3>
+<p>When a throttle engages mid-stream, vtgate strips the in-band <code>throttled</code> flag from the events sluice sees, so the symptom is: <strong>heartbeats still flowing, zero change events, and <code>sluice_lag_seconds</code> climbing while <code>sluice_seconds_since_last_event</code> stays low</strong> (&lt; 6s). No gRPC error arrives, so the stream stays connected and catches up when the throttle clears. sluice surfaces the symptom as a rate-limited WARN — <em>"alive (heartbeats flowing) but NO change events for Ns"</em> — once per quiet spell. Out-of-band, check <code>SHOW VITESS_THROTTLED_APPS</code> on the primary. The soft window is tunable per-DSN with <code>vstream_idle_warn_timeout</code> (a Go duration; <code>0</code> disables the WARN only, not the hard liveness guards).</p>
+<div class="note"><strong>Corrected finding — a genuinely idle source does NOT fire this WARN on real PlanetScale.</strong> vtgate emits periodic idle VGTIDs that re-arm sluice's soft-idle timer, so the WARN is specific to a <em>throttle</em> or a large-transaction stall — not routine quiet. (Older guidance said an idle source produces the same WARN; on a real PlanetScale endpoint it does not.) If you see the WARN, treat it as a throttle/large-tx signal and check the throttled-apps list.</div>
+<p>A tablet failover / planned reparent terminates the stream; the streamer's outer loop reconnects from the persisted position — a single brief <code>seconds_since_last_event</code> spike is almost always transient. See the in-repo <a href="https://github.com/sluicesync/sluice/blob/main/docs/vitess-vstream-troubleshooting.md">VStream troubleshooting runbook</a> for the full cause catalogue.</p>
+
+<h2 id="storage-grow">Storage auto-grow &amp; primary reparent</h2>
+<p>A non-Metal PlanetScale instance crossing a storage boundary briefly disrupts in-flight writes while the volume grows and a new primary is promoted. sluice rides these windows automatically — <strong>no flags required</strong> — across cold-copy write, source read, and the post-copy index/constraint phase. You'll see <code>WARN</code> lines naming the transient (Vitess <code>1105 "not serving"</code> / read-only) and the retry; they're expected and self-clearing. A genuine, non-transient failure still surfaces loudly and promptly.</p>
+
+<h2 id="telemetry">Target-health telemetry (optional)</h2>
+<p>sluice can consume PlanetScale's <strong>control-plane metrics</strong> (target CPU, memory, storage, replication lag) to back off apply pressure proactively and to fire operator alerts. This reads the PlanetScale metrics API, not the database — it uses a service token that is <strong>distinct from the data-plane <code>--target</code> DSN</strong>. The opt-in is all-or-nothing: an org without a complete token pair is a loud refusal.</p>
+<pre><code>export PLANETSCALE_METRICS_TOKEN_ID=...   # granted read_metrics_endpoints
+export PLANETSCALE_METRICS_TOKEN=...
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> postgres    <span class="f">--target</span> "$SLUICE_TARGET" \
+    <span class="f">--planetscale-org</span> acme \
+    <span class="f">--planetscale-metrics-db</span> app \
+    <span class="f">--notify-storage-util</span> 0.85 <span class="f">--notify-cpu-util</span> 0.90 \
+    <span class="f">--notify-slack</span> "$SLACK_WEBHOOK"</code></pre>
+<p>When telemetry is on, sluice's <code>/metrics</code> export gains the <code>sluice_target_*</code> gauge family (CPU/mem/storage/lag), and the live signals clamp the startup apply-lane count and damp the AIMD high-water under pressure. The token id and secret should always come from the environment, never the command line.</p>
+<h3>Watching a database without a sync</h3>
+<p>To watch a PlanetScale database's health for dashboards or alert-only operation — with no sync attached and no database connection opened — use <a href="/docs/commands/#metrics-watch">metrics-watch</a>. It polls only the control-plane endpoint, fires the same <code>--notify-*</code> alerts, and with <code>--metrics-listen ADDR</code> becomes a standalone PlanetScale-metrics Prometheus exporter:</p>
+<pre><code><span class="k">sluice</span> metrics-watch \
+    <span class="f">--engine</span> planetscale <span class="f">--planetscale-org</span> acme <span class="f">--planetscale-metrics-db</span> app \
+    <span class="f">--notify-storage-util</span> 0.85 <span class="f">--notify-slack</span> "$SLACK_WEBHOOK" <span class="f">--quiet</span></code></pre>
+<p>It supports <code>--once</code> (single sample, for scripts) and <code>--interval</code> (default 60s, the PlanetScale metrics granularity).</p>
+
+<h2 id="pspg-target">PlanetScale-Postgres as a target</h2>
+<p>PlanetScale-Postgres (PS-PG) is <em>not</em> Vitess-fronted for sluice's purposes — the vanilla <code>postgres</code> engine handles it cleanly, and its endpoints (<code>*.pg.psdb.cloud</code>) don't carry <code>_vt_*</code> shadow tables. One operational note: the tables sluice creates are owned by whichever role connects, and PlanetScale's non-superuser API role (<code>pscale_api_*</code>) will own them if you connect as it. If you want the tables owned by the Default <code>postgres</code> role, connect as that role. For CDC into PS-PG, ensure <code>wal_level=logical</code> and the connecting role has the <code>REPLICATION</code> attribute.</p>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/operate-fleet/">Operate a sync fleet</a> — dashboards, alerting, and lag observability across many streams.</li>
+  <li><a href="/docs/commands/#sync-start">sync start reference</a> — every flag named here, with defaults.</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the snapshot→CDC cutover flow this guide's flags feed.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/postgres-source-prep/">← Prepare a Postgres source</a><a class="next" href="/docs/operate-fleet/">Operate a sync fleet →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+</body>
+</html>
