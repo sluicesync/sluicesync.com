@@ -1,0 +1,49 @@
+# sluice
+
+> Open-source database migration and continuous-sync CLI: migrate and sync MySQL ↔ Postgres in all four directions, plus SQLite / Cloudflare D1 import and continuous sync — correctness-first, loud failure by default.
+
+sluice is a single Go binary. Every command is non-interactive (flags, environment variables, and an optional YAML config — no prompts, ever), destructive operations require explicit opt-in flags, credentials resolve env-first, and machine-readable output is available via `--log-format json` and per-command `--format json`. The documentation below is also maintained as markdown in the source repository — for LLM consumption the raw markdown links in the "Source-repo markdown" section are the best format.
+
+## Documentation
+
+- [Overview](https://sluicesync.com/docs/): Migrate and continuously sync MySQL and Postgres, and import SQLite / Cloudflare D1 — correctness-first, loud failure by default.
+- [Getting started](https://sluicesync.com/docs/getting-started/): Install sluice, point it at a source and target, and run your first migration and continuous sync.
+- [Configuration](https://sluicesync.com/docs/configuration/): Connection strings, environment variables, the YAML config file, and the global flags every command shares.
+
+## Guides
+
+- [Migrate MySQL → Postgres](https://sluicesync.com/docs/migrate-mysql-to-postgres/): The flagship first migration: connect, preview the plan, copy the data, and verify it landed.
+- [How sluice copies your data](https://sluicesync.com/docs/how-sluice-copies/): Same-engine vs cross-engine: which internal path a copy takes, and why the fast path never trades correctness for speed.
+- [Preview & validate before you migrate](https://sluicesync.com/docs/preview-and-validate/): See the exact target DDL, steer the type translation, and confirm the copy — without guessing.
+- [Verify & reconcile](https://sluicesync.com/docs/verify-reconcile/): Confirm every row landed and no structural drift crept in — then know exactly what to do when it didn't.
+- [Zero-downtime migration (continuous sync)](https://sluicesync.com/docs/zero-downtime-cutover/): Cold-start the data, let CDC catch up while the app keeps writing, then cut over in a brief, controlled window.
+- [Schema changes during a sync](https://sluicesync.com/docs/schema-changes/): How sluice keeps a running sync online while the source schema evolves — what forwards automatically, what refuses loudly, and how to recover.
+- [Redact PII](https://sluicesync.com/docs/redact-pii/): Seed staging, dev, analytics, and vendor handoffs from production without letting personal data leave with the rows.
+- [Import SQLite or Cloudflare D1](https://sluicesync.com/docs/import-sqlite-d1/): Move a SQLite file, a wrangler D1 export, or a live Cloudflare D1 into Postgres or MySQL — losslessly.
+- [Migrate many databases or schemas](https://sluicesync.com/docs/multi-database/): Fan a whole MySQL server or a multi-schema Postgres source out to same-named target namespaces in one run.
+- [Prepare a Postgres source](https://sluicesync.com/docs/postgres-source-prep/): What a Postgres source needs before it can feed a continuous sync — the required GUCs, the REPLICATION role attribute, replication-slot lifecycle, and the slot-less path for managed Postgres.
+- [PlanetScale & Vitess](https://sluicesync.com/docs/planetscale-vitess/): Migrate and continuously sync from PlanetScale-MySQL or any Vitess deployment through the VStream gRPC feed.
+- [Operate a sync fleet](https://sluicesync.com/docs/operate-fleet/): Supervise many continuous syncs from one process — failure-isolated, observable, and reconfigurable without a restart.
+- [Take encrypted backups](https://sluicesync.com/docs/encrypted-backups/): sluice's logical backup model in depth — chains, compression, encryption at rest, object stores, retention, and restore.
+- [Sync from a backup chain](https://sluicesync.com/docs/from-backup-sync/): Replay a backup chain into a target as a long-running broker — no direct source↔target connectivity required.
+
+## Reference
+
+- [Command reference](https://sluicesync.com/docs/commands/): Every sluice command, its purpose, the flags that matter most, and worked examples.
+- [Objects sluice creates](https://sluicesync.com/docs/database-objects/): The full inventory of sluice's bookkeeping tables, slots, publications, and triggers — what each is for, when it appears, and how to remove it.
+
+## Source-repo markdown (best for LLMs)
+
+- [README](https://raw.githubusercontent.com/sluicesync/sluice/main/README.md): project overview, quick start, engine list, CLI command table
+- [Architecture](https://raw.githubusercontent.com/sluicesync/sluice/main/docs/architecture.md): the typed IR, engine pattern, orchestrator, capability model
+- [Type mapping](https://raw.githubusercontent.com/sluicesync/sluice/main/docs/type-mapping.md): cross-engine type translation policies, extension types, override tokens
+- [Value types](https://raw.githubusercontent.com/sluicesync/sluice/main/docs/value-types.md): the runtime row-value contract (what each IR type holds at copy time)
+- [Cookbook](https://github.com/sluicesync/sluice/tree/main/docs/cookbook): task-shaped recipes (one-shot migrate, zero-downtime cutover, encrypted backup chains, PII redaction)
+- [ADR index](https://raw.githubusercontent.com/sluicesync/sluice/main/docs/adr/README.md): every architecture decision record with a one-line summary
+- [Security policy](https://raw.githubusercontent.com/sluicesync/sluice/main/SECURITY.md): threat model, the source-trust boundary, credential handling, reporting
+
+## Optional
+
+- [Full documentation as one plain-text file](https://sluicesync.com/llms-full.txt)
+- [GitHub repository](https://github.com/sluicesync/sluice)
+- [Release notes archive](https://github.com/sluicesync/sluice/tree/main/docs/releases)

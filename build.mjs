@@ -98,7 +98,13 @@ function sidebar(activeSlug) {
   return out;
 }
 
+// Every rendered page is also collected here so the llms.txt / llms-full.txt
+// generators at the bottom of this script stay in lockstep with the site —
+// a page added above is picked up automatically, never hand-listed twice.
+const EMITTED = [];
+
 function page({ slug, title, subtitle, body, prev, next }) {
+  EMITTED.push({ slug, title, subtitle, body });
   const desc = subtitle || "sluice documentation";
   const guideSlugs = [
     "from-backup-sync",
@@ -2221,5 +2227,103 @@ sluice backup verify --from-dir /var/backups/app \\
     next: { href: "/docs/from-backup-sync/", label: "Sync from a backup chain" },
   })
 );
+
+// =========================================================================
+//  llms.txt + llms-full.txt (AI-assistant index — llmstxt.org convention)
+//
+// Served at sluicesync.com/llms.txt by Cloudflare Pages like any other
+// committed static file. llms.txt is the curated index (site pages from NAV
+// + the canonical markdown docs in the source repo, which are the best
+// format for LLM consumption); llms-full.txt is every docs page's content
+// tag-stripped into one plain-text file. Both regenerate on every build from
+// the same NAV/EMITTED data that renders the site, so they cannot drift.
+// Background: docs/research/ai-friendly-sluice.md in the sluice repo.
+// =========================================================================
+
+const SITE = "https://sluicesync.com";
+const RAW = "https://raw.githubusercontent.com/sluicesync/sluice/main";
+
+function unesc(s) {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&rarr;/g, "→")
+    .replace(/&larr;/g, "←")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
+}
+
+// Crude but serviceable HTML→text for llms-full.txt: code blocks kept as
+// indented text, headings kept as markdown, list items bulleted, table cells
+// separated, everything else tag-stripped.
+function textify(html) {
+  let t = html;
+  t = t.replace(/<pre><code>([\s\S]*?)<\/code><\/pre>/g, (_, code) => {
+    const plain = code.replace(/<[^>]+>/g, "");
+    return "\n" + plain.split("\n").map((l) => "    " + l).join("\n") + "\n";
+  });
+  t = t.replace(/<(h2|h3)[^>]*>([\s\S]*?)<\/\1>/g, (_, tag, inner) => "\n" + (tag === "h2" ? "## " : "### ") + inner.replace(/<[^>]+>/g, "") + "\n");
+  t = t.replace(/<li[^>]*>/g, "\n- ").replace(/<\/li>/g, "");
+  t = t.replace(/<\/t[dh]>/g, " · ").replace(/<tr[^>]*>/g, "\n");
+  t = t.replace(/<\/(p|div|ul|ol|table)>/g, "\n");
+  t = t.replace(/<[^>]+>/g, "");
+  t = unesc(t);
+  return t.replace(/[ \t]+\n/g, "\n").replace(/ · \n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+const bySlug = new Map(EMITTED.map((p) => [p.slug, p]));
+const pageURL = (slug) => (slug === "" ? SITE + "/docs/" : SITE + "/docs/" + slug + "/");
+
+let llms = `# sluice
+
+> Open-source database migration and continuous-sync CLI: migrate and sync MySQL ↔ Postgres in all four directions, plus SQLite / Cloudflare D1 import and continuous sync — correctness-first, loud failure by default.
+
+sluice is a single Go binary. Every command is non-interactive (flags, environment variables, and an optional YAML config — no prompts, ever), destructive operations require explicit opt-in flags, credentials resolve env-first, and machine-readable output is available via \`--log-format json\` and per-command \`--format json\`. The documentation below is also maintained as markdown in the source repository — for LLM consumption the raw markdown links in the "Source-repo markdown" section are the best format.
+`;
+
+for (const g of NAV) {
+  llms += `\n## ${g.group}\n\n`;
+  for (const it of g.items) {
+    const p = bySlug.get(it.slug);
+    const note = p && p.subtitle ? ": " + p.subtitle : "";
+    llms += `- [${it.label}](${pageURL(it.slug)})${note}\n`;
+  }
+}
+
+llms += `
+## Source-repo markdown (best for LLMs)
+
+- [README](${RAW}/README.md): project overview, quick start, engine list, CLI command table
+- [Architecture](${RAW}/docs/architecture.md): the typed IR, engine pattern, orchestrator, capability model
+- [Type mapping](${RAW}/docs/type-mapping.md): cross-engine type translation policies, extension types, override tokens
+- [Value types](${RAW}/docs/value-types.md): the runtime row-value contract (what each IR type holds at copy time)
+- [Cookbook](https://github.com/sluicesync/sluice/tree/main/docs/cookbook): task-shaped recipes (one-shot migrate, zero-downtime cutover, encrypted backup chains, PII redaction)
+- [ADR index](${RAW}/docs/adr/README.md): every architecture decision record with a one-line summary
+- [Security policy](${RAW}/SECURITY.md): threat model, the source-trust boundary, credential handling, reporting
+
+## Optional
+
+- [Full documentation as one plain-text file](${SITE}/llms-full.txt)
+- [GitHub repository](https://github.com/sluicesync/sluice)
+- [Release notes archive](https://github.com/sluicesync/sluice/tree/main/docs/releases)
+`;
+
+writeFileSync(join(ROOT, "llms.txt"), llms);
+console.log("wrote llms.txt");
+
+let full = `# sluice — full documentation (plain text)
+
+Generated from the same sources as ${SITE}/docs/ — regenerate with \`node build.mjs\`. Curated index: ${SITE}/llms.txt
+
+`;
+for (const p of EMITTED) {
+  full += `\n\n===============================================================\n# ${p.title}\n(${pageURL(p.slug)})\n`;
+  if (p.subtitle) full += `\n${p.subtitle}\n`;
+  full += `\n${textify(p.body)}\n`;
+}
+writeFileSync(join(ROOT, "llms-full.txt"), full);
+console.log("wrote llms-full.txt");
 
 console.log("done.");
