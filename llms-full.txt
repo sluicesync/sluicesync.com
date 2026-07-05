@@ -2544,7 +2544,11 @@ Every chain-root manifest carries a FormatVersion. It exists to prevent one spec
 
 - FormatVersion=2 — the schema contains at least one of: row-level security enabled or forced, one or more RLS policies, or one or more EXCLUDE constraints. Only sluice v0.94.1+ restores it.
 
-The rule is proportional: a manifest gets the minimum version safe for its actual contents, so a typical CRUD database with no RLS and no EXCLUDE constraints stays at FormatVersion=1 and cross-version restore behaves exactly as before. The value is derived from the schema — there's no flag to set. Audit it with jq .format_version manifest.json.
+- FormatVersion=4 — the schema carries one or more standalone sequences (v0.99.175+). An older binary would silently restore the target without the sequence object — its custom START/INCREMENT options and nextval() topology gone — so it refuses loudly at preflight instead.
+
+FormatVersion=3 is a special case: it marks an in-progress full backup in the sidecar-checkpoint layout (v0.99.39+) and is never stamped on a finalized manifest, so a completed backup you restore is only ever 1, 2, or 4. It exists so an older binary refuses to resume an in-progress backup it can't account for, rather than mis-resuming off a base manifest that under-reports progress.
+
+The rule is proportional: a manifest gets the minimum version safe for its actual contents, so a typical CRUD database with no RLS, no EXCLUDE constraints, and no standalone sequences stays at FormatVersion=1 and cross-version restore behaves exactly as before. The value is derived from the schema — there's no flag to set. Audit it with jq .format_version manifest.json.
 
 Point a pre-v0.94.1 binary at a FormatVersion=2 chain and its restore preflight trips before any DDL or data lands: it exits with manifest format version 2 is newer than this build supports (1); upgrade sluice and creates zero relations on the target. The refuse-before-touch property is load-bearing — there is no code path on the older binary where the chain is partially applied with RLS or EXCLUDE metadata stripped. The silent-loss class is structurally impossible (Bug 116, closed in v0.94.1). Full contract: backup-format-versioning.md.
 
