@@ -26,6 +26,7 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 - [Operate a sync fleet](https://sluicesync.com/docs/operate-fleet/): Supervise many continuous syncs from one process — failure-isolated, observable, and reconfigurable without a restart.
 - [Take encrypted backups](https://sluicesync.com/docs/encrypted-backups/): sluice's logical backup model in depth — chains, compression, encryption at rest, object stores, retention, and restore.
 - [Sync from a backup chain](https://sluicesync.com/docs/from-backup-sync/): Replay a backup chain into a target as a long-running broker — no direct source↔target connectivity required.
+- [Drive sluice from an AI agent](https://sluicesync.com/docs/agent-skills/): sluice ships task-scoped agent skills — plain-markdown playbooks that let Claude Code, Cursor, or any skill-aware assistant run a migration, verify a sync, or operate a backup chain on your behalf, inside the same safety gate.
 
 ## Reference
 

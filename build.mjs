@@ -49,6 +49,7 @@ const NAV = [
       { slug: "operate-fleet", label: "Operate a sync fleet" },
       { slug: "encrypted-backups", label: "Take encrypted backups" },
       { slug: "from-backup-sync", label: "Sync from a backup chain" },
+      { slug: "agent-skills", label: "Drive sluice from an AI agent" },
     ],
   },
   {
@@ -121,6 +122,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "planetscale-vitess",
     "operate-fleet",
     "encrypted-backups",
+    "agent-skills",
   ];
   const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
   const top = '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>';
@@ -1313,6 +1315,68 @@ ${pre(`sluice sync from-backup stop --backup-target s3://my-bucket/app-chain`)}
 <div class="note">The broker follows segment-rotation seams automatically and is restart-resilient on both sides — its idempotent applier absorbs any overlap on resume. Two consumers must use <strong>distinct</strong> <code>--stream-id</code>s for distinct targets, or they'll race on position writes. To rest the chain encrypted, the broker accepts the same encryption flags as the rest of the backup family — see the <a href="/docs/commands/#backup">backup reference</a>.</div>
 `,
     prev: { href: "/docs/encrypted-backups/", label: "Take encrypted backups" },
+    next: { href: "/docs/agent-skills/", label: "Drive sluice from an AI agent" },
+  })
+);
+
+// ---- Guide: drive sluice from an AI agent (skills) -----------------------
+write(
+  "agent-skills",
+  page({
+    slug: "agent-skills",
+    title: "Drive sluice from an AI agent",
+    subtitle: "sluice ships task-scoped agent skills — plain-markdown playbooks that let Claude Code, Cursor, or any skill-aware assistant run a migration, verify a sync, or operate a backup chain on your behalf, inside the same safety gate.",
+    body: `
+<p>sluice ships a set of <strong>agent skills</strong>: task-scoped operator playbooks that let an AI coding agent — <a href="https://www.anthropic.com/claude-code">Claude Code</a>, Cursor, or anything that follows the <a href="/llms.txt">open agent-skills convention</a> — drive the <code>sluice</code> CLI for one concrete job. Each skill is a plain <code>SKILL.md</code> file: no plugins, nothing agent-specific, versioned in the source repo alongside the CLI it drives. They live under <a href="https://github.com/sluicesync/sluice/tree/main/skills"><code>skills/</code></a> in the repository.</p>
+
+<h2 id="why">Why sluice ships them</h2>
+<p>sluice already exposes a machine-readable surface built for assistants: an <a href="https://github.com/sluicesync/sluice/blob/main/AGENTS.md"><code>AGENTS.md</code></a> command taxonomy, an <a href="/llms.txt"><code>llms.txt</code></a> docs index, per-command <code>--format json</code> envelopes, stable <code>SLUICE-E-*</code> error codes, and a documented exit taxonomy. A skill sits <em>on top</em> of that surface. It does not re-document the CLI — it references those canonical sources and encodes the <strong>decision tree</strong> for a single task: what to run, how to read the result back, what to report, and where a human must approve before anything changes. One skill, one task, one go/no-go.</p>
+
+<h2 id="catalog">The catalog</h2>
+<p>Nine skills ship today, in two tiers.</p>
+<h3>Tier 1 — the core loop</h3>
+<table><thead><tr><th>Skill</th><th>Use it to</th><th>Writes?</th></tr></thead><tbody>
+<tr><td><code>migrate-preflight</code></td><td class="desc">Assess a migrate or sync before running it → a go/no-go with the risks named.</td><td>read-only</td></tr>
+<tr><td><code>fidelity-verify</code></td><td class="desc">Confirm a completed migrate / sync / restore is faithful → a fidelity report.</td><td>read-only</td></tr>
+<tr><td><code>sluice-error-triage</code></td><td class="desc">Turn a <code>SLUICE-E-*</code> code + exit code into a root cause and a recovery path.</td><td>read-only</td></tr>
+<tr><td><code>backup-chain-operator</code></td><td class="desc">Plan and operate an encrypted <a href="/docs/encrypted-backups/">backup chain</a> (full → incremental → compact → prune → restore-test).</td><td>gated</td></tr>
+</tbody></table>
+<h3>Tier 2 — operational + engine-specific</h3>
+<table><thead><tr><th>Skill</th><th>Use it to</th><th>Writes?</th></tr></thead><tbody>
+<tr><td><code>cdc-sync-operator</code></td><td class="desc">Stand up and operate <a href="/docs/zero-downtime-cutover/">continuous sync</a> (cold-start → CDC → cutover).</td><td>gated</td></tr>
+<tr><td><code>planetscale-migration</code></td><td class="desc">Migrate or sync against <a href="/docs/planetscale-vitess/">PlanetScale / Vitess</a> (VStream, reparent, ownership, metrics-watch).</td><td>gated</td></tr>
+<tr><td><code>fleet-operator</code></td><td class="desc">Operate a <a href="/docs/operate-fleet/"><code>sync run</code> fleet</a> — many syncs in one process.</td><td>gated</td></tr>
+<tr><td><code>redaction-setup</code></td><td class="desc">Configure and verify <a href="/docs/redact-pii/">PII redaction</a> during migrate / sync.</td><td>gated</td></tr>
+<tr><td><code>sqlite-d1-import</code></td><td class="desc"><a href="/docs/import-sqlite-d1/">Import SQLite / Cloudflare D1</a> (<code>--stage-local</code>, <code>--infer-types</code>, big-int / CPU gotchas).</td><td>gated</td></tr>
+</tbody></table>
+
+<h2 id="safety">The safety gate</h2>
+<p>Every skill honors sluice's command taxonomy — the same gate a careful human operator uses:</p>
+<ul>
+  <li><strong>Read-only</strong> commands (<code>--dry-run</code>, <code>verify</code>, <code>schema preview</code> / <code>diff</code>, <code>sync health</code> / <code>status</code>, <code>backup verify</code>, <code>engines</code>) run freely.</li>
+  <li><strong>State-changing</strong> commands (<code>migrate</code>, <code>sync start</code> / <code>run</code>, <code>backup *</code>, <code>restore</code>, <code>cutover</code>) run only as part of an approved task.</li>
+  <li><strong>Destructive flags</strong> (<code>--reset-target-data</code>, <code>--force-cold-start</code>, <code>--yes</code>, <code>backup prune</code> / <code>compact</code> without <code>--dry-run</code>) are <strong>never</strong> passed without explicit human approval for <em>that specific invocation</em>.</li>
+</ul>
+<div class="note">Every skill also follows sluice's own discipline: <strong>verify by reading state back, never trust an exit code alone</strong>, and treat <code>status:"refused"</code> / exit 3 as a decision point — surface <code>error.hint</code> and wait, don't retry the command unchanged.</div>
+
+<h2 id="getting-started">Getting started</h2>
+<ol>
+  <li><strong>Install the CLI.</strong> You need the <code>sluice</code> binary — <code>brew install sluicesync/tap/sluice</code>, <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code>, or the <code>ghcr.io/sluicesync/sluice</code> container (see <a href="/docs/getting-started/#install">Getting started</a>).</li>
+  <li><strong>Install the skills.</strong> Run the setup script from a checkout of the repo — it detects the agents present and installs each <code>SKILL.md</code> into the right place:
+${pre(`./skills/install.sh`)}
+  For Claude Code that is <code>~/.claude/skills/&lt;name&gt;/SKILL.md</code> (personal, all projects) or <code>.claude/skills/&lt;name&gt;/SKILL.md</code> (checked into a project); Cursor and others have equivalents. Because the skills are just markdown, you can also copy the directories by hand.</li>
+  <li><strong>Describe the task in natural language.</strong> The matching skill's trigger loads it automatically — "migrate this Postgres DB to PlanetScale" pulls in <code>migrate-preflight</code>; "why did this restore fail?" pulls in <code>sluice-error-triage</code> — or invoke one explicitly (<code>/migrate-preflight</code>).</li>
+  <li><strong>Review the go/no-go.</strong> The skill drives the CLI on your behalf and returns a go/no-go, a report, or a gated action — and stops at the safety gate for your approval before anything writes.</li>
+</ol>
+
+<h2 id="learn-more">Learn more</h2>
+<ul>
+  <li><a href="https://github.com/sluicesync/sluice/tree/main/skills"><code>skills/</code> in the repository</a> — every <code>SKILL.md</code>, the catalog, and <code>install.sh</code>.</li>
+  <li><a href="/llms.txt"><code>llms.txt</code></a> and <a href="/llms-full.txt"><code>llms-full.txt</code></a> — the AI-assistant docs index the skills point at.</li>
+  <li><a href="https://github.com/sluicesync/sluice/blob/main/AGENTS.md"><code>AGENTS.md</code></a> — the command taxonomy, standard workflow, JSON-envelope shape, and env-first credentials that the safety gate is built on.</li>
+</ul>
+`,
+    prev: { href: "/docs/from-backup-sync/", label: "Sync from a backup chain" },
     next: { href: "/docs/commands/", label: "Command reference" },
   })
 );
@@ -2158,6 +2222,7 @@ sluice backup full --source-driver postgres --source 'postgres://...' \\
 
 <h3>Per-chain vs per-chunk</h3>
 <p><code>--encrypt-mode</code> chooses the CEK granularity: <code>per-chain</code> (default) uses one CEK for the whole chain — a single KEK derive / KMS <code>Decrypt</code> per restore; <code>per-chunk</code> uses a fresh CEK per chunk for defense-in-depth at the cost of a per-chunk wrap. Most operators want the default.</p>
+<div class="note"><strong>One mode per chain.</strong> A chain uses a single encryption mode for every segment. Set <code>--encrypt-mode per-chain</code> or <code>per-chunk</code> on the <code>backup full</code> that roots the chain; on each <code>backup incremental</code>, <code>backup stream</code>, or resumed <code>backup full</code>, <strong>omit <code>--encrypt-mode</code> so the segment inherits the chain's mode</strong>. Passing an explicit mode that conflicts with the chain's recorded mode is refused at build time (as of v0.99.185) rather than silently producing a mixed-mode chain.</div>
 
 <h2 id="format-version">The FormatVersion refuse-before-touch contract</h2>
 <p>Every chain-root manifest carries a <code>FormatVersion</code>. It exists to prevent one specific silent-loss class: an older sluice binary restoring a chain and <em>silently dropping</em> security-or-correctness metadata it doesn't understand.</p>
