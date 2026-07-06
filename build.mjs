@@ -46,6 +46,7 @@ const NAV = [
       { slug: "multi-database", label: "Migrate many databases or schemas" },
       { slug: "postgres-source-prep", label: "Prepare a Postgres source" },
       { slug: "planetscale-vitess", label: "PlanetScale & Vitess" },
+      { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
       { slug: "operate-fleet", label: "Operate a sync fleet" },
       { slug: "encrypted-backups", label: "Take encrypted backups" },
       { slug: "from-backup-sync", label: "Sync from a backup chain" },
@@ -164,6 +165,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "redact-pii",
     "postgres-source-prep",
     "planetscale-vitess",
+    "planetscale-region-move",
     "operate-fleet",
     "encrypted-backups",
     "agent-skills",
@@ -2095,6 +2097,94 @@ ${pre(`sluice metrics-watch \\
 </ul>
 `,
     prev: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
+    next: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
+  })
+);
+
+// nav-label: Move PlanetScale regions
+write(
+  "planetscale-region-move",
+  page({
+    slug: "planetscale-region-move",
+    title: "Move a PlanetScale database between regions",
+    subtitle: "PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.",
+    body: `
+<p>A PlanetScale database is pinned to its region at creation, and there is no in-place region move. The path is straightforward: create a <strong>new</strong> PS-MySQL database in the <em>target</em> region, then use sluice to copy the data across — either a <strong>zero-downtime continuous sync + cutover</strong> (recommended) or a <strong>one-shot migrate</strong>. Both directions are MySQL→MySQL, so no cross-engine type translation is involved. Datasets that need this are typically well under 10&nbsp;GB.</p>
+
+<h2 id="connect">Provision the target &amp; connect</h2>
+<p>Create the destination database in the new region, sized to match (or exceed) the source. A PS-10 branch takes roughly 7–8 minutes to reach <code>READY</code>:</p>
+${pre(`pscale database create app-eu --region aws-sa-east-1 --cluster-size PS-10`)}
+<p>Both the source and the target reach PlanetScale through the <strong>same</strong> global connect host, <code>aws.connect.psdb.cloud:3306</code> — PlanetScale routes to the right region by <em>credential</em>, not by hostname. The connection strings are standard go-sql-driver MySQL DSNs, and <code>?tls=true</code> is <strong>required</strong> on both:</p>
+${pre(`# source (CDC read) — export as SLUICE_SOURCE
+USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-us?tls=true
+
+# target (write) — export as SLUICE_TARGET
+USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-eu?tls=true`)}
+<p><code>USERNAME</code> is the generated <code>username</code> field returned by <code>pscale password create &lt;db&gt; &lt;branch&gt; &lt;label&gt;</code> — <em>not</em> the label you pass on the command line — and <code>PASSWORD</code> is its <code>plain_text</code> value. Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting the DSN in argv, so credentials don't land in your shell history or process list.</p>
+<div class="note warn"><strong>The target driver is <code>planetscale</code>, not <code>mysql</code>.</strong> The <code>mysql</code> engine cold-copies with <code>LOAD DATA INFILE</code>, which Vitess/PlanetScale blocks; the <code>planetscale</code> engine uses batched inserts and speaks VStream for CDC. Use <code>--source-driver planetscale</code> and <code>--target-driver planetscale</code> on both ends.</div>
+<div class="note"><strong>The target password needs <code>--role admin</code>.</strong> sluice creates the data tables plus (for a sync) small control tables, and lesser roles (<code>reader</code>/<code>writer</code>/<code>readwriter</code>) are denied DDL on a production branch. Mint it with <code>pscale password create app-eu main mover --role admin</code>. The source password only needs read access.</div>
+<div class="note"><strong>Current-version flag.</strong> On unsharded PlanetScale databases, sluice ≤ v0.99.189 currently requires <code>--allow-cross-shard-merge</code> on <code>sync start</code> / <code>migrate</code> because of a shard-detection quirk (a fix is in progress). It is safe on a normal single-shard database, and the examples below include it so they work as shown.</div>
+
+<h2 id="zero-downtime">Option A — zero-downtime (recommended)</h2>
+<p>A continuous sync snapshots and bulk-copies the source, then streams live CDC — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. Start with a dry-run to review the plan, then launch the long-lived stream:</p>
+${pre(`# review the plan first
+sluice sync start \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver planetscale --target "$SLUICE_TARGET" \\
+    --allow-cross-shard-merge --dry-run --format json
+
+# launch the long-lived stream (snapshot -> bulk copy -> live CDC)
+sluice sync start \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver planetscale --target "$SLUICE_TARGET" \\
+    --apply-batch-size 50 --allow-cross-shard-merge`)}
+<p>Watch it catch up from another shell, and gate cutover on freshness:</p>
+${pre(`sluice sync status
+sluice sync health --max-stale-seconds 30`)}
+<p>At ~1.2&nbsp;GB the cold-start-to-tailing transition took about <strong>5 minutes</strong> in testing (bulk copy ~4&nbsp;MB/s, PS-10 CPU-bound — a larger cluster tier is the throughput lever). Once the stream is tailing, cut over: <code>cutover</code> primes the target's <code>AUTO_INCREMENT</code> past the source's, with a safety margin, so the application can start writing to the target without primary-key collisions. Then stop the stream and verify:</p>
+${pre(`sluice cutover \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver planetscale --target "$SLUICE_TARGET"
+
+sluice sync stop --stream-id <id> --wait
+sluice verify`)}
+<div class="note"><strong>Wait for caught-up before cutover.</strong> A <em>trickle</em> of changes can take tens of seconds to ~2 minutes to appear on the target — that latency is PlanetScale VStream's roughly 60&nbsp;s server-side delivery cadence, <em>not</em> sluice (the applier commits within seconds of <em>receiving</em> an event). Under sustained write load, lag stays low. So before you cut over, wait for <code>sync health</code> / <code>verify</code> to report caught-up rather than trusting a fixed timer.</div>
+<div class="note"><strong>Keep <code>--apply-batch-size</code> in the 25–50 range on a PS target.</strong> Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here.</div>
+
+<h2 id="one-shot">Option B — one-shot migrate</h2>
+<p>If you can take a short maintenance window, a one-shot migrate is simpler — one command, no control tables left behind, and <code>identity_sync</code> auto-primes <code>AUTO_INCREMENT</code> so there's no separate cutover step:</p>
+${pre(`sluice migrate \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver planetscale --target "$SLUICE_TARGET" \\
+    --allow-cross-shard-merge --dry-run
+
+sluice migrate \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver planetscale --target "$SLUICE_TARGET" \\
+    --allow-cross-shard-merge
+
+sluice verify`)}
+<p>The catch: a migrate is a point-in-time copy with <strong>no CDC</strong>, so any row written to the source after it starts is missed. That means you must <strong>freeze writes to the source for the entire copy window</strong> — about <strong>14 minutes</strong> for the 1.2&nbsp;GB test dataset. It's a good fit for a small database you can quiesce briefly.</p>
+
+<h2 id="which">Which to choose</h2>
+<p>Zero-downtime (Option A) is the better default for a real region move: no write freeze, and in testing it was also about <strong>3× faster on the bulk copy</strong> than one-shot (~5 minutes vs ~14 minutes for the same 1.2&nbsp;GB). One-shot (Option B) wins only on simplicity, when a brief maintenance window is acceptable and you'd rather not run a long-lived stream or a separate cutover.</p>
+
+<h2 id="notes">Before you start &amp; gotchas</h2>
+<ul>
+  <li><strong>Foreign keys.</strong> Vitess rejects <code>FOREIGN KEY</code> DDL (<code>VT10001</code>). If the source schema declares foreign keys, they must be dropped (kept as plain indexed columns) before the move. This applies to <em>any</em> DDL against PlanetScale, not just sluice.</li>
+  <li><strong><code>--allow-cross-shard-merge</code></strong> is currently required on unsharded databases — see the current-version note under <a href="#connect">Provision the target</a>.</li>
+  <li><strong>The <code>sync stop --wait</code> drain message.</strong> On VStream teardown, <code>sync stop --wait</code> may print a "did not complete drain within …" timeout even though the stream <em>did</em> drain and exit cleanly. Verify the process actually exited rather than treating that message alone as a failure.</li>
+  <li><strong>Throughput is target-tier-CPU-bound.</strong> The bulk copy is limited by the target cluster's CPU; scale the tier for a faster copy.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a> — the flavor, cold-start throughput knobs, and VStream lag reality in depth.</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the snapshot→CDC cutover flow, engine-agnostic.</li>
+  <li><a href="/docs/commands/#sync-start">sync start reference</a> — every flag named here, with defaults.</li>
+</ul>
+`,
+    prev: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
     next: { href: "/docs/operate-fleet/", label: "Operate a sync fleet" },
   })
 );
@@ -2202,7 +2292,7 @@ sluice sync tui --connect :9300 --refresh 2s`)}
 <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the single-stream cutover flow each fleet sync runs internally.</li>
 </ul>
 `,
-    prev: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
+    prev: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
     next: { href: "/docs/encrypted-backups/", label: "Take encrypted backups" },
   })
 );

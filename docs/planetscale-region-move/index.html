@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Move a PlanetScale database between regions — sluice docs</title>
+<meta name="description" content="PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/planetscale-region-move/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk active" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Move a PlanetScale database between regions</h1>
+    <p class="subtitle">PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#connect">Provision the target &amp; connect</a></li><li><a href="#zero-downtime">Option A — zero-downtime (recommended)</a></li><li><a href="#one-shot">Option B — one-shot migrate</a></li><li><a href="#which">Which to choose</a></li><li><a href="#notes">Before you start &amp; gotchas</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>A PlanetScale database is pinned to its region at creation, and there is no in-place region move. The path is straightforward: create a <strong>new</strong> PS-MySQL database in the <em>target</em> region, then use sluice to copy the data across — either a <strong>zero-downtime continuous sync + cutover</strong> (recommended) or a <strong>one-shot migrate</strong>. Both directions are MySQL→MySQL, so no cross-engine type translation is involved. Datasets that need this are typically well under 10&nbsp;GB.</p>
+
+<h2 id="connect">Provision the target &amp; connect <a class="hlink" href="#connect" aria-label="Permalink to this section">#</a></h2>
+<p>Create the destination database in the new region, sized to match (or exceed) the source. A PS-10 branch takes roughly 7–8 minutes to reach <code>READY</code>:</p>
+<pre><code>pscale database create app-eu <span class="f">--region</span> aws-sa-east-1 <span class="f">--cluster-size</span> PS-10</code></pre>
+<p>Both the source and the target reach PlanetScale through the <strong>same</strong> global connect host, <code>aws.connect.psdb.cloud:3306</code> — PlanetScale routes to the right region by <em>credential</em>, not by hostname. The connection strings are standard go-sql-driver MySQL DSNs, and <code>?tls=true</code> is <strong>required</strong> on both:</p>
+<pre><code><span class="c"># source (CDC read) — export as SLUICE_SOURCE</span>
+USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-us?tls=true
+
+<span class="c"># target (write) — export as SLUICE_TARGET</span>
+USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-eu?tls=true</code></pre>
+<p><code>USERNAME</code> is the generated <code>username</code> field returned by <code>pscale password create &lt;db&gt; &lt;branch&gt; &lt;label&gt;</code> — <em>not</em> the label you pass on the command line — and <code>PASSWORD</code> is its <code>plain_text</code> value. Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting the DSN in argv, so credentials don't land in your shell history or process list.</p>
+<div class="note warn"><strong>The target driver is <code>planetscale</code>, not <code>mysql</code>.</strong> The <code>mysql</code> engine cold-copies with <code>LOAD DATA INFILE</code>, which Vitess/PlanetScale blocks; the <code>planetscale</code> engine uses batched inserts and speaks VStream for CDC. Use <code>--source-driver planetscale</code> and <code>--target-driver planetscale</code> on both ends.</div>
+<div class="note"><strong>The target password needs <code>--role admin</code>.</strong> sluice creates the data tables plus (for a sync) small control tables, and lesser roles (<code>reader</code>/<code>writer</code>/<code>readwriter</code>) are denied DDL on a production branch. Mint it with <code>pscale password create app-eu main mover --role admin</code>. The source password only needs read access.</div>
+<div class="note"><strong>Current-version flag.</strong> On unsharded PlanetScale databases, sluice ≤ v0.99.189 currently requires <code>--allow-cross-shard-merge</code> on <code>sync start</code> / <code>migrate</code> because of a shard-detection quirk (a fix is in progress). It is safe on a normal single-shard database, and the examples below include it so they work as shown.</div>
+
+<h2 id="zero-downtime">Option A — zero-downtime (recommended) <a class="hlink" href="#zero-downtime" aria-label="Permalink to this section">#</a></h2>
+<p>A continuous sync snapshots and bulk-copies the source, then streams live CDC — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. Start with a dry-run to review the plan, then launch the long-lived stream:</p>
+<pre><code><span class="c"># review the plan first</span>
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET" \
+    <span class="f">--allow-cross-shard-merge</span> <span class="f">--dry-run</span> <span class="f">--format</span> json
+
+<span class="c"># launch the long-lived stream (snapshot -&gt; bulk copy -&gt; live CDC)</span>
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET" \
+    <span class="f">--apply-batch-size</span> 50 <span class="f">--allow-cross-shard-merge</span></code></pre>
+<p>Watch it catch up from another shell, and gate cutover on freshness:</p>
+<pre><code><span class="k">sluice</span> sync status
+<span class="k">sluice</span> sync health <span class="f">--max-stale-seconds</span> 30</code></pre>
+<p>At ~1.2&nbsp;GB the cold-start-to-tailing transition took about <strong>5 minutes</strong> in testing (bulk copy ~4&nbsp;MB/s, PS-10 CPU-bound — a larger cluster tier is the throughput lever). Once the stream is tailing, cut over: <code>cutover</code> primes the target's <code>AUTO_INCREMENT</code> past the source's, with a safety margin, so the application can start writing to the target without primary-key collisions. Then stop the stream and verify:</p>
+<pre><code><span class="k">sluice</span> cutover \
+    <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET"
+
+<span class="k">sluice</span> sync stop <span class="f">--stream-id</span> &lt;id&gt; <span class="f">--wait</span>
+<span class="k">sluice</span> verify</code></pre>
+<div class="note"><strong>Wait for caught-up before cutover.</strong> A <em>trickle</em> of changes can take tens of seconds to ~2 minutes to appear on the target — that latency is PlanetScale VStream's roughly 60&nbsp;s server-side delivery cadence, <em>not</em> sluice (the applier commits within seconds of <em>receiving</em> an event). Under sustained write load, lag stays low. So before you cut over, wait for <code>sync health</code> / <code>verify</code> to report caught-up rather than trusting a fixed timer.</div>
+<div class="note"><strong>Keep <code>--apply-batch-size</code> in the 25–50 range on a PS target.</strong> Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here.</div>
+
+<h2 id="one-shot">Option B — one-shot migrate <a class="hlink" href="#one-shot" aria-label="Permalink to this section">#</a></h2>
+<p>If you can take a short maintenance window, a one-shot migrate is simpler — one command, no control tables left behind, and <code>identity_sync</code> auto-primes <code>AUTO_INCREMENT</code> so there's no separate cutover step:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET" \
+    <span class="f">--allow-cross-shard-merge</span> <span class="f">--dry-run</span>
+
+<span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET" \
+    <span class="f">--allow-cross-shard-merge</span>
+
+<span class="k">sluice</span> verify</code></pre>
+<p>The catch: a migrate is a point-in-time copy with <strong>no CDC</strong>, so any row written to the source after it starts is missed. That means you must <strong>freeze writes to the source for the entire copy window</strong> — about <strong>14 minutes</strong> for the 1.2&nbsp;GB test dataset. It's a good fit for a small database you can quiesce briefly.</p>
+
+<h2 id="which">Which to choose <a class="hlink" href="#which" aria-label="Permalink to this section">#</a></h2>
+<p>Zero-downtime (Option A) is the better default for a real region move: no write freeze, and in testing it was also about <strong>3× faster on the bulk copy</strong> than one-shot (~5 minutes vs ~14 minutes for the same 1.2&nbsp;GB). One-shot (Option B) wins only on simplicity, when a brief maintenance window is acceptable and you'd rather not run a long-lived stream or a separate cutover.</p>
+
+<h2 id="notes">Before you start &amp; gotchas <a class="hlink" href="#notes" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>Foreign keys.</strong> Vitess rejects <code>FOREIGN KEY</code> DDL (<code>VT10001</code>). If the source schema declares foreign keys, they must be dropped (kept as plain indexed columns) before the move. This applies to <em>any</em> DDL against PlanetScale, not just sluice.</li>
+  <li><strong><code>--allow-cross-shard-merge</code></strong> is currently required on unsharded databases — see the current-version note under <a href="#connect">Provision the target</a>.</li>
+  <li><strong>The <code>sync stop --wait</code> drain message.</strong> On VStream teardown, <code>sync stop --wait</code> may print a "did not complete drain within …" timeout even though the stream <em>did</em> drain and exit cleanly. Verify the process actually exited rather than treating that message alone as a failure.</li>
+  <li><strong>Throughput is target-tier-CPU-bound.</strong> The bulk copy is limited by the target cluster's CPU; scale the tier for a faster copy.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a> — the flavor, cold-start throughput knobs, and VStream lag reality in depth.</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the snapshot→CDC cutover flow, engine-agnostic.</li>
+  <li><a href="/docs/commands/#sync-start">sync start reference</a> — every flag named here, with defaults.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/planetscale-vitess/">← PlanetScale & Vitess</a><a class="next" href="/docs/operate-fleet/">Operate a sync fleet →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/planetscale-region-move/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
