@@ -2128,26 +2128,33 @@ USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-eu?tls=true`)}
 <h2 id="zero-downtime">Option A — zero-downtime (recommended)</h2>
 <p>A continuous sync snapshots and bulk-copies the source, then streams live CDC — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. Start with a dry-run to review the plan, then launch the long-lived stream:</p>
 ${pre(`# review the plan first
-sluice sync start \\
+sluice sync start --stream-id region-move \\
     --source-driver planetscale --source "$SLUICE_SOURCE" \\
     --target-driver planetscale --target "$SLUICE_TARGET" \\
     --allow-cross-shard-merge --dry-run --format json
 
 # launch the long-lived stream (snapshot -> bulk copy -> live CDC)
-sluice sync start \\
+sluice sync start --stream-id region-move \\
     --source-driver planetscale --source "$SLUICE_SOURCE" \\
     --target-driver planetscale --target "$SLUICE_TARGET" \\
     --apply-batch-size 50 --allow-cross-shard-merge`)}
 <p>Watch it catch up from another shell, and gate cutover on freshness:</p>
-${pre(`sluice sync status
-sluice sync health --max-stale-seconds 30`)}
+${pre(`sluice sync status --stream-id region-move \\
+    --target-driver planetscale --target "$SLUICE_TARGET"
+
+sluice sync health --stream-id region-move \\
+    --target-driver planetscale --target "$SLUICE_TARGET" --max-stale-seconds 30`)}
 <p>At ~1.2&nbsp;GB the cold-start-to-tailing transition took about <strong>5 minutes</strong> in testing (bulk copy ~4&nbsp;MB/s, PS-10 CPU-bound — a larger cluster tier is the throughput lever). Once the stream is tailing, cut over: <code>cutover</code> primes the target's <code>AUTO_INCREMENT</code> past the source's, with a safety margin, so the application can start writing to the target without primary-key collisions. Then stop the stream and verify:</p>
 ${pre(`sluice cutover \\
     --source-driver planetscale --source "$SLUICE_SOURCE" \\
     --target-driver planetscale --target "$SLUICE_TARGET"
 
-sluice sync stop --stream-id <id> --wait
-sluice verify`)}
+sluice sync stop --stream-id region-move \\
+    --target-driver planetscale --target "$SLUICE_TARGET" --wait
+
+sluice verify \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver planetscale --target "$SLUICE_TARGET"`)}
 <div class="note"><strong>Wait for caught-up before cutover.</strong> A <em>trickle</em> of changes can take tens of seconds to ~2 minutes to appear on the target — that latency is PlanetScale VStream's roughly 60&nbsp;s server-side delivery cadence, <em>not</em> sluice (the applier commits within seconds of <em>receiving</em> an event). Under sustained write load, lag stays low. So before you cut over, wait for <code>sync health</code> / <code>verify</code> to report caught-up rather than trusting a fixed timer.</div>
 <div class="note"><strong>Keep <code>--apply-batch-size</code> in the 25–50 range on a PS target.</strong> Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here.</div>
 
@@ -2163,7 +2170,9 @@ sluice migrate \\
     --target-driver planetscale --target "$SLUICE_TARGET" \\
     --allow-cross-shard-merge
 
-sluice verify`)}
+sluice verify \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver planetscale --target "$SLUICE_TARGET"`)}
 <p>The catch: a migrate is a point-in-time copy with <strong>no CDC</strong>, so any row written to the source after it starts is missed. That means you must <strong>freeze writes to the source for the entire copy window</strong> — about <strong>14 minutes</strong> for the 1.2&nbsp;GB test dataset. It's a good fit for a small database you can quiesce briefly.</p>
 
 <h2 id="which">Which to choose</h2>
