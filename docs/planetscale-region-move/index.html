@@ -43,16 +43,16 @@
 
 <h2 id="connect">Provision the target &amp; connect <a class="hlink" href="#connect" aria-label="Permalink to this section">#</a></h2>
 <p>Create the destination database in the new region, sized to match (or exceed) the source. A PS-10 branch takes roughly 7–8 minutes to reach <code>READY</code>:</p>
-<pre><code>pscale database create app-eu <span class="f">--region</span> aws-sa-east-1 <span class="f">--cluster-size</span> PS-10</code></pre>
+<pre><code>pscale database create app-sa <span class="f">--region</span> aws-sa-east-1 <span class="f">--cluster-size</span> PS-10</code></pre>
 <p>Both the source and the target reach PlanetScale through the <strong>same</strong> global connect host, <code>aws.connect.psdb.cloud:3306</code> — PlanetScale routes to the right region by <em>credential</em>, not by hostname. The connection strings are standard go-sql-driver MySQL DSNs, and <code>?tls=true</code> is <strong>required</strong> on both:</p>
 <pre><code><span class="c"># source (CDC read) — export as SLUICE_SOURCE</span>
 USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-us?tls=true
 
 <span class="c"># target (write) — export as SLUICE_TARGET</span>
-USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-eu?tls=true</code></pre>
+USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-sa?tls=true</code></pre>
 <p><code>USERNAME</code> is the generated <code>username</code> field returned by <code>pscale password create &lt;db&gt; &lt;branch&gt; &lt;label&gt;</code> — <em>not</em> the label you pass on the command line — and <code>PASSWORD</code> is its <code>plain_text</code> value. Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting the DSN in argv, so credentials don't land in your shell history or process list.</p>
 <div class="note warn"><strong>The target driver is <code>planetscale</code>, not <code>mysql</code>.</strong> The <code>mysql</code> engine cold-copies with <code>LOAD DATA INFILE</code>, which Vitess/PlanetScale blocks; the <code>planetscale</code> engine uses batched inserts and speaks VStream for CDC. Use <code>--source-driver planetscale</code> and <code>--target-driver planetscale</code> on both ends.</div>
-<div class="note"><strong>The target password needs <code>--role admin</code>.</strong> sluice creates the data tables plus (for a sync) small control tables, and lesser roles (<code>reader</code>/<code>writer</code>/<code>readwriter</code>) are denied DDL on a production branch. Mint it with <code>pscale password create app-eu main mover --role admin</code>. The source password only needs read access.</div>
+<div class="note"><strong>The target password needs <code>--role admin</code>.</strong> sluice creates the data tables plus (for a sync) small control tables, and lesser roles (<code>reader</code>/<code>writer</code>/<code>readwriter</code>) are denied DDL on a production branch. Mint it with <code>pscale password create app-sa main mover --role admin</code>. The source password only needs read access.</div>
 <div class="note"><strong>No special flag for a normal database.</strong> On <strong>v0.99.190+</strong>, an ordinary <em>unsharded</em> PlanetScale database — the default, one keyspace per database — syncs and migrates with no extra flags. <code>--allow-cross-shard-merge</code> is only for a genuinely <em>sharded</em> source keyspace, where it opts out of the guard that stops rows from different shards colliding on a shared key (prefer <code>--inject-shard-column</code> when the key isn't globally unique across shards). On sluice ≤ v0.99.189 an unsharded database needed <code>--allow-cross-shard-merge</code> as a workaround for a shard-detection bug fixed in v0.99.190 — upgrade and drop it.</div>
 
 <h2 id="zero-downtime">Option A — zero-downtime (recommended) <a class="hlink" href="#zero-downtime" aria-label="Permalink to this section">#</a></h2>
