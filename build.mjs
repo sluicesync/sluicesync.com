@@ -145,6 +145,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#0d1b22">
 <link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="${slug === "" ? "/docs/index.md" : "/docs/" + slug + "/index.md"}" title="This page as Markdown (for AI agents)">
 </head>
 <body>
 <header class="top">
@@ -2347,7 +2348,7 @@ let llms = `# sluice
 
 > Open-source database migration and continuous-sync CLI: migrate and sync MySQL ↔ Postgres in all four directions, plus SQLite / Cloudflare D1 import and continuous sync — correctness-first, loud failure by default.
 
-sluice is a single Go binary. Every command is non-interactive (flags, environment variables, and an optional YAML config — no prompts, ever), destructive operations require explicit opt-in flags, credentials resolve env-first, and machine-readable output is available via \`--log-format json\` and per-command \`--format json\`. The documentation below is also maintained as markdown in the source repository — for LLM consumption the raw markdown links in the "Source-repo markdown" section are the best format.
+sluice is a single Go binary. Every command is non-interactive (flags, environment variables, and an optional YAML config — no prompts, ever), destructive operations require explicit opt-in flags, credentials resolve env-first, and machine-readable output is available via \`--log-format json\` and per-command \`--format json\`. The documentation below is also maintained as markdown in the source repository — for LLM consumption the raw markdown links in the "Source-repo markdown" section are the best format. Each site page below is additionally served as token-slim Markdown at its own URL with \`index.md\` appended (e.g. \`${SITE}/docs/getting-started/index.md\`), linked from every page via \`<link rel="alternate" type="text/markdown">\`.
 `;
 
 for (const g of NAV) {
@@ -2392,5 +2393,22 @@ for (const p of EMITTED) {
 }
 writeFileSync(join(ROOT, "llms-full.txt"), full);
 console.log("wrote llms-full.txt");
+
+// Per-page Markdown alternate: emit an index.md beside each page's index.html
+// so an agent landing on ONE doc page (via search or a link) can fetch just
+// that page as authored markdown — advertised via the <link rel="alternate"
+// type="text/markdown"> in each page head — instead of scraping the bloated
+// HTML or pulling the whole llms-full.txt. Reuses the same textify() the
+// llms-full build uses, so the per-page markdown stays in lockstep with the
+// site (a page added above is picked up automatically via EMITTED).
+for (const p of EMITTED) {
+  const dir = p.slug === "" ? join(ROOT, "docs") : join(ROOT, "docs", p.slug);
+  mkdirSync(dir, { recursive: true });
+  let md = `# ${p.title}\n`;
+  if (p.subtitle) md += `\n> ${p.subtitle}\n`;
+  md += `\n${textify(p.body)}\n\n---\nCanonical page: ${pageURL(p.slug)} · Full docs index: ${SITE}/llms.txt\n`;
+  writeFileSync(join(dir, "index.md"), md);
+}
+console.log("wrote per-page index.md (" + EMITTED.length + " pages)");
 
 console.log("done.");
