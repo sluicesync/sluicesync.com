@@ -253,9 +253,19 @@ List the database engines built into this binary and their bulk-load / CDC capab
 
 Engine · Role · Notes ·
 
+mysql · CDC source · migrate source & target · Vanilla MySQL: binlog (row-based) CDC and bulk LOAD DATA cold-copy. DSN user:pass@tcp(host:3306)/db. ·
+
+planetscale · CDC source · migrate source & target · PlanetScale MySQL flavor: VStream (gRPC) CDC and batched-insert cold-copy — Vitess blocks LOAD DATA, so use this, not mysql, against a *.psdb.cloud host. Auto-discovers the keyspace shard layout. ·
+
+vitess · CDC source · migrate source & target · Self-hosted Vitess/vtgate: shares the planetscale engine code (VStream CDC) with a self-hosted-vtgate capability set; warm-resumes since v0.99.44. ·
+
+postgres · CDC source · migrate source & target · Logical-replication (replication-slot) CDC and COPY cold-copy. Roles, extensions, and slot lifecycle are surfaced explicitly, never silently auto-handled. ·
+
 sqlite · migrate source (file or .sql dump) and target · Pure-Go modernc.org/sqlite, no CGO. Imports a binary .db or an auto-detected wrangler d1 export .sql dump into Postgres / MySQL; as a target emits a .db (decimals byte-exact as TEXT). Migrate only (no CDC). ·
 
 d1 · migrate source (live, lossless) · Reads a live Cloudflare D1 over its HTTP query API (token via CLOUDFLARE_API_TOKEN); per-column typeof() + CAST(… AS TEXT) / hex() projection makes integers above 253 and BLOBs round-trip exactly, and reads don't take D1 offline (ADR-0132). ·
+
+postgres-trigger · CDC source · Slot-less Postgres trigger-CDC: per-table AFTER triggers + a change-log watermark, for managed Postgres where a logical-replication slot isn't available. ·
 
 sqlite-trigger · CDC source · Trigger-based continuous sync from a local SQLite file: per-table AFTER triggers + a sluice_change_log watermark for exactly-once resume (ADR-0135). ·
 
