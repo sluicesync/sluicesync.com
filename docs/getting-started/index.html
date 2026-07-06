@@ -28,8 +28,9 @@
   <main class="content">
     <h1>Getting started</h1>
     <p class="subtitle">Install sluice, point it at a source and target, and run your first migration and continuous sync.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#install">Install</a></li><li><a href="#prerequisites">Prerequisites</a></li><li><a href="#connecting">Connecting to your databases</a></li><li><a href="#first-migration">Your first migration</a></li><li><a href="#sqlite-d1">Import a SQLite file or Cloudflare D1</a></li><li><a href="#first-sync">Your first continuous sync</a></li><li><a href="#verify">Verify the copy</a></li><li><a href="#backups">Set up backups</a></li><li><a href="#trigger-cdc">Trigger-based CDC (no replication slot / Bucardo-style)</a></li><li><a href="#next">Next steps</a></li></ul></nav>
     
-<h2 id="install">Install</h2>
+<h2 id="install">Install <a class="hlink" href="#install" aria-label="Permalink to this section">#</a></h2>
 <p>sluice is a single static binary with no daemon and no SaaS dependency. Install it with your platform's package manager:</p>
 <ul>
   <li><strong>macOS / Linux</strong> (Homebrew): <code>brew install sluicesync/tap/sluice</code></li>
@@ -44,7 +45,7 @@
 <pre><code><span class="k">sluice</span> <span class="f">--version</span>
 <span class="k">sluice</span> engines      # list the database engines built into this binary</code></pre>
 
-<h2 id="prerequisites">Prerequisites</h2>
+<h2 id="prerequisites">Prerequisites <a class="hlink" href="#prerequisites" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li>A <strong>source</strong> and a <strong>target</strong> database you can reach over the network.</li>
   <li>Engines available out of the box (nine — run <code>sluice engines</code> to confirm): <code>mysql</code>, the <code>planetscale</code> and self-hosted <code>vitess</code> MySQL flavors, <code>postgres</code>, <code>sqlite</code> and <code>d1</code> (migrate sources; <code>sqlite</code> is also a target), and the trigger-CDC engines <code>postgres-trigger</code>, <code>sqlite-trigger</code>, <code>d1-trigger</code>.</li>
@@ -52,7 +53,7 @@
   <li>SQLite and Cloudflare D1 are <strong>migrate sources</strong> (a local file, a <code>.sql</code> dump, or a live D1 over the HTTP query API) into Postgres or MySQL; SQLite is also a <strong>target</strong>. Their base engines are migrate-only — for continuous sync use the trigger-CDC variants <code>sqlite-trigger</code> / <code>d1-trigger</code>.</li>
 </ul>
 
-<h2 id="connecting">Connecting to your databases</h2>
+<h2 id="connecting">Connecting to your databases <a class="hlink" href="#connecting" aria-label="Permalink to this section">#</a></h2>
 <p>Source and target are passed as DSNs (connection strings). The driver is named separately with <code>--source-driver</code> / <code>--target-driver</code>.</p>
 <table>
 <thead><tr><th>Engine</th><th>DSN format</th></tr></thead>
@@ -68,7 +69,7 @@
 export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=disable'</code></pre>
 <p>See <a href="/docs/configuration/">Configuration</a> for the full set of environment variables and the optional YAML config file.</p>
 
-<h2 id="first-migration">Your first migration</h2>
+<h2 id="first-migration">Your first migration <a class="hlink" href="#first-migration" aria-label="Permalink to this section">#</a></h2>
 <p>A one-shot migration translates the source schema, creates the target tables, bulk-copies rows, then builds indexes and constraints. Always do a <strong>dry run</strong> first — it reads the source schema and prints the plan without touching the target:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:rootpw@tcp(localhost:3306)/app' \
@@ -78,7 +79,7 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=disabl
 <pre><code><span class="k">sluice</span> migrate <span class="f">--source-driver</span> mysql <span class="f">--source</span> ... <span class="f">--target-driver</span> postgres <span class="f">--target</span> ... <span class="f">--resume</span></code></pre>
 <div class="note"><strong>Cold-start safety.</strong> sluice refuses to bulk-copy into a non-empty target by default (an <code>INSERT</code> into a populated table would collide on the primary key). Use <code>--resume</code> to continue a prior run, or read the <a href="/docs/commands/#migrate">migrate reference</a> for the recovery flags.</div>
 
-<h2 id="sqlite-d1">Import a SQLite file or Cloudflare D1</h2>
+<h2 id="sqlite-d1">Import a SQLite file or Cloudflare D1 <a class="hlink" href="#sqlite-d1" aria-label="Permalink to this section">#</a></h2>
 <p>SQLite and Cloudflare D1 are migrate sources into Postgres or MySQL. Point <code>--source-driver sqlite</code> at a local <code>.db</code> file — or at a <code>wrangler d1 export</code> <code>.sql</code> dump, which is auto-detected — and migrate as usual:</p>
 <pre><code><span class="c"># SQLite file (or a wrangler d1 export .sql dump) → Postgres</span>
 <span class="k">sluice</span> migrate \
@@ -93,7 +94,7 @@ export CLOUDFLARE_API_TOKEN=...
 <p>SQLite is also a migrate <strong>target</strong> (<code>--target-driver sqlite</code>) — emit a <code>.db</code> from any source (decimals are stored byte-exact as <code>TEXT</code>), e.g. to then run <code>wrangler d1 import</code>. D1 itself is not a target; emit a SQLite <code>.db</code> and import it with wrangler.</p>
 <div class="note"><strong>Declared dates are an explicit choice.</strong> SQLite has no native temporal storage, so columns <em>declared</em> <code>DATE</code> / <code>DATETIME</code> are decoded per <code>--sqlite-date-encoding</code> (<code>iso</code> default, or <code>unixepoch</code> / <code>unixmillis</code> / <code>julian</code>) — a value whose storage class doesn't match is refused loudly, never a silently-wrong date. For continuous (not one-shot) sync from SQLite / D1, use the <a href="/docs/commands/#trigger">trigger-CDC engines</a> <code>sqlite-trigger</code> / <code>d1-trigger</code>.</div>
 
-<h2 id="first-sync">Your first continuous sync</h2>
+<h2 id="first-sync">Your first continuous sync <a class="hlink" href="#first-sync" aria-label="Permalink to this section">#</a></h2>
 <p>Continuous sync captures a consistent snapshot, bulk-copies it, then streams ongoing changes. Streams are identified by a <code>--stream-id</code> so they can resume after a restart:</p>
 <pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:rootpw@tcp(localhost:3306)/app' \
@@ -104,14 +105,14 @@ export CLOUDFLARE_API_TOKEN=...
 <span class="k">sluice</span> sync health <span class="f">--stream-id</span> app-prod <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...   # cron-friendly exit code
 <span class="k">sluice</span> sync stop   <span class="f">--stream-id</span> app-prod <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...   # drains in-flight changes, then exits</code></pre>
 
-<h2 id="verify">Verify the copy</h2>
+<h2 id="verify">Verify the copy <a class="hlink" href="#verify" aria-label="Permalink to this section">#</a></h2>
 <p>After a migration or once a stream has caught up, compare source and target:</p>
 <pre><code><span class="k">sluice</span> verify \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> ... \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...</code></pre>
 <p><code>verify</code> compares row counts by default and can escalate to per-row hashing — see the <a href="/docs/commands/#verify">verify reference</a>.</p>
 
-<h2 id="backups">Set up backups</h2>
+<h2 id="backups">Set up backups <a class="hlink" href="#backups" aria-label="Permalink to this section">#</a></h2>
 <p>sluice takes <strong>logical</strong> backups — a full snapshot that roots a chain, plus incrementals appended onto it — to a local directory or any S3/GCS/Azure object store. It's the same binary; no separate backup daemon. Take a full backup first; on Postgres, add <code>--chain-slot</code> so the full provisions the replication slot that anchors the chain (incrementals then chain with zero gap, no manual slot setup):</p>
 <pre><code><span class="c"># full snapshot to a local directory (chain root)</span>
 <span class="k">sluice</span> backup full <span class="f">--source-driver</span> postgres <span class="f">--source</span> ... \
@@ -131,7 +132,7 @@ export CLOUDFLARE_API_TOKEN=...
     <span class="f">--chain-slot</span></code></pre>
 <div class="note">Credentials follow the cloud SDK's normal resolution (e.g. <code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code> for any S3-compatible endpoint). To run continuously instead of one incremental at a time, use <code>sluice backup stream run</code> (rolling incrementals) — and replay a chain into a live target with the <a href="/docs/from-backup-sync/">broker tutorial</a>.</div>
 
-<h2 id="trigger-cdc">Trigger-based CDC (no replication slot / Bucardo-style)</h2>
+<h2 id="trigger-cdc">Trigger-based CDC (no replication slot / Bucardo-style) <a class="hlink" href="#trigger-cdc" aria-label="Permalink to this section">#</a></h2>
 <p>When the source is a managed Postgres that blocks logical replication slots — Heroku Postgres, RDS without the right grants, Supabase / Crunchy starter tiers — sluice can capture changes with <strong>plpgsql triggers</strong> instead. Per-table triggers write into a <code>sluice_change_log</code> capture table; the <code>postgres-trigger</code> engine tails the log. The lifecycle is explicit — <strong>setup → run → teardown</strong> — so the source-side DDL is visible at the CLI, not silently applied on first sync.</p>
 <p><strong>1. Install the capture triggers</strong> (<code>--tables</code> is required; on a tier that denies event-trigger creation, add <code>--allow-polled-fingerprint</code> to opt into the polled schema-fingerprint fallback):</p>
 <pre><code><span class="k">sluice</span> trigger setup \
@@ -149,7 +150,7 @@ export CLOUDFLARE_API_TOKEN=...
     <span class="f">--dsn</span> 'postgres://user:pass@host:5432/app?sslmode=require' <span class="f">--yes</span></code></pre>
 <div class="note">The slot-based PG CDC reader refuses loudly when the source role lacks the <code>REPLICATION</code> attribute rather than silently degrading to polling — the trigger engine is the deliberate slot-less path. See the <a href="/docs/commands/#trigger">trigger reference</a>.</div>
 
-<h2 id="next">Next steps</h2>
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><a href="/docs/commands/">Command reference</a> — the full flag set for every command.</li>
   <li><a href="/docs/from-backup-sync/">Continuous sync from a backup chain</a> — replay a chain into a target as a long-running broker (decoupled transport).</li>

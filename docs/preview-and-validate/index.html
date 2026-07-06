@@ -28,17 +28,18 @@
   <main class="content">
     <h1>Preview &amp; validate before you migrate</h1>
     <p class="subtitle">See the exact target DDL, steer the type translation, and confirm the copy — without guessing.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#preview">1. Preview the target DDL</a></li><li><a href="#override">2. Steer a type with --type-override</a></li><li><a href="#affinity">SQLite & D1: declared types vs stored affinity</a></li><li><a href="#diff">3. Diff a live target against the source</a></li><li><a href="#verify">4. Verify the data landed</a></li></ul></nav>
     
 <p>sluice is correctness-first: it would rather refuse loudly than land data subtly wrong. The flip side is that you can see <em>everything</em> it intends to do before it does it. This guide covers the three read-only inspection commands — <a href="/docs/commands/#schema">schema preview</a>, <a href="/docs/commands/#schema">schema diff</a>, and <a href="/docs/commands/#verify">verify</a> — plus <code>--type-override</code>, the one knob that steers translation when you disagree with a default. Reach for this guide whenever a migration touches types you care about (money, JSON, UUIDs, SQLite's untyped columns) or before any production cutover.</p>
 
-<h2 id="preview">1. Preview the target DDL</h2>
+<h2 id="preview">1. Preview the target DDL <a class="hlink" href="#preview" aria-label="Permalink to this section">#</a></h2>
 <p><code>schema preview</code> reads the source schema, runs the full cross-engine translation, and prints the <strong>exact DDL the target engine would emit</strong> — with advisory notes on anything non-obvious. It never connects to the target to write; the target DSN is only used to construct the right dialect's writer:</p>
 <pre><code><span class="k">sluice</span> schema preview \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET"</code></pre>
 <p>Scope it with <code>--include-table</code> / <code>--exclude-table</code> (glob-aware), write it to a file with <code>-o ddl.sql</code>, or get machine-readable output with <code>--format json</code>. This is where you eyeball how each MySQL type maps to Postgres before a single row moves.</p>
 
-<h2 id="override">2. Steer a type with --type-override</h2>
+<h2 id="override">2. Steer a type with --type-override <a class="hlink" href="#override" aria-label="Permalink to this section">#</a></h2>
 <p>When you disagree with a default mapping — say you want a MySQL <code>JSON</code> column to land as Postgres <code>jsonb</code> rather than <code>json</code>, or a free-form column forced to <code>text</code> — override it per column. The format is <code>TABLE.COLUMN=TYPE</code>, repeatable, and it's accepted by <code>preview</code>, <code>migrate</code>, and <code>sync start</code> alike, so you can preview the override and then migrate with the identical flag:</p>
 <pre><code><span class="k">sluice</span> schema preview \
     <span class="f">--source-driver</span> mysql <span class="f">--source</span> "$SLUICE_SOURCE" \
@@ -47,7 +48,7 @@
     <span class="f">--type-override</span> events.payload=jsonb</code></pre>
 <div class="note">For target-type options that need more than a type name — e.g. <code>jsonb</code> with <code>binary: true</code> — use the YAML <code>mappings:</code> block instead of the CLI flag (the CLI form takes a bare type). See <a href="/docs/configuration/#config-file">Configuration → YAML config</a>.</div>
 
-<h2 id="affinity">SQLite & D1: declared types vs stored affinity</h2>
+<h2 id="affinity">SQLite & D1: declared types vs stored affinity <a class="hlink" href="#affinity" aria-label="Permalink to this section">#</a></h2>
 <p>SQLite (and Cloudflare D1) don't store strict types — a column has a <em>declared</em> type but values live under SQLite's loose <em>affinity</em> rules. sluice infers the target type from the declared type, but two cases need an explicit decision because guessing would risk a silently-wrong value:</p>
 <ul>
   <li><strong>Dates &amp; times.</strong> A column <em>declared</em> <code>DATE</code> / <code>DATETIME</code> / <code>TIMESTAMP</code> / <code>TIME</code> could hold ISO text, unix seconds/millis, or a Julian day. You name the encoding with <code>--sqlite-date-encoding</code> (<code>iso</code> default, or <code>unixepoch</code> / <code>unixmillis</code> / <code>julian</code>). A value whose storage class doesn't match is <strong>refused loudly, naming the row</strong> — never coerced to a wrong date.</li>
@@ -55,13 +56,13 @@
 </ul>
 <p>Preview an import the same way you'd preview any source — point <code>--source-driver</code> at <code>sqlite</code> or <code>d1</code> — to see the resolved target types before committing. Full detail is in the <a href="/docs/import-sqlite-d1/">SQLite/D1 guide</a>.</p>
 
-<h2 id="diff">3. Diff a live target against the source</h2>
+<h2 id="diff">3. Diff a live target against the source <a class="hlink" href="#diff" aria-label="Permalink to this section">#</a></h2>
 <p>When the target already exists — a previous migration, an Atlas/Liquibase-managed schema, a hand-built warehouse — <code>schema diff</code> compares what's actually on the target against what sluice <em>would</em> produce from the source, and reports the drift with copy-paste DDL suggestions. It exits non-zero on any difference, so it gates cleanly in CI:</p>
 <pre><code><span class="k">sluice</span> schema diff \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET"</code></pre>
 
-<h2 id="verify">4. Verify the data landed</h2>
+<h2 id="verify">4. Verify the data landed <a class="hlink" href="#verify" aria-label="Permalink to this section">#</a></h2>
 <p>After a migration (or once a <a href="/docs/zero-downtime-cutover/">sync</a> has caught up), <code>verify</code> compares the data itself. It has a depth ladder — start cheap, escalate only if you need stronger guarantees:</p>
 <table><thead><tr><th>Depth</th><th>What it does</th></tr></thead><tbody>
 <tr><td><code>--depth count</code> (default)</td><td class="desc">Per-table row-count comparison. Fast, catches whole-table and bulk-row loss.</td></tr>

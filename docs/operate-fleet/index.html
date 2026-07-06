@@ -28,10 +28,11 @@
   <main class="content">
     <h1>Operate a sync fleet</h1>
     <p class="subtitle">Supervise many continuous syncs from one process — failure-isolated, observable, and reconfigurable without a restart.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#config">The fleet config</a></li><li><a href="#run">Run the fleet</a></li><li><a href="#reload">Reload without a restart (SIGHUP)</a></li><li><a href="#status">See the whole fleet at once</a></li><li><a href="#metrics">Observe it: Prometheus metrics and readiness</a></li><li><a href="#dashboards">Live dashboards: web and terminal</a></li><li><a href="#alerts">Threshold alerts (advisory)</a></li><li><a href="#next-steps">Next steps</a></li></ul></nav>
     
 <p>Once you keep several cross-database syncs alive at once, running each <a href="/docs/commands/#sync-start">sync start</a> as its own pod or systemd unit gets unwieldy. <a href="/docs/commands/#sync-start">sync run</a> collapses that to one supervised process driven by a single fleet config: it runs N independent syncs, each with its own stream-id, and — the load-bearing property — <strong>fully failure-isolated</strong>, so one sync crashing, erroring, or even panicking can never take down its healthy peers (ADR-0122). This guide covers running a fleet, observing it, and reconfiguring it live.</p>
 
-<h2 id="config">The fleet config</h2>
+<h2 id="config">The fleet config <a class="hlink" href="#config" aria-label="Permalink to this section">#</a></h2>
 <p>A fleet is a YAML file listing each sync as a curated subset of the <code>sync start</code> flags you already know, in kebab-case. A top-level <code>restart</code> block tunes the supervisor's bounded-backoff policy:</p>
 <pre><code><span class="c"># syncs.yaml</span>
 syncs:
@@ -57,7 +58,7 @@ restart:
 <div class="note"><strong>Two data-corruption classes are refused at load, loudly.</strong> Two Postgres-source syncs that resolve to the same replication <code>slot-name</code> would fight over one single-consumer slot — silent corruption — so the loader refuses the config, naming both stream-ids and the slot. Duplicate stream-ids on the same target (which would clobber each other's position row) are refused the same way. When several syncs point at one target server, the loader <strong>WARNs</strong> that they share a connection budget so you can size <code>apply-concurrency</code> accordingly.</div>
 <p>Each sync's own retry (ADR-0093 re-snapshot, apply-retry backoff) is the inner loop; the supervisor's restart is the outer loop. A sync that drains cleanly (a <code>sync stop</code> or Ctrl-C) is left stopped; a sync that dies with the process still live is logged loudly, backed off, and restarted. The consecutive-failure counter resets once a sync has run longer than the healthy threshold, so a sync that ran for hours before dying carries no restart debt.</p>
 
-<h2 id="run">Run the fleet</h2>
+<h2 id="run">Run the fleet <a class="hlink" href="#run" aria-label="Permalink to this section">#</a></h2>
 <p>Validate the config first with <code>--dry-run</code> (it checks required fields, stream-id and slot-name uniqueness, and retry bounds, then prints the resolved plan without starting anything), then run it:</p>
 <pre><code><span class="c"># validate + print the plan, start nothing</span>
 <span class="k">sluice</span> sync run <span class="f">--config</span> syncs.yaml <span class="f">--dry-run</span>
@@ -66,19 +67,19 @@ restart:
 <span class="k">sluice</span> sync run <span class="f">--config</span> syncs.yaml <span class="f">--dashboard-listen</span> :9300</code></pre>
 <p>The process blocks until every sync exits. Ctrl-C / SIGTERM stops all of them cleanly. A single-sync fleet that can never start exits non-zero, but a fleet with any healthy peer keeps running regardless of what its neighbors do.</p>
 
-<h2 id="reload">Reload without a restart (SIGHUP)</h2>
+<h2 id="reload">Reload without a restart (SIGHUP) <a class="hlink" href="#reload" aria-label="Permalink to this section">#</a></h2>
 <p>Edit <code>syncs.yaml</code> and send the running process a <code>SIGHUP</code>: sluice re-reads and re-validates the file, then reconciles the live fleet — <strong>starting</strong> newly-added syncs, <strong>draining and stopping</strong> removed ones, and <strong>restarting</strong> any whose spec changed (detected by a per-stream fingerprint, so unchanged syncs are left untouched):</p>
 <pre><code>kill -HUP "$(pgrep -f 'sluice sync run')"</code></pre>
 <div class="note"><strong>A bad reload never takes the fleet down.</strong> The reload runs the exact same validators as the initial load <em>before</em> building anything; if the new file fails to parse or validate (a slot collision, a duplicate stream-id, a missing field), the reload is refused loudly and the running fleet keeps going on the old config, unchanged. Each reload logs its outcome — the started / stopped / restarted stream-ids, or "no changes." <code>SIGHUP</code> is POSIX-only; on Windows, restart the process to change the fleet.</div>
 
-<h2 id="status">See the whole fleet at once</h2>
+<h2 id="status">See the whole fleet at once <a class="hlink" href="#status" aria-label="Permalink to this section">#</a></h2>
 <p><a href="/docs/commands/#sync-manage">sync status --all</a> rolls up every stream across every target named in the fleet config into one table — reading the target control tables directly, so no running supervisor is required. A target that can't be reached is reported inline and skipped rather than blanking the whole view:</p>
 <pre><code><span class="k">sluice</span> sync status <span class="f">--all</span> <span class="f">--config</span> syncs.yaml <span class="f">--summary</span>
 
 <span class="c"># live-refresh every 2s, machine-readable</span>
 <span class="k">sluice</span> sync status <span class="f">--all</span> <span class="f">--config</span> syncs.yaml <span class="f">--format</span> json <span class="f">--watch</span> 2s</code></pre>
 
-<h2 id="metrics">Observe it: Prometheus metrics and readiness</h2>
+<h2 id="metrics">Observe it: Prometheus metrics and readiness <a class="hlink" href="#metrics" aria-label="Permalink to this section">#</a></h2>
 <p>Give each sync a <code>metrics-listen</code> address in the config (as above) and it binds a Prometheus-format <code>/metrics</code> endpoint plus <code>/healthz</code> (liveness) and <code>/readyz</code> (flips to 200 once the sync has finished its snapshot/warm-resume preamble and entered the apply loop). The exported <code>sluice_*</code> gauge families include:</p>
 <table><thead><tr><th>Gauge</th><th>What it tells you</th></tr></thead><tbody>
 <tr><td><code>sluice_sync_lag_seconds</code></td><td class="desc">Seconds the target trails the source's latest applied commit (engine-neutral apply lag; 0 when caught up).</td></tr>
@@ -94,10 +95,10 @@ restart:
     port: 9101
   periodSeconds: 10</code></pre>
 
-<h3>Pre-emptive Postgres slot-health warnings</h3>
+<h3 id="pre-emptive-postgres-slot-health-warnings">Pre-emptive Postgres slot-health warnings <a class="hlink" href="#pre-emptive-postgres-slot-health-warnings" aria-label="Permalink to this section">#</a></h3>
 <p>For a Postgres source, a replication slot that outruns its retention budget gets evicted and the stream breaks. sluice watches for that ahead of time and emits severity-graded <code>slog</code> warnings: a <strong>WARN</strong> when retention pressure crosses 70% of <code>max_slot_wal_keep_size</code>, a <strong>CRITICAL</strong> at 85% (eviction imminent), and a WARN when the slot has been observed inactive for 30 minutes or more (ADR-0059). These are rate-limited and emit a "cleared" INFO when the condition resolves, so the alarm turns off visibly.</p>
 
-<h2 id="dashboards">Live dashboards: web and terminal</h2>
+<h2 id="dashboards">Live dashboards: web and terminal <a class="hlink" href="#dashboards" aria-label="Permalink to this section">#</a></h2>
 <p><code>sync run --dashboard-listen ADDR</code> serves a self-contained, auto-refreshing HTML page of the live fleet — per-sync state, restart count, consecutive failures, last error, uptime — backed by a stable <code>GET /api/fleet</code> JSON API (ADR-0124). It is strictly read-only: no stop/restart controls, no data path, and it exposes only what <code>sync status --all</code> already does (stream-ids, states, error strings — no DSNs, no row data). It has <strong>no authentication</strong>, so bind it to localhost or a trusted network.</p>
 <p>For a terminal equivalent, <a href="/docs/commands/#sync-manage">sync tui --connect</a> is a full-screen client that polls that same <code>/api/fleet</code> endpoint — so it works locally or over an SSH tunnel to the dashboard port, without disturbing the fleet process:</p>
 <pre><code><span class="c"># terminal 1: run the fleet with the dashboard API exposed</span>
@@ -107,7 +108,7 @@ restart:
 <span class="k">sluice</span> sync tui <span class="f">--connect</span> :9300 <span class="f">--refresh</span> 2s</code></pre>
 <div class="note">The dashboard binds when the fleet starts; if the address can't be bound the command fails loudly rather than running a fleet without the dashboard you asked for. The TUI keeps the last-known fleet on screen with an "unreachable" banner if a poll fails, instead of blanking.</div>
 
-<h2 id="alerts">Threshold alerts (advisory)</h2>
+<h2 id="alerts">Threshold alerts (advisory) <a class="hlink" href="#alerts" aria-label="Permalink to this section">#</a></h2>
 <p>The fleet can push threshold alerts to a webhook or Slack. Set the sink URL via its env var (<code>SLUICE_NOTIFY_WEBHOOK</code> / <code>SLUICE_NOTIFY_SLACK</code>), then arm one or more thresholds. Alerts are edge-triggered, cooldown'd (<code>--notify-cooldown</code>, default 15m), and <strong>advisory + failure-isolated</strong> — a dead sink is logged and swallowed, never affecting the sync:</p>
 <table><thead><tr><th>Threshold</th><th>Fires when…</th></tr></thead><tbody>
 <tr><td><code>--notify-sync-lag-seconds</code></td><td class="desc">sluice's own apply lag (<code>sluice_sync_lag_seconds</code>) is at or above N. <strong>Ungated</strong> — works on MySQL and Postgres alike, needing only a sink.</td></tr>
@@ -117,7 +118,7 @@ restart:
 </tbody></table>
 <p>All the util / control-plane-lag / growth rules need a <a href="/docs/planetscale-vitess/">PlanetScale telemetry</a> provider (<code>--planetscale-org</code> plus the metrics-token flags); only <code>--notify-sync-lag-seconds</code> works without it. The same alerter set is also available on the standalone <a href="/docs/commands/#metrics-watch">metrics-watch</a> probe.</p>
 
-<h2 id="next-steps">Next steps</h2>
+<h2 id="next-steps">Next steps <a class="hlink" href="#next-steps" aria-label="Permalink to this section">#</a></h2>
 <ul>
 <li><a href="/docs/commands/#sync-start">sync start reference</a> — the full per-sync flag surface each fleet entry is built from.</li>
 <li><a href="/docs/planetscale-vitess/">Sync to PlanetScale / Vitess</a> — the telemetry credentials the util-threshold alerts and <code>sluice_target_*</code> gauges require.</li>

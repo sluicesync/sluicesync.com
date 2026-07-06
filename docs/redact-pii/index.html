@@ -28,10 +28,11 @@
   <main class="content">
     <h1>Redact PII while you migrate &amp; sync</h1>
     <p class="subtitle">Seed staging, dev, analytics, and vendor handoffs from production without letting personal data leave with the rows.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#how-it-works">How --redact works</a></li><li><a href="#where-it-applies">Where redaction applies</a></li><li><a href="#strategies">The strategy families</a></li><li><a href="#determinism">Determinism</a></li><li><a href="#keyset">The operator keyset (--keyset-source)</a></li><li><a href="#schema-preview">Preview redaction before you run</a></li><li><a href="#audit-log">The audit log</a></li><li><a href="#examples">Worked examples</a></li><li><a href="#non-goals">What redaction is not</a></li><li><a href="#next">Next steps</a></li></ul></nav>
     
 <p>You need a realistic copy of production in a place production data isn't allowed to go — a staging database, a developer laptop, an analytics warehouse, a vendor's environment. The schema, the row shapes, and the referential structure all have to survive; the emails, card numbers, and national IDs must not. sluice does this inline with <code>--redact</code>: PII is transformed <strong>between the source reader and the target writer</strong>, so the sensitive value never lands on the target and never touches the backup on disk. There is no separate scrubbing pass to forget to run.</p>
 
-<h2 id="how-it-works">How --redact works</h2>
+<h2 id="how-it-works">How --redact works <a class="hlink" href="#how-it-works" aria-label="Permalink to this section">#</a></h2>
 <p>Each rule names a column and a strategy:</p>
 <pre><code><span class="f">--redact</span> '[schema.]table.column=STRATEGY[:options]'</code></pre>
 <p>The flag is <strong>repeatable</strong> — pass it once per column. Rules are applied in the bulk-copy hot path and the CDC apply path alike; the strategy's output replaces the source value verbatim at the named column before it reaches the target. When no <code>--redact</code> is configured the pipeline short-circuits before any per-row work, so operators who don't use redaction pay nothing for the feature.</p>
@@ -41,7 +42,7 @@
     <span class="f">--redact</span> users.email=hash:sha256</code></pre>
 <p>Every rule also has a YAML form under a <code>redactions:</code> block in the config file (see <a href="/docs/configuration/">Configuration</a>). CLI and YAML mix: CLI rules are processed first, YAML appends, and a duplicate on the same <code>schema.table.column</code> is last-write-wins with a WARN. Keep the bulk in version-controlled YAML; reach for the flag for per-environment overrides (<code>--redact users.email=null</code> in staging).</p>
 
-<h2 id="where-it-applies">Where redaction applies</h2>
+<h2 id="where-it-applies">Where redaction applies <a class="hlink" href="#where-it-applies" aria-label="Permalink to this section">#</a></h2>
 <p>The same rule set is honoured uniformly across every path that moves rows, so a column can't leak through a surface you forgot about:</p>
 <table>
 <thead><tr><th>Command</th><th>Behaviour</th></tr></thead>
@@ -53,10 +54,10 @@
 </tbody>
 </table>
 
-<h2 id="strategies">The strategy families</h2>
+<h2 id="strategies">The strategy families <a class="hlink" href="#strategies" aria-label="Permalink to this section">#</a></h2>
 <p>sluice ships 26 strategies across five families. Pick the one that matches the column's shape.</p>
 
-<h3>Constant &amp; foundational</h3>
+<h3 id="constant-foundational">Constant &amp; foundational <a class="hlink" href="#constant-foundational" aria-label="Permalink to this section">#</a></h3>
 <table>
 <thead><tr><th>Strategy</th><th>Behaviour</th></tr></thead>
 <tbody>
@@ -68,7 +69,7 @@
 </tbody>
 </table>
 
-<h3>Format-preserving masks</h3>
+<h3 id="format-preserving-masks">Format-preserving masks <a class="hlink" href="#format-preserving-masks" aria-label="Permalink to this section">#</a></h3>
 <p>Generic masks keep some characters and blank the rest (default mask char <code>X</code>):</p>
 <table>
 <thead><tr><th>Strategy</th><th>Behaviour</th></tr></thead>
@@ -92,7 +93,7 @@
 </table>
 <div class="note"><strong><code>mask:uuid</code> on a native <code>uuid</code> column.</strong> The masked output contains <code>X</code> characters that aren't valid hex, so a target column typed <code>uuid</code> (Postgres) refuses at preflight — before any data moves — unless you also map that column to text with <code>--type-override=table.col=text</code>.</div>
 
-<h3>Realistic synthetic values (randomize)</h3>
+<h3 id="realistic-synthetic-values-randomize">Realistic synthetic values (randomize) <a class="hlink" href="#realistic-synthetic-values-randomize" aria-label="Permalink to this section">#</a></h3>
 <p>The <code>randomize:*</code> generators produce fresh, valid-shape fake values — ideal when staging needs data that <em>looks</em> real. Output is <strong>replay-stable per source row</strong>: the same source primary key always regenerates the same target value across CDC resume, cold-start re-apply, and backup → restore (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0039-randomize-strategy-determinism.md">ADR-0039</a>).</p>
 <table>
 <thead><tr><th>Strategy</th><th>Output</th></tr></thead>
@@ -110,7 +111,7 @@
 </table>
 <div class="note"><strong>Every <code>randomize:*</code> rule needs a primary key</strong> on the source table — the replay seed is derived from the row's PK. The pipeline refuses loudly at startup if a <code>randomize:*</code> rule targets a heap (no-PK) table; add a PK on the source, or pick a non-random strategy.</div>
 
-<h3>Dictionary strategies</h3>
+<h3 id="dictionary-strategies">Dictionary strategies <a class="hlink" href="#dictionary-strategies" aria-label="Permalink to this section">#</a></h3>
 <p>Dictionary strategies map source values into a named lookup table declared in YAML (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0040-dictionary-strategy-determinism.md">ADR-0040</a>):</p>
 <table>
 <thead><tr><th>Strategy</th><th>Keyed by</th><th>Use case</th></tr></thead>
@@ -121,7 +122,7 @@
 </table>
 <p>The distinction is the point: <code>randomize:dict</code> can send two rows with the same value but different PKs to different entries, whereas <code>tokenize:dict</code> guarantees every occurrence of a value (anywhere) maps to the same surrogate — so analytics joins on the redacted column stay coherent. Dictionaries must be declared in YAML; a CLI reference to an undeclared dict name refuses at parse time.</p>
 
-<h2 id="determinism">Determinism</h2>
+<h2 id="determinism">Determinism <a class="hlink" href="#determinism" aria-label="Permalink to this section">#</a></h2>
 <p>Redaction output is deterministic, which is what makes it safe to re-run — CDC resume and backup → restore reproduce identical surrogates on the same data. There are four contracts:</p>
 <table>
 <thead><tr><th>Semantics</th><th>Strategies</th><th>Guarantee</th></tr></thead>
@@ -134,7 +135,7 @@
 </table>
 <p>To correlate a redacted column <em>across</em> tables (a join key), use <code>tokenize:dict</code> or <code>hash:hmac-sha256</code>; the other strategies don't carry cross-table consistency on the same source value.</p>
 
-<h2 id="keyset">The operator keyset (--keyset-source)</h2>
+<h2 id="keyset">The operator keyset (--keyset-source) <a class="hlink" href="#keyset" aria-label="Permalink to this section">#</a></h2>
 <p>The two keyed strategies — <code>hash:hmac-sha256</code> and <code>tokenize:dict</code> — resolve their HMAC secret from an operator-controlled <strong>keyset</strong> (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0041-operator-keyset-persistence.md">ADR-0041</a>). Any rule using either strategy <strong>requires</strong> <code>--keyset-source</code>; sluice refuses loudly at preflight otherwise. The keyset is a small YAML document holding one or more named keys, each with generations so old surrogates keep resolving after a rotation. It resolves from three sources:</p>
 <pre><code><span class="c"># keyset YAML on disk</span>
 <span class="f">--keyset-source</span>=file:/etc/sluice/keyset.yaml
@@ -150,7 +151,7 @@
 <p>The <code>db:</code> form is the cross-stream stability primitive: two streams pointing at the same keyset DSN turn <code>alice@example.com</code> into the <em>same</em> surrogate on staging-1 and staging-2. For two independent installs to agree (cross-org exchange), install the same <code>file:</code> keyset at both ends.</p>
 <div class="note"><strong>No hot-reload.</strong> The keyset is snapshotted once at process startup; a rotation takes effect only on the next restart. After a rotation, new rows get surrogates under the new active generation while existing target rows keep theirs — a clean rotation means re-running the migration under the new key. The security model is <em>stable hashing, not secrecy</em>: protect the key bytes with your storage layer — sluice does not encrypt them at rest.</div>
 
-<h2 id="schema-preview">Preview redaction before you run</h2>
+<h2 id="schema-preview">Preview redaction before you run <a class="hlink" href="#schema-preview" aria-label="Permalink to this section">#</a></h2>
 <p><code>sluice schema preview</code> annotates the generated DDL so you can eyeball which columns are covered before moving a single row. The annotation is comment-only — the <code>CREATE TABLE</code> itself is unchanged, so the output stays drop-in usable:</p>
 <pre><code><span class="k">sluice</span> schema preview \
     <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SRC" \
@@ -164,13 +165,13 @@
   ...
 );</code></pre>
 
-<h2 id="audit-log">The audit log</h2>
+<h2 id="audit-log">The audit log <a class="hlink" href="#audit-log" aria-label="Permalink to this section">#</a></h2>
 <p>Every command that moves rows emits exactly one INFO line at startup recording the configured redaction surface — the scope, the column count, and the distinct strategy names:</p>
 <pre><code><span class="k">sluice</span>: redaction configured scope=migrate columns=5 strategies=[hash:sha256 mask:pan randomize:email tokenize:dict:first_names truncate:4]</code></pre>
 <p>Per-column rules are deliberately <strong>not</strong> logged — the mapping itself is sensitive (<code>--redact billing.credit_card=truncate:4</code> reveals which column holds card numbers), and per-row surrogates are never logged. When a keyset loads, a second line records its source scheme and per-key generations, with any DSN credentials redacted.</p>
 
-<h2 id="examples">Worked examples</h2>
-<h3>Mask and hash for an analytics copy</h3>
+<h2 id="examples">Worked examples <a class="hlink" href="#examples" aria-label="Permalink to this section">#</a></h2>
+<h3 id="mask-and-hash-for-an-analytics-copy">Mask and hash for an analytics copy <a class="hlink" href="#mask-and-hash-for-an-analytics-copy" aria-label="Permalink to this section">#</a></h3>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SRC" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
@@ -178,7 +179,7 @@
     <span class="f">--redact</span> users.phone=mask:inner:3,4 \
     <span class="f">--redact</span> users.ssn=randomize:ssn</code></pre>
 
-<h3>Realistic synthetic data for a live staging sync</h3>
+<h3 id="realistic-synthetic-data-for-a-live-staging-sync">Realistic synthetic data for a live staging sync <a class="hlink" href="#realistic-synthetic-data-for-a-live-staging-sync" aria-label="Permalink to this section">#</a></h3>
 <p>Redaction is honoured on the CDC stream too, so staging stays continuously fresh <em>and</em> continuously scrubbed. YAML config plus a stream id:</p>
 <pre><code><span class="c"># sluice.yaml</span>
 redactions:
@@ -197,7 +198,7 @@ redactions:
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
     <span class="f">--stream-id</span> staging-refresh</code></pre>
 
-<h3>Cross-table stable surrogates for a vendor handoff</h3>
+<h3 id="cross-table-stable-surrogates-for-a-vendor-handoff">Cross-table stable surrogates for a vendor handoff <a class="hlink" href="#cross-table-stable-surrogates-for-a-vendor-handoff" aria-label="Permalink to this section">#</a></h3>
 <p>Use <code>tokenize:dict</code> with one shared key so a customer's name is the same token in every table — the vendor can still join, but never sees the real value:</p>
 <pre><code><span class="c"># sluice.yaml</span>
 dictionaries:
@@ -218,13 +219,13 @@ redactions:
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
     <span class="f">--keyset-source</span>=file:/etc/sluice/keyset.yaml</code></pre>
 
-<h2 id="non-goals">What redaction is not</h2>
+<h2 id="non-goals">What redaction is not <a class="hlink" href="#non-goals" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><strong>Not a PII discovery scanner.</strong> sluice redacts the columns <em>you</em> name; it does not crawl the schema to find which columns hold personal data. Identifying them is your (or your compliance team's) job.</li>
   <li><strong>Not encryption at rest.</strong> Redaction transforms values in flight so the sensitive original never reaches the target or the backup. Protecting the keyset secret and the target storage itself is your storage layer's responsibility — sluice does not encrypt the key bytes at rest.</li>
 </ul>
 
-<h2 id="next">Next steps</h2>
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><a href="/docs/configuration/">Configuration</a> — the YAML <code>redactions:</code>, <code>dictionaries:</code>, and keyset blocks in full.</li>
   <li><a href="/docs/commands/">Command reference</a> — the flag set for <code>migrate</code>, <code>sync</code>, <code>backup</code>, and <code>schema preview</code>.</li>

@@ -28,24 +28,25 @@
   <main class="content">
     <h1>Import SQLite or Cloudflare D1</h1>
     <p class="subtitle">Move a SQLite file, a wrangler D1 export, or a live Cloudflare D1 into Postgres or MySQL — losslessly.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#file">A local SQLite file</a></li><li><a href="#dump">A wrangler D1 export (.sql dump)</a></li><li><a href="#live">A live Cloudflare D1 (lossless)</a></li><li><a href="#dates">Dates, times, and booleans</a></li><li><a href="#infer-types">Richer target types with --infer-types</a></li><li><a href="#orm-tables">ORM bookkeeping tables</a></li><li><a href="#target">SQLite as a target</a></li><li><a href="#continuous">Continuous sync (trigger-CDC)</a></li></ul></nav>
     
 <p>sluice imports SQLite and <a href="https://developers.cloudflare.com/d1/">Cloudflare D1</a> into Postgres or MySQL through the same <a href="/docs/migrate-mysql-to-postgres/">migrate</a> pipeline as everything else — parallel copy, cross-engine type translation, deferred indexes, <code>--dry-run</code>, <code>verify</code> — with no pgloader or external tool. Reach for this when you're graduating a SQLite/D1 app onto a server database, or pulling D1 data into an analytics warehouse. There are three source shapes; pick by what you have.</p>
 
-<h2 id="file">A local SQLite file</h2>
+<h2 id="file">A local SQLite file <a class="hlink" href="#file" aria-label="Permalink to this section">#</a></h2>
 <p>Point <code>--source-driver sqlite</code> at the file (a bare path, a <code>file:</code> URI, or a <code>sqlite://</code> URL — opened read-only) and migrate as usual:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> sqlite   <span class="f">--source</span> ./app.db \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@host:5432/db?sslmode=require'</code></pre>
 <p>Large tables parallel-copy automatically (PK-range / keyset chunks, tuned by <code>--bulk-parallelism</code>), the same as any other source. A <code>.db</code> file is read byte-exact — sluice reads the int64 straight from the file.</p>
 
-<h2 id="dump">A wrangler D1 export (.sql dump)</h2>
+<h2 id="dump">A wrangler D1 export (.sql dump) <a class="hlink" href="#dump" aria-label="Permalink to this section">#</a></h2>
 <p><code>wrangler d1 export</code> emits a <code>.sql</code> text dump. sluice ingests one directly — it sniffs the file's header, materializes the dump in-process (no <code>sqlite3</code> CLI), and auto-skips D1's internal <code>_cf_*</code> tables. So the import is two commands:</p>
 <pre><code>wrangler d1 export &lt;db&gt; <span class="f">--remote</span> <span class="f">--output</span> dump.sql
 <span class="k">sluice</span> migrate <span class="f">--source-driver</span> sqlite <span class="f">--source</span> dump.sql \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> '&lt;pg-dsn&gt;'</code></pre>
 <div class="note warn"><strong>The export rounds big integers.</strong> Both of D1's <em>default</em> extraction paths — the <code>wrangler d1 export</code> dump and the bare query API — silently lose integers larger than 2<sup>53</sup> (≈ 9 ×10<sup>15</sup>): D1 serializes them through a JavaScript double before sluice ever sees them. For Snowflake-style IDs (Discord/Twitter 64-bit IDs), nanosecond timestamps, or large counters, use the live query-API reader below — it's the only lossless path. For a D1 database <em>without</em> integers that large (the common case), the export path is exact and simple.</div>
 
-<h2 id="live">A live Cloudflare D1 (lossless)</h2>
+<h2 id="live">A live Cloudflare D1 (lossless) <a class="hlink" href="#live" aria-label="Permalink to this section">#</a></h2>
 <p><code>--source-driver d1</code> reads a live D1 over its HTTP query API and is the <strong>lossless</strong> import. It projects every column through <code>typeof()</code> + <code>CAST(… AS TEXT)</code> / <code>hex()</code>, so integers above 2<sup>53</sup> round-trip exactly, INTEGER is distinguished from REAL, and BLOBs decode from hex. Reads don't take D1 offline. The API token is read from the environment only — never a flag, never logged:</p>
 <pre><code>export CLOUDFLARE_API_TOKEN=...        # required
 export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN
@@ -55,7 +56,7 @@ export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> '&lt;pg-dsn&gt;'</code></pre>
 <p>DSN forms are <code>d1://&lt;account_id&gt;/&lt;database_id&gt;</code> or the short <code>d1://&lt;database_id&gt;</code> (account from <code>CLOUDFLARE_ACCOUNT_ID</code>). A missing token, account, or database id is refused loudly at startup, before any request.</p>
 
-<h2 id="dates">Dates, times, and booleans</h2>
+<h2 id="dates">Dates, times, and booleans <a class="hlink" href="#dates" aria-label="Permalink to this section">#</a></h2>
 <p>SQLite and D1 have no native temporal or boolean storage. sluice maps a column whose <em>declared</em> type names one (<code>DATE</code> / <code>DATETIME</code> / <code>TIMESTAMP</code> / <code>TIME</code>, <code>BOOL</code> / <code>BOOLEAN</code>) to the right target type, and you tell it how the <em>values</em> are encoded with <code>--sqlite-date-encoding</code>:</p>
 <table><thead><tr><th>Encoding</th><th>Temporal values stored as</th></tr></thead><tbody>
 <tr><td><code>iso</code> (default)</td><td class="desc">ISO-8601 <strong>TEXT</strong>, e.g. <code>'2024-01-02 03:04:05'</code></td></tr>
@@ -66,7 +67,7 @@ export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN
 <p>A value whose storage class doesn't match the chosen encoding — or ISO text matching no layout, or a non-truthy boolean — is <strong>refused loudly, naming the row</strong>, never a silently-wrong date. Carry a genuine outlier raw with <code>--type-override &lt;col&gt;=text</code>. Preview the resolved types first with <a href="/docs/preview-and-validate/">schema preview</a>.</p>
 <p>Column <strong>DEFAULT</strong> expressions are carried too: a SQLite <code>datetime('now')</code> / <code>CURRENT_TIMESTAMP</code> default becomes the target's <code>CURRENT_TIMESTAMP</code> (<code>date('now')</code>→<code>CURRENT_DATE</code>, <code>time('now')</code>→<code>CURRENT_TIME</code>). A non-portable default expression is dropped with a loud WARN rather than emitted as an expression the target can't evaluate — the column keeps its type, just without the default.</p>
 
-<h2 id="infer-types">Richer target types with <code>--infer-types</code></h2>
+<h2 id="infer-types">Richer target types with <code>--infer-types</code> <a class="hlink" href="#infer-types" aria-label="Permalink to this section">#</a></h2>
 <p>Because SQLite/D1 storage is dynamically typed, the safe default maps a source conservatively and losslessly — <code>INTEGER</code>→<code>bigint</code>, <code>TEXT</code>→<code>text</code>. That never fails and never loses data, but a clean dataset often wants native Postgres types. <code>--infer-types</code> (opt-in, SQLite/D1 source only) promotes <code>INTEGER</code>→<code>boolean</code>, ISO-8601 <code>TEXT</code>→<code>timestamptz</code>/<code>timestamp</code>, JSON <code>TEXT</code>→<code>jsonb</code>, and UUID <code>TEXT</code>→<code>uuid</code> — but <strong>only after validating the actual data</strong>:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> d1       <span class="f">--source</span> 'd1://&lt;account_id&gt;/&lt;database_id&gt;' \
@@ -75,16 +76,16 @@ export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN
 <p>Candidates are picked by name hint (<code>is_*</code>/<code>*_flag</code>; <code>*_at</code>/<code>created</code>/<code>updated</code>; <code>*_json</code>/<code>metadata</code>/<code>payload</code>; <code>*_id</code>/<code>*_uuid</code>) and then each is gated by one aggregate pushed down to the source — a boolean column promotes only if <em>no</em> value is outside <code>(0,1)</code>, a UUID column only if every value matches an anchored hex-UUID <code>GLOB</code>, and so on. A <code>*_id</code> holding <code>cus_abc123</code> fails UUID validation and <strong>stays <code>text</code></strong> — the exact case that's a total-data-loss failure under name-only type guessing. Temporal handling is tz-aware (<code>timestamptz</code> only when every value carries an offset, else naive <code>timestamp</code>); a <strong>mixed</strong> offset/naive column or a <strong>sub-microsecond</strong> fraction is kept <code>text</code> rather than risk a silent UTC-shift or rounding. A structured report names every promotion (with the validated row count) and every column kept safe. An explicit <code>--type-override</code> always wins.</p>
 <div class="note"><strong>On a live D1, inference stages locally first (automatic).</strong> Cloudflare D1's query API rejects the rich-type validation patterns (its <code>GLOB</code> complexity limit), so against <code>--source-driver d1</code> sluice first replicates the database into a byte-faithful local SQLite file and validates there — engaged automatically when you pass <code>--infer-types</code> (v0.99.167). The staged copy is lossless (exact storage classes, integers above 2<sup>53</sup> included — unlike <code>wrangler d1 export</code>), so inference sees the original types and decides identically. Pass <code>--stage-local</code> to stage even without inference (a faster local bulk read), or <code>--no-stage-local</code> to force the direct path. A plain D1 migrate without <code>--infer-types</code> streams directly as before. (Not needed for a local SQLite file — it has no such limit.)</div>
 
-<h2 id="orm-tables">ORM bookkeeping tables</h2>
+<h2 id="orm-tables">ORM bookkeeping tables <a class="hlink" href="#orm-tables" aria-label="Permalink to this section">#</a></h2>
 <p>An app's ORM keeps its migration state in a bookkeeping table — Rails <code>schema_migrations</code>, Prisma <code>_prisma_migrations</code>, Drizzle <code>__drizzle_migrations</code>, Laravel <code>migrations</code>, Flyway, Goose, and more. That state describes the <em>source</em> engine's schema history and is meaningless — sometimes actively misleading — on a different target engine. On a <strong>cross-engine</strong> migrate (e.g. D1→Postgres) sluice skips these by default, <strong>announcing each skip by name</strong> so nothing vanishes silently. Copy them anyway with <code>--include-orm-tables</code>; on a same-engine run they're kept by default (the history is still valid) unless you pass <code>--skip-orm-tables</code>. Recognition is by distinctive name plus a column-shape guard for the generic names (<code>migrations</code>, <code>schema_migrations</code>), so an app table that merely shares a name isn't skipped by accident.</p>
 
-<h2 id="target">SQLite as a target</h2>
+<h2 id="target">SQLite as a target <a class="hlink" href="#target" aria-label="Permalink to this section">#</a></h2>
 <p>SQLite is also a migrate <strong>target</strong> (<code>--target-driver sqlite</code>) — emit a <code>.db</code> from any source (decimals are stored byte-exact as <code>TEXT</code> affinity, not lossy <code>REAL</code>), e.g. to then run <code>wrangler d1 import</code>. D1 itself is not a write target; produce a SQLite <code>.db</code> and import it with wrangler.</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> postgres <span class="f">--source</span> '&lt;pg-dsn&gt;' \
     <span class="f">--target-driver</span> sqlite   <span class="f">--target</span> ./out.db</code></pre>
 
-<h2 id="continuous">Continuous sync (trigger-CDC)</h2>
+<h2 id="continuous">Continuous sync (trigger-CDC) <a class="hlink" href="#continuous" aria-label="Permalink to this section">#</a></h2>
 <p>The base <code>sqlite</code> and <code>d1</code> engines are migrate-only — SQLite has no logical change stream (its WAL is a physical page-log). For <strong>continuous</strong> sync, sluice captures changes with triggers, via the <code>sqlite-trigger</code> (local file) and <code>d1-trigger</code> (live D1) engines. The lifecycle is explicit — <strong>setup → sync → teardown</strong>:</p>
 <pre><code><span class="c"># 1. install per-table capture triggers + the change-log (each table needs a PRIMARY KEY)</span>
 <span class="k">sluice</span> trigger setup <span class="f">--source-driver</span> sqlite-trigger <span class="f">--dsn</span> ./app.db <span class="f">--tables</span>=users,orders

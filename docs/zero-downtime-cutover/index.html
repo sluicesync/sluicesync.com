@@ -28,11 +28,12 @@
   <main class="content">
     <h1>Zero-downtime migration with continuous sync</h1>
     <p class="subtitle">Cold-start the data, let CDC catch up while the app keeps writing, then cut over in a brief, controlled window.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#start">1. Start the stream</a></li><li><a href="#watch">2. Watch it catch up</a></li><li><a href="#drain">3. Quiesce and drain</a></li><li><a href="#cutover">4. Prime sequences (cutover)</a></li><li><a href="#verify">5. Verify, then flip traffic</a></li></ul></nav>
     
 <p>A one-shot <a href="/docs/migrate-mysql-to-postgres/">migrate</a> is a point-in-time copy: rows written after it starts are missed. <a href="/docs/commands/#sync-start">sync start</a> closes that gap — it takes a consistent snapshot, bulk-copies it, then <strong>streams ongoing changes</strong> (change-data-capture) so the target tracks the source live. That lets you keep the application running on the source the whole time and flip traffic over in a short, controlled window. This is the core "sync, not just migrate" workflow; reach for it whenever downtime isn't acceptable.</p>
 <div class="note"><strong>Source prerequisites.</strong> CDC reads the source's native change stream. Postgres needs logical replication (a replication slot + <code>REPLICATION</code> role); MySQL needs the binlog (<code>ROW</code> format). On a managed Postgres that blocks slots (Heroku, some RDS tiers), use the slot-less <a href="/docs/commands/#trigger">trigger engine</a> instead — sluice refuses loudly rather than silently degrading to polling.</div>
 
-<h2 id="start">1. Start the stream</h2>
+<h2 id="start">1. Start the stream <a class="hlink" href="#start" aria-label="Permalink to this section">#</a></h2>
 <p>A stream is identified by <code>--stream-id</code> so it can resume after a restart. The first launch cold-starts (snapshot → bulk copy), then transitions seamlessly into live CDC and keeps running until you stop it:</p>
 <pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
@@ -40,7 +41,7 @@
     <span class="f">--stream-id</span> app-prod</code></pre>
 <p>Restarting with the same <code>--stream-id</code> warm-resumes from the persisted position — it does not re-run the snapshot. To run it as a long-lived service with a health endpoint and an idle-source heartbeat (so the slot/binlog can't be evicted past the consumer during quiet periods), add <code>--metrics-listen :9090</code> and <code>--source-heartbeat-interval 30s</code>; see <a href="https://github.com/sluicesync/sluice/blob/main/docs/operator/running-as-a-service.md">running as a service</a> and the <a href="/docs/commands/#sync-start">sync start reference</a>.</p>
 
-<h2 id="watch">2. Watch it catch up</h2>
+<h2 id="watch">2. Watch it catch up <a class="hlink" href="#watch" aria-label="Permalink to this section">#</a></h2>
 <p>From another shell, check the stream's position and freshness. <code>sync health</code> returns a cron-friendly exit code so you can script "are we caught up yet?":</p>
 <pre><code><span class="k">sluice</span> sync status <span class="f">--stream-id</span> app-prod <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET"
 
@@ -49,14 +50,14 @@
     <span class="f">--max-stale-seconds</span> 5</code></pre>
 <p>Once <code>sync health</code> reports fresh under a tight threshold, the target is tracking the source within seconds — you're ready to cut over. (On a PG→PG pair, also pass <code>--source-driver</code>/<code>--source</code> to expose <code>--max-lag-bytes</code> for byte-distance lag.)</p>
 
-<h2 id="drain">3. Quiesce and drain</h2>
+<h2 id="drain">3. Quiesce and drain <a class="hlink" href="#drain" aria-label="Permalink to this section">#</a></h2>
 <p>At your chosen cutover moment, stop writes to the source application (the brief window), then drain the last in-flight changes. <code>sync stop --wait</code> blocks until the streamer has applied everything queued and exited cleanly:</p>
 <pre><code><span class="k">sluice</span> sync stop <span class="f">--stream-id</span> app-prod \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
     <span class="f">--wait</span> <span class="f">--timeout</span> 10m</code></pre>
 <p>On timeout the CLI exits non-zero and the stop request stays in place — so a scripted cutover fails safe rather than proceeding on a half-drained target.</p>
 
-<h2 id="cutover">4. Prime sequences (cutover)</h2>
+<h2 id="cutover">4. Prime sequences (cutover) <a class="hlink" href="#cutover" aria-label="Permalink to this section">#</a></h2>
 <p>CDC replicates row changes, not catalog-level sequence positions. So after the drain, the target's <code>SERIAL</code> / <code>AUTO_INCREMENT</code> counters can lag behind the IDs that already exist in its rows — and the first post-cutover <code>INSERT</code> would collide on the primary key. <a href="/docs/commands/#cutover">cutover</a> closes that gap: it re-reads the source sequence state and applies it to the target with a safety margin:</p>
 <pre><code><span class="k">sluice</span> cutover \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
@@ -64,7 +65,7 @@
     <span class="f">--sequence-margin</span> 1000</code></pre>
 <div class="note"><code>cutover</code> is idempotent and fails safe: a re-run within the margin reports every table as <code>noop</code>, and if the target's sequence is already <em>ahead</em> of the source by more than the margin it <strong>refuses</strong> (exit code 2) rather than risk a collision — the signal that something already wrote to the target. Run it after the drain and before pointing application traffic at the target.</div>
 
-<h2 id="verify">5. Verify, then flip traffic</h2>
+<h2 id="verify">5. Verify, then flip traffic <a class="hlink" href="#verify" aria-label="Permalink to this section">#</a></h2>
 <p>Confirm the data agrees, then point your application at the target:</p>
 <pre><code><span class="k">sluice</span> verify <span class="f">--source-driver</span> mysql <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" <span class="f">--depth</span> count</code></pre>

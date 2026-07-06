@@ -104,8 +104,52 @@ function sidebar(activeSlug) {
 // a page added above is picked up automatically, never hand-listed twice.
 const EMITTED = [];
 
+function slugify(s) {
+  return (
+    s
+      .replace(/<[^>]+>/g, "")
+      .toLowerCase()
+      .replace(/&[a-z]+;/g, " ")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "section"
+  );
+}
+
+// Give every h2/h3 in a page body a stable id (reusing any hand-authored id)
+// and a hover-revealed "#" permalink, and collect the h2s for a table of
+// contents. Purely additive and layout-safe: we only APPEND a small trailing
+// link — never wrap the heading's inner content — so existing #anchors keep
+// working and the `.cmd h3` flex layout is untouched.
+function processHeadings(body) {
+  const toc = [];
+  const seen = new Set();
+  const html = body.replace(/<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/g, (_m, tag, attrs, inner) => {
+    const text = inner.replace(/<[^>]+>/g, "").trim();
+    let id = (attrs.match(/id="([^"]+)"/) || [])[1];
+    if (!id) {
+      let base = slugify(text);
+      id = base;
+      for (let n = 2; seen.has(id); n++) id = base + "-" + n;
+      attrs += ` id="${id}"`;
+    }
+    seen.add(id);
+    if (tag === "h2") toc.push({ id, text });
+    return `<${tag}${attrs}>${inner} <a class="hlink" href="#${id}" aria-label="Permalink to this section">#</a></${tag}>`;
+  });
+  return { html, toc };
+}
+
+function renderToc(toc) {
+  if (toc.length < 2) return "";
+  const items = toc.map((t) => `<li><a href="#${t.id}">${t.text}</a></li>`).join("");
+  return `<nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul>${items}</ul></nav>`;
+}
+
 function page({ slug, title, subtitle, body, prev, next }) {
   EMITTED.push({ slug, title, subtitle, body });
+  const { html: bodyHtml, toc } = processHeadings(body);
+  const tocHtml = renderToc(toc);
   const desc = subtitle || "sluice documentation";
   const guideSlugs = [
     "from-backup-sync",
@@ -163,7 +207,8 @@ function page({ slug, title, subtitle, body, prev, next }) {
   <main class="content">
     <h1>${esc(title)}</h1>
     ${subtitle ? '<p class="subtitle">' + esc(subtitle) + "</p>" : ""}
-    ${body}
+    ${tocHtml}
+    ${bodyHtml}
     ${pager}
   </main>
 </div>

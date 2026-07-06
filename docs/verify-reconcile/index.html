@@ -28,10 +28,11 @@
   <main class="content">
     <h1>Verify &amp; reconcile after a migration</h1>
     <p class="subtitle">Confirm every row landed and no structural drift crept in — then know exactly what to do when it didn't.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#verify-data">1. Verify the rows landed</a></li><li><a href="#json-exit">2. JSON output and cron-friendly exit codes</a></li><li><a href="#schema-drift">3. Confirm no structural drift</a></li><li><a href="#on-mismatch">4. What to do on a mismatch</a></li><li><a href="#decision-table">5. Symptom → first look</a></li><li><a href="#next-steps">Next steps</a></li></ul></nav>
     
 <p><a href="/docs/preview-and-validate/">Preview &amp; validate</a> is the <em>pre</em>-migration companion to this guide: it shows the DDL and steers translation before a row moves. This guide is the <em>post</em>-migration half — after <code>migrate</code> finishes, or after a <a href="/docs/zero-downtime-cutover/">sync</a> has caught up, you want proof that the data actually landed and that the target's shape still matches what sluice would produce. Two read-only commands give you that proof: <a href="/docs/commands/#verify">verify</a> compares the rows, <a href="/docs/commands/#schema">schema diff</a> compares the structure. Both exit non-zero on a discrepancy, so either one drops straight into a cron job or a CI gate.</p>
 
-<h2 id="verify-data">1. Verify the rows landed</h2>
+<h2 id="verify-data">1. Verify the rows landed <a class="hlink" href="#verify-data" aria-label="Permalink to this section">#</a></h2>
 <p><code>verify</code> compares the data itself, on a depth ladder — start cheap, escalate only when you need a stronger guarantee. It never writes to the target.</p>
 <table><thead><tr><th>Depth</th><th>What it does</th></tr></thead><tbody>
 <tr><td><code>--depth count</code> (default)</td><td class="desc">Per-table row-count comparison. Fast, works across engines, and catches whole-table loss and bulk-row loss.</td></tr>
@@ -50,7 +51,7 @@
 <p>Tune sample mode with <code>--sample-rows-per-table</code> (raise it for tables with rare anomalies), <code>--sample-seed</code> (deterministic — the same seed picks the same rows on both sides; change it to reshuffle), and <code>--strict-hash</code> (SHA-256 instead of MD5, for an extra confidence margin or a compliance posture that requires it). Scope any run with <code>--include-table</code> / <code>--exclude-table</code> (glob-aware, mutually exclusive).</p>
 <div class="note"><strong>Full per-row hashing is planned, not yet shipped.</strong> Today the ladder stops at <code>sample</code>; <code>count</code> plus a well-sized same-engine sample is the strongest check available.</div>
 
-<h2 id="json-exit">2. JSON output and cron-friendly exit codes</h2>
+<h2 id="json-exit">2. JSON output and cron-friendly exit codes <a class="hlink" href="#json-exit" aria-label="Permalink to this section">#</a></h2>
 <p>Both depths accept <code>--format json</code> and <code>-o FILE</code>, so <code>verify</code> pipes cleanly into a CI gate or an alertmanager pipeline. The JSON carries per-table deltas — source vs target counts, sampled-row count, and the mismatched primary keys when sample mode finds drift — so you get the offending rows, not just a red/green.</p>
 <pre><code><span class="k">sluice</span> verify <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
               <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
@@ -63,13 +64,13 @@
 </tbody></table>
 <div class="note"><strong>Redacted migrations.</strong> If you migrated with <code>--redact</code>, the target values differ from the source <em>by design</em> — so a same-engine <code>--depth=sample</code> run will report those rows as content mismatches. Verify redacted migrations with <code>--depth=count</code> (row parity is still meaningful), or scope the sample to unredacted tables with <code>--include-table</code>.</div>
 
-<h2 id="schema-drift">3. Confirm no structural drift</h2>
+<h2 id="schema-drift">3. Confirm no structural drift <a class="hlink" href="#schema-drift" aria-label="Permalink to this section">#</a></h2>
 <p>Row parity doesn't prove the <em>shape</em> is right — an index that failed to build, a column that came back with the wrong type, a constraint that never applied. <code>schema diff</code> reads the live target and compares it against what sluice would produce from the source, then prints the delta with <strong>copy-paste DDL suggestions</strong> to reconcile it. It's read-only — there is no <code>--apply</code> flag by design (ADR-0029); the DDL is for you to review and run. Like <code>verify</code>, it exits non-zero on any difference.</p>
 <pre><code><span class="k">sluice</span> schema diff <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
                    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET"</code></pre>
 <p>Its exit codes mirror <code>verify</code>: <code>0</code> clean, <code>1</code> drift detected (the gate fails; a one-line summary goes to stderr, the full diff to stdout or <code>-o FILE</code>), <code>2</code> operational error. Trim the noise when part of the target is managed out-of-band: <code>--ignore-charset-collation</code> suppresses MySQL charset/collation diffs, <code>--ignore-extras</code> hides tables/columns/indexes that exist only on the target, and <code>--skip-views</code> drops view comparison entirely. <code>--format json</code> is available for CI. If you steered any types at migrate time with <code>--type-override</code>, pass the identical flags here so the diff compares against the schema you actually intended.</p>
 
-<h2 id="on-mismatch">4. What to do on a mismatch</h2>
+<h2 id="on-mismatch">4. What to do on a mismatch <a class="hlink" href="#on-mismatch" aria-label="Permalink to this section">#</a></h2>
 <p>A non-zero exit tells you <em>where</em> — the table, and (in sample mode) the mismatched primary keys. From there:</p>
 <ul>
   <li><strong>Structural drift (<code>schema diff</code> flagged it).</strong> Read the suggested DDL. If it's a missing index or constraint on an otherwise-correct table, applying the suggestion is often enough. If a column type is wrong, fix it with a <code>--type-override</code> and re-migrate that table rather than hand-patching.</li>
@@ -78,7 +79,7 @@
   <li><strong>The mismatch is on the source side.</strong> If <code>verify</code> reports the <em>target</em> has more rows, or the counts drift on every re-run, suspect the source: rows written after the copy started, a source table still taking writes without a sync, or a filter (<code>--include-table</code>) that differs between the migrate and the verify. Re-verify with the same table scope you migrated.</li>
 </ul>
 
-<h2 id="decision-table">5. Symptom → first look</h2>
+<h2 id="decision-table">5. Symptom → first look <a class="hlink" href="#decision-table" aria-label="Permalink to this section">#</a></h2>
 <table><thead><tr><th>Symptom</th><th>First look</th></tr></thead><tbody>
 <tr><td class="desc"><code>verify --depth=count</code> exits 1, target has fewer rows</td><td class="desc">Re-run <code>migrate</code>; if partially written, <code>migrate --reset-target-data</code>.</td></tr>
 <tr><td class="desc">Target has <em>more</em> rows than source</td><td class="desc">Source took writes after the copy — reconcile the window, or move to continuous sync before cutover.</td></tr>
@@ -89,7 +90,7 @@
 <tr><td class="desc"><code>--depth=sample</code> refused for a cross-engine pair</td><td class="desc">By design — use <code>--depth=count</code> across engines.</td></tr>
 </tbody></table>
 
-<h2 id="next-steps">Next steps</h2>
+<h2 id="next-steps">Next steps <a class="hlink" href="#next-steps" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><a href="/docs/preview-and-validate/">Preview &amp; validate before you migrate</a> — the pre-migration half: DDL preview and type steering.</li>
   <li><a href="/docs/commands/#verify">Command reference: verify</a> and <a href="/docs/commands/#schema">schema preview / diff</a> — every flag in one place.</li>

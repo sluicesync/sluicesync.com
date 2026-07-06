@@ -83,3 +83,14 @@ footer.foot{border-top:1px solid var(--line);color:var(--muted);font-size:13px;p
   .menu-btn{display:inline-block;background:none;border:1px solid #36505a;color:#dbe5e9;
     border-radius:7px;padding:5px 11px;font-size:14px;cursor:pointer}
 }
+
+/* table of contents + heading permalinks */
+main.content h2,main.content h3{scroll-margin-top:72px}
+.toc{margin:2px 0 34px;padding:14px 18px;border:1px solid var(--line);border-radius:9px;background:var(--paper-2)}
+.toc-label{margin:0 0 8px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#92a0a7}
+.toc ul{margin:0;padding-left:18px}
+.toc li{margin:4px 0}
+.toc a{color:var(--orange-dk)}
+a.hlink{opacity:0;margin-left:.35em;color:var(--muted);font-weight:400;text-decoration:none}
+main.content h2:hover a.hlink,main.content h3:hover a.hlink,a.hlink:focus{opacity:1}
+a.hlink:hover{text-decoration:underline}

@@ -28,22 +28,23 @@
   <main class="content">
     <h1>Drive sluice from an AI agent</h1>
     <p class="subtitle">sluice ships task-scoped agent skills — plain-markdown playbooks that let Claude Code, Cursor, or any skill-aware assistant run a migration, verify a sync, or operate a backup chain on your behalf, inside the same safety gate.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#why">Why sluice ships them</a></li><li><a href="#catalog">The catalog</a></li><li><a href="#safety">The safety gate</a></li><li><a href="#getting-started">Getting started</a></li><li><a href="#learn-more">Learn more</a></li></ul></nav>
     
 <p>sluice ships a set of <strong>agent skills</strong>: task-scoped operator playbooks that let an AI coding agent — <a href="https://www.anthropic.com/claude-code">Claude Code</a>, Cursor, or anything that follows the <a href="/llms.txt">open agent-skills convention</a> — drive the <code>sluice</code> CLI for one concrete job. Each skill is a plain <code>SKILL.md</code> file: no plugins, nothing agent-specific, versioned in the source repo alongside the CLI it drives. They live under <a href="https://github.com/sluicesync/sluice/tree/main/skills"><code>skills/</code></a> in the repository.</p>
 
-<h2 id="why">Why sluice ships them</h2>
+<h2 id="why">Why sluice ships them <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
 <p>sluice already exposes a machine-readable surface built for assistants: an <a href="https://github.com/sluicesync/sluice/blob/main/AGENTS.md"><code>AGENTS.md</code></a> command taxonomy, an <a href="/llms.txt"><code>llms.txt</code></a> docs index, per-command <code>--format json</code> envelopes, stable <code>SLUICE-E-*</code> error codes, and a documented exit taxonomy. A skill sits <em>on top</em> of that surface. It does not re-document the CLI — it references those canonical sources and encodes the <strong>decision tree</strong> for a single task: what to run, how to read the result back, what to report, and where a human must approve before anything changes. One skill, one task, one go/no-go.</p>
 
-<h2 id="catalog">The catalog</h2>
+<h2 id="catalog">The catalog <a class="hlink" href="#catalog" aria-label="Permalink to this section">#</a></h2>
 <p>Nine skills ship today, in two tiers.</p>
-<h3>Tier 1 — the core loop</h3>
+<h3 id="tier-1-the-core-loop">Tier 1 — the core loop <a class="hlink" href="#tier-1-the-core-loop" aria-label="Permalink to this section">#</a></h3>
 <table><thead><tr><th>Skill</th><th>Use it to</th><th>Writes?</th></tr></thead><tbody>
 <tr><td><code>migrate-preflight</code></td><td class="desc">Assess a migrate or sync before running it → a go/no-go with the risks named.</td><td>read-only</td></tr>
 <tr><td><code>fidelity-verify</code></td><td class="desc">Confirm a completed migrate / sync / restore is faithful → a fidelity report.</td><td>read-only</td></tr>
 <tr><td><code>sluice-error-triage</code></td><td class="desc">Turn a <code>SLUICE-E-*</code> code + exit code into a root cause and a recovery path.</td><td>read-only</td></tr>
 <tr><td><code>backup-chain-operator</code></td><td class="desc">Plan and operate an encrypted <a href="/docs/encrypted-backups/">backup chain</a> (full → incremental → compact → prune → restore-test).</td><td>gated</td></tr>
 </tbody></table>
-<h3>Tier 2 — operational + engine-specific</h3>
+<h3 id="tier-2-operational-engine-specific">Tier 2 — operational + engine-specific <a class="hlink" href="#tier-2-operational-engine-specific" aria-label="Permalink to this section">#</a></h3>
 <table><thead><tr><th>Skill</th><th>Use it to</th><th>Writes?</th></tr></thead><tbody>
 <tr><td><code>cdc-sync-operator</code></td><td class="desc">Stand up and operate <a href="/docs/zero-downtime-cutover/">continuous sync</a> (cold-start → CDC → cutover).</td><td>gated</td></tr>
 <tr><td><code>planetscale-migration</code></td><td class="desc">Migrate or sync against <a href="/docs/planetscale-vitess/">PlanetScale / Vitess</a> (VStream, reparent, ownership, metrics-watch).</td><td>gated</td></tr>
@@ -52,7 +53,7 @@
 <tr><td><code>sqlite-d1-import</code></td><td class="desc"><a href="/docs/import-sqlite-d1/">Import SQLite / Cloudflare D1</a> (<code>--stage-local</code>, <code>--infer-types</code>, big-int / CPU gotchas).</td><td>gated</td></tr>
 </tbody></table>
 
-<h2 id="safety">The safety gate</h2>
+<h2 id="safety">The safety gate <a class="hlink" href="#safety" aria-label="Permalink to this section">#</a></h2>
 <p>Every skill honors sluice's command taxonomy — the same gate a careful human operator uses:</p>
 <ul>
   <li><strong>Read-only</strong> commands (<code>--dry-run</code>, <code>verify</code>, <code>schema preview</code> / <code>diff</code>, <code>sync health</code> / <code>status</code>, <code>backup verify</code>, <code>engines</code>) run freely.</li>
@@ -61,7 +62,7 @@
 </ul>
 <div class="note">Every skill also follows sluice's own discipline: <strong>verify by reading state back, never trust an exit code alone</strong>, and treat <code>status:"refused"</code> / exit 3 as a decision point — surface <code>error.hint</code> and wait, don't retry the command unchanged.</div>
 
-<h2 id="getting-started">Getting started</h2>
+<h2 id="getting-started">Getting started <a class="hlink" href="#getting-started" aria-label="Permalink to this section">#</a></h2>
 <ol>
   <li><strong>Install the CLI.</strong> You need the <code>sluice</code> binary — <code>brew install sluicesync/tap/sluice</code>, <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code>, or the <code>ghcr.io/sluicesync/sluice</code> container (see <a href="/docs/getting-started/#install">Getting started</a>).</li>
   <li><strong>Install the skills.</strong> Run the setup script from a checkout of the repo — it detects the agents present and installs each <code>SKILL.md</code> into the right place:
@@ -71,7 +72,7 @@
   <li><strong>Review the go/no-go.</strong> The skill drives the CLI on your behalf and returns a go/no-go, a report, or a gated action — and stops at the safety gate for your approval before anything writes.</li>
 </ol>
 
-<h2 id="learn-more">Learn more</h2>
+<h2 id="learn-more">Learn more <a class="hlink" href="#learn-more" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><a href="https://github.com/sluicesync/sluice/tree/main/skills"><code>skills/</code> in the repository</a> — every <code>SKILL.md</code>, the catalog, and <code>install.sh</code>.</li>
   <li><a href="/llms.txt"><code>llms.txt</code></a> and <a href="/llms-full.txt"><code>llms-full.txt</code></a> — the AI-assistant docs index the skills point at.</li>

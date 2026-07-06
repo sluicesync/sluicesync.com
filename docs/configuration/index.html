@@ -28,8 +28,9 @@
   <main class="content">
     <h1>Configuration</h1>
     <p class="subtitle">Connection strings, environment variables, the YAML config file, and the global flags every command shares.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#connection-strings">Connection strings</a></li><li><a href="#env-vars">Environment variables</a></li><li><a href="#config-file">YAML config file</a></li><li><a href="#global-flags">Global flags</a></li><li><a href="#dsn-tuning">Source-DSN tuning parameters</a></li><li><a href="#metrics">Prometheus /metrics export</a></li><li><a href="#created-objects">What sluice creates in your databases</a></li></ul></nav>
     
-<h2 id="connection-strings">Connection strings</h2>
+<h2 id="connection-strings">Connection strings <a class="hlink" href="#connection-strings" aria-label="Permalink to this section">#</a></h2>
 <p>Every data-moving command takes a source and target driver + DSN:</p>
 <table>
 <thead><tr><th>Engine</th><th>Driver name</th><th>DSN format</th></tr></thead>
@@ -45,7 +46,7 @@
 </tbody>
 </table>
 
-<h2 id="env-vars">Environment variables</h2>
+<h2 id="env-vars">Environment variables <a class="hlink" href="#env-vars" aria-label="Permalink to this section">#</a></h2>
 <p>Keep credentials out of your shell history by passing DSNs via the environment:</p>
 <table>
 <thead><tr><th>Variable</th><th>Equivalent flag</th></tr></thead>
@@ -55,7 +56,7 @@
 </tbody>
 </table>
 
-<h2 id="config-file">YAML config file</h2>
+<h2 id="config-file">YAML config file <a class="hlink" href="#config-file" aria-label="Permalink to this section">#</a></h2>
 <p>For anything beyond a handful of flags, pass a YAML file with <code>--config</code> / <code>-c</code>. CLI flags take
 precedence over config values. Common keys:</p>
 <pre><code><span class="c"># sluice.yaml</span>
@@ -85,7 +86,7 @@ dictionaries:
 <p>Then run, for example:</p>
 <pre><code><span class="k">sluice</span> migrate -c sluice.yaml <span class="f">--source-driver</span> mysql <span class="f">--source</span> ... <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...</code></pre>
 
-<h2 id="global-flags">Global flags</h2>
+<h2 id="global-flags">Global flags <a class="hlink" href="#global-flags" aria-label="Permalink to this section">#</a></h2>
 <p>These apply to every command:</p>
 <table>
 <thead><tr><th>Flag</th><th>Default</th><th>Purpose</th></tr></thead>
@@ -104,7 +105,7 @@ dictionaries:
 
 <div class="note warn"><strong>Migrating legacy MySQL data?</strong> sluice forces a strict <code>sql_mode</code> on every MySQL connection to close the silent-clamp / silent-zero-date class. Data that was only accepted under a relaxed mode (pre-5.7 zero-dates, silently-truncated values) will refuse loudly — pass <code>--mysql-sql-mode=''</code> to fall through to the server default. Zero / partial dates specifically are governed by <code>--zero-date</code> (default <code>error</code>): use <code>--zero-date=null</code> to carry them as NULL or <code>--zero-date=epoch</code> to substitute <code>1970-01-01</code> rather than refusing.</div>
 
-<h2 id="dsn-tuning">Source-DSN tuning parameters</h2>
+<h2 id="dsn-tuning">Source-DSN tuning parameters <a class="hlink" href="#dsn-tuning" aria-label="Permalink to this section">#</a></h2>
 <p>A handful of throughput / observability knobs are passed as query parameters on the <strong>source DSN</strong> rather than as CLI flags — they are engine-specific and parsed inside the engine, so they're stripped before reaching the database session. Append them to the source connection string (e.g. <code>...&amp;vstream_copy_table_parallelism=4</code>).</p>
 <table>
 <thead><tr><th>Parameter</th><th>Applies to</th><th>Purpose</th></tr></thead>
@@ -116,7 +117,7 @@ dictionaries:
 </tbody>
 </table>
 
-<h2 id="metrics">Prometheus <code>/metrics</code> export</h2>
+<h2 id="metrics">Prometheus <code>/metrics</code> export <a class="hlink" href="#metrics" aria-label="Permalink to this section">#</a></h2>
 <p>Pass <code>--metrics-listen ADDR</code> to <a href="/docs/commands/#sync-start">sync start</a> (or <a href="/docs/commands/#metrics-watch">metrics-watch</a>) to bind a Prometheus-format <code>/metrics</code> endpoint (plus <code>/readyz</code> on <code>sync start</code>) for the life of the process. Beyond the stream's apply/throughput counters it exports:</p>
 <ul>
 <li><code>sluice_build_info{version,commit,go_version}</code> — a constant-<code>1</code> gauge carrying the build metadata.</li>
@@ -124,7 +125,7 @@ dictionaries:
 <li>The <code>sluice_target_*</code> gauge family — target CPU / memory / storage utilisation and replica lag — <strong>when PlanetScale telemetry is configured</strong> (<code>--planetscale-org</code> + the metrics-token flags). Without telemetry these gauges are simply absent.</li>
 </ul>
 
-<h2 id="created-objects">What sluice creates in your databases</h2>
+<h2 id="created-objects">What sluice creates in your databases <a class="hlink" href="#created-objects" aria-label="Permalink to this section">#</a></h2>
 <p>To make migrations resumable and continuous sync durable, sluice writes a small, predictable set of <code>sluice_</code>-prefixed bookkeeping objects — state tables on the target, and a replication slot / publication / triggers on the source. They're excluded from <code>schema diff</code> and <code>verify</code>, so they never look like drift. For the full inventory — what each object is, when it appears, and how to remove it — see <a href="/docs/database-objects/">Objects sluice creates</a>.</p>
 
     <div class="pager"><a class="prev" href="/docs/commands/">← Command reference</a></div>

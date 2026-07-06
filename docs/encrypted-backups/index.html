@@ -28,11 +28,12 @@
   <main class="content">
     <h1>Take encrypted backups</h1>
     <p class="subtitle">sluice's logical backup model in depth — chains, compression, encryption at rest, object stores, retention, and restore.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#chain-model">The chain model</a></li><li><a href="#compression">Compression</a></li><li><a href="#encryption">Encryption at rest</a></li><li><a href="#format-version">The FormatVersion refuse-before-touch contract</a></li><li><a href="#object-stores">Object stores</a></li><li><a href="#continuous">Continuous backup</a></li><li><a href="#retention">Retention: prune and compact</a></li><li><a href="#restore">Restore and point-in-time</a></li><li><a href="#verify">Verifying a backup</a></li><li><a href="#next">Next steps</a></li></ul></nav>
     
 <p>sluice's <code>backup</code> verb takes <strong>logical, row-level, cross-engine</strong> backups: a full snapshot that roots a chain, plus CDC-based incrementals appended onto it, written to storage <em>you</em> own. Unlike a physical tool (pgBackRest, WAL-G, XtraBackup), a sluice chain restores into Postgres <em>or</em> MySQL from either, with redaction and encryption already applied in the pipeline. This guide is the reference for the model — the <a href="/docs/getting-started/#backups">getting-started section</a> is the quick tour; here we go deeper into encryption, the format-version contract, retention, and restore.</p>
 <div class="note"><strong>Logical, not physical.</strong> sluice is deliberately not in <code>pg_basebackup</code> / WAL-archive territory — those tools are excellent at same-engine PITR at scale, and that lane is theirs. sluice's value is the cross-engine, operator-owned-storage, encrypt-and-redact-at-capture angle. Many setups run both: physical for primary DR, a sluice chain for the off-vendor / cross-engine / compliance copy.</div>
 
-<h2 id="chain-model">The chain model</h2>
+<h2 id="chain-model">The chain model <a class="hlink" href="#chain-model" aria-label="Permalink to this section">#</a></h2>
 <p>A backup is a <strong>chain</strong>. The <strong>full</strong> snapshot (<code>backup full</code>) is the root; each <strong>incremental</strong> (<code>backup incremental</code>) captures the change events since the previous link and appends a new segment. The full is engine-neutral (any registered source, including a <code>sqlite</code> file); incrementals need a CDC-capable source (Postgres / MySQL natively, or the <code>sqlite-trigger</code> / <code>d1-trigger</code> engines).</p>
 <p>On Postgres, the chain is anchored by a replication slot. Pass <code>--chain-slot</code> to <code>backup full</code> and the full provisions the persistent slot (named by <code>--slot-name</code>, default <code>sluice_slot</code>) as the snapshot anchor and ensures the publication exists — so the next <code>backup incremental</code> chains with <strong>zero gap</strong> by construction, no manual slot management:</p>
 <pre><code><span class="c"># full snapshot to a local directory, provisioning the chain anchor</span>
@@ -45,13 +46,13 @@
 <div class="note"><strong>Why <code>--chain-slot</code> matters.</strong> Creating a slot <em>after</em> a full and expecting the next incremental to fill the gap is a silent-loss trap: PostgreSQL fast-forwards <code>START_REPLICATION</code> to the slot's <code>confirmed_flush_lsn</code> without complaint, so every write in between vanishes from the chain. <code>--chain-slot</code> provisions the slot at the snapshot anchor so there is no gap; a chain-resume preflight then refuses loudly if a slot can't serve the parent position (ADR-0083). To abandon a chain, drop the slot with <code>sluice slot drop</code> — it holds source-side WAL until the next incremental consumes it.</div>
 <p>Chain off a specific parent with <code>--since &lt;backup-id&gt;</code> (default: the most recent manifest). Each incremental's window closes on <code>--window</code> (wall-clock, default <code>5m</code>) or <code>--max-changes</code> (event count), whichever fires first, and is always extended to the next transaction commit so a chain never ends mid-transaction.</p>
 
-<h2 id="compression">Compression</h2>
+<h2 id="compression">Compression <a class="hlink" href="#compression" aria-label="Permalink to this section">#</a></h2>
 <p>Chunks are compressed per segment. The codec is <code>--compression none|gzip|zstd</code>, and the default is <strong><code>zstd</code></strong> (klauspost/compress at SpeedDefault): 55–85% faster restore — the recovery-time-critical axis — for ~1–5% larger artifacts than gzip. <code>none</code> leaves chunks as human-readable <code>.jsonl</code> on a local-FS target; <code>gzip</code> is the pre-v0.67.0 codec. The codec is recorded in <code>lineage.json</code> and read back from there on restore — it is never inferred from the bytes, so a mixed-codec chain restores correctly.</p>
 
-<h2 id="encryption">Encryption at rest</h2>
+<h2 id="encryption">Encryption at rest <a class="hlink" href="#encryption" aria-label="Permalink to this section">#</a></h2>
 <p>Add <code>--encrypt</code> to rest the whole chain under client-side <strong>envelope encryption</strong>: sluice generates a content-encryption key (CEK), encrypts every chunk with it, and wraps the CEK under a key-encryption key (KEK) you supply. <code>--encrypt</code> requires exactly one key source — a passphrase or a cloud KMS key — and the same flag is read on the restore / verify / broker side to unwrap. The two modes are mutually exclusive and cannot be mixed within a single chain.</p>
 
-<h3>Passphrase mode</h3>
+<h3 id="passphrase-mode">Passphrase mode <a class="hlink" href="#passphrase-mode" aria-label="Permalink to this section">#</a></h3>
 <p>Supply the passphrase from an environment variable or a file — <strong>never</strong> on the command line, where it lands in shell history:</p>
 <pre><code>export SLUICE_BACKUP_PASS='correct horse battery staple'
 <span class="k">sluice</span> backup full <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...' \
@@ -64,7 +65,7 @@
 </tbody></table>
 <p>sluice derives the KEK from the passphrase with <strong>Argon2id</strong> and records the salt + cost parameters in the chain-root manifest. Incrementals and restores re-derive the same KEK from those recorded params — so an operator only ever has to remember the passphrase, and every link in the chain unwraps consistently.</p>
 
-<h3>Cloud KMS mode</h3>
+<h3 id="cloud-kms-mode">Cloud KMS mode <a class="hlink" href="#cloud-kms-mode" aria-label="Permalink to this section">#</a></h3>
 <p>Instead of a passphrase, wrap the CEK through a cloud KMS. The KMS <em>root</em> key never leaves the provider — sluice routes only wrap/unwrap calls:</p>
 <table><thead><tr><th>Flag</th><th>Provider</th></tr></thead><tbody>
 <tr><td><code>--kms-key-arn</code></td><td class="desc">AWS KMS key ARN, alias ARN, or <code>alias/name</code>. Pair with <code>--kms-region</code> to override region resolution. Auth follows the AWS SDK (env / profile / instance role).</td></tr>
@@ -80,11 +81,11 @@
     <span class="f">--encrypt</span> <span class="f">--kms-key-arn</span> arn:aws:kms:us-east-1:111122223333:key/abcd-1234</code></pre>
 <div class="note">The KMS flags are mutually exclusive with each other and with the passphrase flags. Setting a key source without <code>--encrypt</code> is a loud error, not a silent plaintext backup.</div>
 
-<h3>Per-chain vs per-chunk</h3>
+<h3 id="per-chain-vs-per-chunk">Per-chain vs per-chunk <a class="hlink" href="#per-chain-vs-per-chunk" aria-label="Permalink to this section">#</a></h3>
 <p><code>--encrypt-mode</code> chooses the CEK granularity: <code>per-chain</code> (default) uses one CEK for the whole chain — a single KEK derive / KMS <code>Decrypt</code> per restore; <code>per-chunk</code> uses a fresh CEK per chunk for defense-in-depth at the cost of a per-chunk wrap. Most operators want the default.</p>
 <div class="note"><strong>One mode per chain.</strong> A chain uses a single encryption mode for every segment. Set <code>--encrypt-mode per-chain</code> or <code>per-chunk</code> on the <code>backup full</code> that roots the chain; on each <code>backup incremental</code>, <code>backup stream</code>, or resumed <code>backup full</code>, <strong>omit <code>--encrypt-mode</code> so the segment inherits the chain's mode</strong>. Passing an explicit mode that conflicts with the chain's recorded mode is refused at build time (as of v0.99.185) rather than silently producing a mixed-mode chain.</div>
 
-<h2 id="format-version">The FormatVersion refuse-before-touch contract</h2>
+<h2 id="format-version">The FormatVersion refuse-before-touch contract <a class="hlink" href="#format-version" aria-label="Permalink to this section">#</a></h2>
 <p>Every chain-root manifest carries a <code>FormatVersion</code>. It exists to prevent one specific silent-loss class: an older sluice binary restoring a chain and <em>silently dropping</em> security-or-correctness metadata it doesn't understand.</p>
 <ul>
   <li><strong><code>FormatVersion=1</code></strong> — the schema uses none of the gated features. Any sluice from v0.16.x onward restores it.</li>
@@ -95,7 +96,7 @@
 <p>The rule is <strong>proportional</strong>: a manifest gets the <em>minimum</em> version safe for its actual contents, so a typical CRUD database with no RLS, no <code>EXCLUDE</code> constraints, and no standalone sequences stays at <code>FormatVersion=1</code> and cross-version restore behaves exactly as before. The value is derived from the schema — there's no flag to set. Audit it with <code>jq .format_version manifest.json</code>.</p>
 <p>Point a pre-v0.94.1 binary at a <code>FormatVersion=2</code> chain and its restore preflight trips <em>before any DDL or data lands</em>: it exits with <code>manifest format version 2 is newer than this build supports (1); upgrade sluice</code> and creates zero relations on the target. The refuse-before-touch property is load-bearing — there is no code path on the older binary where the chain is partially applied with RLS or <code>EXCLUDE</code> metadata stripped. The silent-loss class is structurally impossible (Bug 116, closed in v0.94.1). Full contract: <a href="https://github.com/sluicesync/sluice/blob/main/docs/backup-format-versioning.md">backup-format-versioning.md</a>.</p>
 
-<h2 id="object-stores">Object stores</h2>
+<h2 id="object-stores">Object stores <a class="hlink" href="#object-stores" aria-label="Permalink to this section">#</a></h2>
 <p>Swap <code>--output-dir</code> for <code>--target &lt;url&gt;</code> to write to an object store. Four schemes are supported:</p>
 <table><thead><tr><th>Scheme</th><th>Destination</th></tr></thead><tbody>
 <tr><td><code>s3://bucket/prefix</code></td><td class="desc">Amazon S3 or any S3-compatible provider.</td></tr>
@@ -112,14 +113,14 @@
     <span class="f">--backup-path-style</span> \
     <span class="f">--chain-slot</span></code></pre>
 
-<h2 id="continuous">Continuous backup</h2>
+<h2 id="continuous">Continuous backup <a class="hlink" href="#continuous" aria-label="Permalink to this section">#</a></h2>
 <p>Rather than firing an incremental from cron, run <code>backup stream run</code> as a long-lived process that commits <strong>rolling incrementals</strong> at a cadence. Each rollover closes on the first of <code>--rollover-window</code> (default <code>5m</code>), <code>--rollover-max-changes</code> (default <code>100000</code>), or <code>--rollover-max-bytes</code> (default 64 MiB), and — like a manual incremental — extends to the next transaction commit:</p>
 <pre><code><span class="k">sluice</span> backup stream run <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...' \
     <span class="f">--target</span> s3://my-bucket/app-chain \
     <span class="f">--rollover-window</span> 5m <span class="f">--rollover-max-changes</span> 100000</code></pre>
 <p>Stop it with SIGTERM / SIGINT (drains the in-flight rollover and exits), or cross-machine with <code>sluice backup stream stop --target &lt;url&gt;</code>, which writes a stop request the running stream observes on its next rollover tick. To bound total disk without an external wrapper, in-process rotation caps the open segment at <code>--retain-rotate-at &lt;dur&gt;</code> and/or <code>--retain-rotate-at-chain-length &lt;n&gt;</code> and opens a fresh segment over the same CDC handle (ADR-0046); pair that with <code>backup prune</code> below.</p>
 
-<h2 id="retention">Retention: prune and compact</h2>
+<h2 id="retention">Retention: prune and compact <a class="hlink" href="#retention" aria-label="Permalink to this section">#</a></h2>
 <p>Two explicit operator actions bound a chain's size and restore time. Neither runs automatically, and the chain root (full) is always preserved.</p>
 <p><strong><code>backup prune</code></strong> drops the oldest incrementals. Choose retention by count (<code>--keep-incrementals N</code>) or age (<code>--keep-duration DUR</code>) — exactly one is required. The first surviving incremental is re-stitched to point at the full directly, which advances the chain's earliest restorable position forward: the dropped windows are gone from the chain's restore range, so this is opt-in. Use <code>--dry-run</code> to see what would go without touching storage.</p>
 <pre><code><span class="c"># keep the 30 most recent incrementals; preview first</span>
@@ -127,7 +128,7 @@
 <span class="k">sluice</span> backup prune <span class="f">--from-dir</span> /var/backups/app <span class="f">--keep-incrementals</span> 30</code></pre>
 <p><strong><code>backup compact</code></strong> merges consecutive segments whose <code>CreatedAt</code> gaps fall within <code>--merge-window</code> (required) into one segment — fewer files, faster restore. By default it's a byte-level concat: bytes are never decompressed, recompressed, or re-encrypted. Mixed codecs, divergent encryption keysets, or position gaps within a group refuse loudly before any mutation. Opt into event-level collapse (INSERT+UPDATE → INSERT, etc.) with <code>--smart-compaction</code> (ADR-0064). <code>--dry-run</code> reports the plan.</p>
 
-<h2 id="restore">Restore and point-in-time</h2>
+<h2 id="restore">Restore and point-in-time <a class="hlink" href="#restore" aria-label="Permalink to this section">#</a></h2>
 <p><code>sluice restore</code> reads a chain from <code>--from-dir</code> / <code>--from</code>, applies the schema (retargeting cross-engine if <code>--target-driver</code> differs from the backup's source engine), bulk-copies the rows back, and creates indexes, constraints, and views. When the store contains incrementals, restore walks the chain <strong>in order</strong> from the root through every incremental present, landing the target at the chain's tip:</p>
 <pre><code><span class="k">sluice</span> restore <span class="f">--from-dir</span> /var/backups/app \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...target...'</code></pre>
@@ -135,7 +136,7 @@
 <p>Restore parallelism is engine-generic: <code>--table-parallelism</code> (tables applied concurrently, auto 4) composes with <code>--bulk-parallelism</code> (a single table's chunks applied concurrently, auto min(8, NumCPU)); their product is clamped to the target's connection budget. For a chain that carries incrementals, <code>--apply-concurrency</code> fans the incremental change-replay across in-order PK-hash lanes (auto 4) — the knob that matters on a high-latency / cross-region target. Same-engine chains replay schema deltas and change chunks; cross-engine chains that carry incrementals are refused (a full-only cross-engine restore is fine).</p>
 <div class="note">To replay a chain into a <em>live, continuously-updated</em> target instead of a one-shot restore, use the broker — one process produces the chain, another tails it and applies incrementals as they land. See <a href="/docs/from-backup-sync/">Sync from a backup chain</a>.</div>
 
-<h2 id="verify">Verifying a backup</h2>
+<h2 id="verify">Verifying a backup <a class="hlink" href="#verify" aria-label="Permalink to this section">#</a></h2>
 <p><code>backup verify</code> walks a chain, recomputes every chunk's SHA-256, and reports any mismatch — a target-free integrity probe, ideal for a cron check against archived backups:</p>
 <pre><code><span class="k">sluice</span> backup verify <span class="f">--from-dir</span> /var/backups/app</code></pre>
 <p>For an <strong>encrypted</strong> chain, add <code>--encrypt</code> plus the same key source you backed up with. Verify then also runs a decrypt probe on every per-chunk wrapped CEK, so a mid-chain passphrase rotation surfaces here as a clear verify failure instead of a partial-fail at restore time (Bug 117). Verify warns loudly if you point it at an encrypted chain <em>without</em> a key source — SHA-only verify can't see that class of problem.</p>
@@ -143,7 +144,7 @@
 <span class="k">sluice</span> backup verify <span class="f">--from-dir</span> /var/backups/app \
     <span class="f">--encrypt</span> <span class="f">--encryption-passphrase-env</span> SLUICE_BACKUP_PASS</code></pre>
 
-<h2 id="next">Next steps</h2>
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><a href="/docs/from-backup-sync/">Sync from a backup chain</a> — replay a chain into a live target as a long-running broker (decoupled transport).</li>
   <li><a href="/docs/commands/#backup">backup / restore command reference</a> — the full flag set for every subcommand.</li>

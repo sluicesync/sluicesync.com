@@ -28,22 +28,23 @@
   <main class="content">
     <h1>How sluice copies your data</h1>
     <p class="subtitle">Same-engine vs cross-engine: which internal path a copy takes, and why the fast path never trades correctness for speed.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#ir-path">The IR path — the default, and the only path for cross-engine</a></li><li><a href="#pg-fast-lane">Postgres → Postgres — the fast lane that skips the round trip</a></li><li><a href="#mysql-same-engine">MySQL → MySQL — no translation to do, plus a native loader</a></li><li><a href="#same-fidelity">The fast lane is not "more accurate" — it is the same fidelity, less work</a></li><li><a href="#safety-gate">The safety gate — why speed never costs you correctness</a></li><li><a href="#next">Next steps</a></li></ul></nav>
     
 <p>Every migration and sync moves rows through one of two internal paths. Which one runs is automatic — you don't pick it — but the distinction explains sluice's performance profile and, more importantly, why it never trades correctness for speed.</p>
 
-<h2 id="ir-path">The IR path — the default, and the only path for cross-engine</h2>
+<h2 id="ir-path">The IR path — the default, and the only path for cross-engine <a class="hlink" href="#ir-path" aria-label="Permalink to this section">#</a></h2>
 <p>Everything cross-engine — MySQL → Postgres, Postgres → MySQL, SQLite → anything — flows through sluice's <strong>internal representation</strong> (IR): a typed, dialect-neutral model of your schema and values. The source reader decodes each row into IR; the target writer encodes IR into the target's wire format. The IR is where every cross-engine capability lives: type translation (MySQL <code>TINYINT(1)</code> ↔ PG <code>BOOLEAN</code>; PG <code>UUID</code> / <code>INET</code> / <code>ARRAY</code> ↔ their MySQL equivalents), <a href="/docs/redact-pii/">PII redaction</a>, <code>--type-override</code> / <code>--expr-override</code>, and the value-fidelity checks that refuse loudly rather than silently coerce. That generality is the point of sluice — but it has a cost: every value is decoded and re-encoded, even when source and target are the same engine and nothing needs to change.</p>
 
-<h2 id="pg-fast-lane">Postgres → Postgres — the fast lane that skips the round trip</h2>
+<h2 id="pg-fast-lane">Postgres → Postgres — the fast lane that skips the round trip <a class="hlink" href="#pg-fast-lane" aria-label="Permalink to this section">#</a></h2>
 <p>When both sides are Postgres and there is no transformation to apply, the bytes the source emits are exactly the bytes the target wants, so the decode → IR → re-encode round trip buys nothing. sluice detects this and byte-pipes the server's native <code>COPY</code> stream straight from source to target (<code>COPY (SELECT …) TO STDOUT</code> → <code>COPY … FROM STDIN</code>), never materializing an IR row. This is the same tactic <a href="https://github.com/planetscale/pgcopydb">pgcopydb</a> uses, and it closes most of the per-stream throughput gap against it. It composes with sluice's parallel copy — each table, and each primary-key-range chunk of a large table, byte-pipes independently.</p>
 
-<h2 id="mysql-same-engine">MySQL → MySQL — no translation to do, plus a native loader</h2>
+<h2 id="mysql-same-engine">MySQL → MySQL — no translation to do, plus a native loader <a class="hlink" href="#mysql-same-engine" aria-label="Permalink to this section">#</a></h2>
 <p>A same-engine MySQL copy still flows through the IR (there is no raw byte-pipe for MySQL today), but with source and target identical there is nothing to <em>translate</em> — every type round-trips exactly — and sluice writes through MySQL's native bulk loader (<code>LOAD DATA LOCAL INFILE</code>) on the parallel copy path, the fastest ingest MySQL offers. (PlanetScale blocks <code>LOAD DATA LOCAL</code>, so a PlanetScale target falls back to batched multi-row <code>INSERT</code>.)</p>
 
-<h2 id="same-fidelity">The fast lane is not "more accurate" — it is the same fidelity, less work</h2>
+<h2 id="same-fidelity">The fast lane is not "more accurate" — it is the same fidelity, less work <a class="hlink" href="#same-fidelity" aria-label="Permalink to this section">#</a></h2>
 <p>Worth stating plainly: the Postgres byte-pipe is <strong>not a more exact copy</strong> than the IR path. Both are exact. It is faster precisely <em>because</em> it only runs when there is provably nothing to change — so it can move bytes instead of re-deriving them.</p>
 
-<h2 id="safety-gate">The safety gate — why speed never costs you correctness</h2>
+<h2 id="safety-gate">The safety gate — why speed never costs you correctness <a class="hlink" href="#safety-gate" aria-label="Permalink to this section">#</a></h2>
 <p>The Postgres byte-pipe is guarded by one auditable check that proves there is no transform to skip. The moment any of these is present, sluice falls back to the IR path automatically — <strong>per table</strong>, without you configuring anything:</p>
 <ul>
   <li><code>--redact</code> (PII redaction)</li>
@@ -60,7 +61,7 @@
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@dst:5432/app?sslmode=require' \
     <span class="f">--raw-copy-format</span> auto      # text (default) | binary | auto (binary when majors match)</code></pre>
 
-<h2 id="next">Next steps</h2>
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><a href="/docs/commands/#migrate">migrate reference</a> — the parallelism flags (<code>--table-parallelism</code>, <code>--bulk-parallelism</code>) and <code>--raw-copy-format</code>.</li>
   <li><a href="/docs/redact-pii/">Redact PII</a> — the transforms that route a copy onto the IR path.</li>

@@ -28,6 +28,7 @@
   <main class="content">
     <h1>Migrate many databases or schemas at once</h1>
     <p class="subtitle">Fan a whole MySQL server or a multi-schema Postgres source out to same-named target namespaces in one run.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#pg-schemas">Postgres source: every schema in one run</a></li><li><a href="#mysql-databases">MySQL server: every database → Postgres in one run</a></li><li><a href="#fan-in">Fan-IN: many sources → one target namespace</a></li><li><a href="#rename">Rename a namespace on the way</a></li><li><a href="#edges">The documented edges</a></li></ul></nav>
     
 <p>By default <code>migrate</code> and <code>sync start</code> move the one database (MySQL) or schema (Postgres) named in the source DSN. The multi-namespace flags move <strong>all</strong> of a server's databases, or all of a Postgres source's schemas, in a single run — snapshot and CDC both — fanning each source namespace out to a <strong>same-named</strong> target namespace. Reach for this with a multi-tenant MySQL server (one database per tenant), a Postgres database holding several application schemas, or any "migrate the whole server" job.</p>
 <p>The unifying idea is that <em>a MySQL database is the rough equivalent of a Postgres schema</em>. So there's one internal routing with two spellings: use the <code>--*-database</code> form on a <strong>MySQL source</strong> and the <code>--*-schema</code> form on a <strong>Postgres source</strong>. They're synonyms — mixing both spellings in one invocation is a loud error.</p>
@@ -38,7 +39,7 @@
 </tbody></table>
 <p>Within a form, include / exclude / all are mutually exclusive. System namespaces are always excluded (<code>information_schema</code>, <code>performance_schema</code>, <code>mysql</code>, <code>sys</code> on MySQL; <code>pg_catalog</code>, <code>information_schema</code>, <code>pg_toast</code>, <code>pg_temp*</code> on Postgres). When any namespace-scope flag is set, the source DSN's database/schema is <strong>optional</strong> — sluice connects to the server (or, on PG, to the database) rather than a single namespace.</p>
 
-<h2 id="pg-schemas">Postgres source: every schema in one run</h2>
+<h2 id="pg-schemas">Postgres source: every schema in one run <a class="hlink" href="#pg-schemas" aria-label="Permalink to this section">#</a></h2>
 <p>A Postgres database holding <code>sales</code>, <code>billing</code>, <code>inventory</code> → one Postgres target, each schema recreated (auto-created if absent) under its own name:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://user:pw@src/appdb?sslmode=require' \
@@ -51,7 +52,7 @@
 <span class="c"># everything except the staging schemas</span>
 <span class="k">sluice</span> migrate ... <span class="f">--exclude-schema</span> 'scratch,tmp_load'</code></pre>
 
-<h2 id="mysql-databases">MySQL server: every database → Postgres in one run</h2>
+<h2 id="mysql-databases">MySQL server: every database → Postgres in one run <a class="hlink" href="#mysql-databases" aria-label="Permalink to this section">#</a></h2>
 <p>A MySQL server hosting one database per tenant/service → a single Postgres target, <strong>each MySQL database recreated as a same-named PG schema</strong> (auto-created). Note the source DSN has no database after the <code>/</code> — with <code>--all-databases</code> it's a server connection:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:pw@tcp(src:3306)/' \
@@ -59,7 +60,7 @@
     <span class="f">--all-databases</span></code></pre>
 <p>MySQL <code>shop</code> / <code>crm</code> / <code>analytics</code> land as PG schemas <code>shop</code> / <code>crm</code> / <code>analytics</code> under <code>warehouse</code>. When the target is also MySQL, each source database is recreated via <code>CREATE DATABASE IF NOT EXISTS</code> — same names, no manual pre-creation.</p>
 
-<h2 id="fan-in">Fan-IN: many sources → one target namespace</h2>
+<h2 id="fan-in">Fan-IN: many sources → one target namespace <a class="hlink" href="#fan-in" aria-label="Permalink to this section">#</a></h2>
 <p>The reverse shape — several independent source databases (e.g. per-microservice MySQL databases) consolidated into <strong>one</strong> Postgres analytics schema. This isn't a <code>--all-*</code> fan-out; it's N separate runs, each pinned to the same target namespace with <code>--target-schema</code> (Postgres-target-only; it prefixes every emitted object and auto-creates the schema):</p>
 <pre><code><span class="c"># service A → warehouse.analytics</span>
 <span class="k">sluice</span> migrate <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'root:pw@tcp(svc-a:3306)/orders' \
@@ -72,7 +73,7 @@
     <span class="f">--target-schema</span> analytics</code></pre>
 <div class="note">To avoid table-name collisions across services landing in one schema, pair <code>--target-schema</code> with <code>--inject-shard-column NAME=VALUE</code>, which adds a per-source discriminator and a composite PK. See the <a href="/docs/commands/#migrate">migrate reference</a>.</div>
 
-<h2 id="rename">Rename a namespace on the way</h2>
+<h2 id="rename">Rename a namespace on the way <a class="hlink" href="#rename" aria-label="Permalink to this section">#</a></h2>
 <p>By default every source namespace lands in a <strong>same-named</strong> target. To route one to a differently-named target — consolidating <code>legacy_app</code> into <code>app</code>, or namespacing each tenant under a prefix — pass <code>--map-database SRC=DST</code> (MySQL source) or <code>--map-schema SRC=DST</code> (Postgres source), repeatable, for both snapshot and CDC:</p>
 <pre><code><span class="c"># MySQL databases shop / crm → PG schemas storefront / sales (analytics keeps its name)</span>
 <span class="k">sluice</span> migrate \
@@ -83,7 +84,7 @@
     <span class="f">--map-database</span> crm=sales</code></pre>
 <p>The spelling rule matches the fan-out flags — <code>--map-database</code> on a MySQL source, <code>--map-schema</code> on a Postgres source; mixing both in one run is a loud error. The rename is purely a target-side routing: source-keyed <code>--redact</code> and <code>--type-override</code> still match on the <em>original</em> source name, so a remap never quietly disables a redaction rule.</p>
 
-<h2 id="edges">The documented edges</h2>
+<h2 id="edges">The documented edges <a class="hlink" href="#edges" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><strong>Cross-database / cross-schema foreign keys are refused loudly.</strong> A fan-out validates that FK referents are inside the selected set; an out-of-scope FK fails loudly at the deferred FK pass (after the copy), never silently dropped.</li>
   <li><strong>Separate Postgres <em>databases</em> are one run each.</strong> A PG connection is scoped to a single database, so <code>--all-schemas</code> covers every schema <em>within</em> the connected database; moving N separate PG databases is N runs (one <code>--source</code> DSN each).</li>

@@ -28,11 +28,12 @@
   <main class="content">
     <h1>Migrate MySQL → Postgres</h1>
     <p class="subtitle">The flagship first migration: connect, preview the plan, copy the data, and verify it landed.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#connect">1. Point sluice at both databases</a></li><li><a href="#dry-run">2. Dry-run the plan first</a></li><li><a href="#run">3. Run the migration</a></li><li><a href="#resume">4. If it's interrupted, resume</a></li><li><a href="#verify">5. Verify the copy</a></li><li><a href="#legacy">Migrating legacy MySQL data?</a></li></ul></nav>
     
 <p>A one-shot <a href="/docs/commands/#migrate">migrate</a> translates the source schema, creates the target tables, bulk-copies the rows, then builds indexes and constraints — in that order, so the bulk load runs against constraint-free tables and finishes fast. This guide walks MySQL → Postgres end to end, but the same shape works in <strong>all four directions</strong> (just swap the <code>--source-driver</code> / <code>--target-driver</code> pair). Reach for <code>migrate</code> when you can take a short write-freeze on the source; if you need a zero-downtime cutover, run the <a href="/docs/zero-downtime-cutover/">continuous-sync</a> flow instead — but even then a clean <code>migrate</code> is the fastest way to learn how sluice translates your schema.</p>
 <div class="note">Before a production cutover, freeze writes on the source (or accept that rows written during the copy won't be captured — <code>migrate</code> is a point-in-time copy, not a stream). To keep writes flowing throughout, use <a href="/docs/zero-downtime-cutover/">continuous sync</a>.</div>
 
-<h2 id="connect">1. Point sluice at both databases</h2>
+<h2 id="connect">1. Point sluice at both databases <a class="hlink" href="#connect" aria-label="Permalink to this section">#</a></h2>
 <p>Source and target are each a <strong>driver name</strong> plus a <strong>DSN</strong>. Because DSNs carry credentials, pass them through the environment to keep them out of your shell history:</p>
 <pre><code>export SLUICE_SOURCE='root:rootpw@tcp(localhost:3306)/app'
 export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=require'
@@ -40,7 +41,7 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=requir
 <span class="k">sluice</span> engines      # confirm 'mysql' and 'postgres' are registered</code></pre>
 <p>The MySQL DSN is <code>user:pass@tcp(host:3306)/dbname</code>; the Postgres DSN is a <code>postgres://</code> URL. See <a href="/docs/configuration/#connection-strings">Configuration</a> for every engine's DSN format.</p>
 
-<h2 id="dry-run">2. Dry-run the plan first</h2>
+<h2 id="dry-run">2. Dry-run the plan first <a class="hlink" href="#dry-run" aria-label="Permalink to this section">#</a></h2>
 <p><code>--dry-run</code> (<code>-n</code>) reads the source schema and prints exactly what sluice would do — tables, row estimates, the translated types — <strong>without touching the target</strong>. Always do this first:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
@@ -48,7 +49,7 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=requir
     <span class="f">--dry-run</span></code></pre>
 <p>For the actual target DDL sluice will emit — column by column, with cross-engine translation notes — use <a href="/docs/preview-and-validate/">schema preview</a>. That's where you'll catch a type you want to steer with <code>--type-override</code> before any data moves.</p>
 
-<h2 id="run">3. Run the migration</h2>
+<h2 id="run">3. Run the migration <a class="hlink" href="#run" aria-label="Permalink to this section">#</a></h2>
 <p>When the plan looks right, drop <code>--dry-run</code>:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
@@ -56,7 +57,7 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=requir
 <p>sluice copies each table, then builds secondary indexes and constraints in deferred phases. On large schemas it copies several tables at once and splits big tables into parallel chunks automatically — see <code>--table-parallelism</code> / <code>--bulk-parallelism</code> in the <a href="/docs/commands/#migrate">migrate reference</a> if you want to tune the connection budget.</p>
 <div class="note"><strong>Cold-start safety.</strong> sluice refuses to bulk-copy into a non-empty target by default — an <code>INSERT</code> into a populated table would collide on the primary key. That refusal is the safety net, not an error to suppress: it means the target already has data. Start from an empty target, or see the recovery flags below.</div>
 
-<h2 id="resume">4. If it's interrupted, resume</h2>
+<h2 id="resume">4. If it's interrupted, resume <a class="hlink" href="#resume" aria-label="Permalink to this section">#</a></h2>
 <p>Migration state is checkpointed per table on the target. If a run dies partway (network blip, OOM, Ctrl-C), re-run the identical command with <code>--resume</code> (<code>-r</code>) and it continues from the last committed checkpoint rather than starting over:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
@@ -64,7 +65,7 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=requir
     <span class="f">--resume</span></code></pre>
 <p>To deliberately start clean over an already-populated target, <code>--reset-target-data</code> drops the source-schema tables on the target and re-copies (it prompts for a typed <code>reset</code> confirmation unless you add <code>--yes</code>). It's mutually exclusive with <code>--resume</code>.</p>
 
-<h2 id="verify">5. Verify the copy</h2>
+<h2 id="verify">5. Verify the copy <a class="hlink" href="#verify" aria-label="Permalink to this section">#</a></h2>
 <p>Once the migration finishes, confirm source and target agree. <a href="/docs/commands/#verify">verify</a> compares per-table row counts by default and returns a non-zero exit code on any mismatch (CI-friendly):</p>
 <pre><code><span class="k">sluice</span> verify \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
@@ -72,7 +73,7 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=requir
     <span class="f">--depth</span> count</code></pre>
 <p>For content checking — not just counts — escalate to <code>--depth sample</code> (per-table sampled-row content hashes; ~99% confidence on a 5%+ corruption rate). See the <a href="/docs/preview-and-validate/#verify">validate guide</a> for the depth ladder.</p>
 
-<h2 id="legacy">Migrating legacy MySQL data?</h2>
+<h2 id="legacy">Migrating legacy MySQL data? <a class="hlink" href="#legacy" aria-label="Permalink to this section">#</a></h2>
 <p>sluice forces a strict <code>sql_mode</code> on every MySQL connection to close the silent-clamp / silent-zero-date class of corruption. Data that was only storable under a relaxed mode — pre-5.7 zero-dates (<code>0000-00-00</code>), silently-truncated values — will <strong>refuse loudly</strong> rather than land subtly wrong. That's deliberate. Two knobs let you decide how to carry it:</p>
 <ul>
   <li><code>--zero-date=null</code> carries zero/partial dates as <code>NULL</code> (refused on a <code>NOT NULL</code> column), or <code>--zero-date=epoch</code> substitutes <code>1970-01-01</code>.</li>

@@ -29,6 +29,7 @@
     <h1>Documentation</h1>
     <p class="subtitle">Migrate and continuously sync MySQL and Postgres, and import SQLite / Cloudflare D1 — correctness-first, loud failure by default.</p>
     
+    
 <p>sluice is an open-source tool for moving and keeping databases in sync between <strong>MySQL</strong> and
 <strong>Postgres</strong>, in all four directions. <strong>SQLite</strong> files (and a <code>wrangler d1 export</code> <code>.sql</code> dump)
 and live <strong>Cloudflare D1</strong> databases also import into Postgres or MySQL, and SQLite is itself a migrate target —
@@ -39,7 +40,7 @@ use independently or end to end:</p>
   <li><strong>Sync</strong> — change-data-capture streaming with a snapshot → CDC handoff and resumable checkpoints.</li>
   <li><strong>Operate</strong> — run as a long-lived service behind <code>/readyz</code> and <code>/metrics</code>, or as one-shot jobs.</li>
 </ul>
-<h2>Start here</h2>
+<h2 id="start-here">Start here <a class="hlink" href="#start-here" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><a href="/docs/getting-started/">Getting started</a> — install, connect, and run your first migration and sync.</li>
   <li><a href="/docs/commands/">Command reference</a> — every command, its key flags, and worked examples.</li>

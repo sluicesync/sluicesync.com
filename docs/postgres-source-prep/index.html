@@ -28,10 +28,11 @@
   <main class="content">
     <h1>Prepare a Postgres source</h1>
     <p class="subtitle">What a Postgres source needs before it can feed a continuous sync — the required GUCs, the REPLICATION role attribute, replication-slot lifecycle, and the slot-less path for managed Postgres.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#required-gucs">Required GUCs</a></li><li><a href="#replication-role">The REPLICATION role attribute</a></li><li><a href="#slot-name">The replication slot</a></li><li><a href="#failover">Slot survival under failover</a></li><li><a href="#slot-health">Slot health and telemetry</a></li><li><a href="#slotless">Managed / locked-down Postgres: the slot-less trigger engine</a></li><li><a href="#next">Next steps</a></li></ul></nav>
     
 <p>A one-shot <a href="/docs/commands/#migrate">migrate</a> from Postgres needs only <code>SELECT</code> and works anywhere, including locked-down managed tiers. <strong>Continuous sync</strong> is different: sluice's default Postgres CDC engine reads changes through a logical replication slot, which needs a handful of cluster settings and a role privilege. This guide is the practical checklist — set these before <code>sync start</code>, and if your host forbids them, jump to the <a href="#slotless">slot-less trigger path</a> at the end.</p>
 
-<h2 id="required-gucs">Required GUCs</h2>
+<h2 id="required-gucs">Required GUCs <a class="hlink" href="#required-gucs" aria-label="Permalink to this section">#</a></h2>
 <p>Logical replication is gated by a small set of server parameters. Check them as a superuser on the source:</p>
 <pre><code>SHOW wal_level;                  -- must be 'logical'
 SHOW max_replication_slots;      -- &gt;= 2 x replicas
@@ -48,7 +49,7 @@ SHOW max_slot_wal_keep_size;     -- '&gt; 4GB' recommended; '-1' = unlimited (ri
 (set wal_level=logical in postgresql.conf and restart)</code></pre>
 <div class="note"><strong>Logical WAL costs more.</strong> Flipping <code>wal_level</code> from <code>replica</code> to <code>logical</code> raises the WAL byte-rate — roughly 1.2x–1.6x on a typical OLTP workload, more on wide <code>TEXT</code>/<code>JSONB</code> rows under <code>REPLICA IDENTITY FULL</code>. That multiplier also applies to WAL a lagging slot retains, so budget <code>max_slot_wal_keep_size</code> (and your backup/replica bandwidth) accordingly. Measure your own workload at <code>logical</code> before depending on it in production.</div>
 
-<h2 id="replication-role">The REPLICATION role attribute</h2>
+<h2 id="replication-role">The REPLICATION role attribute <a class="hlink" href="#replication-role" aria-label="Permalink to this section">#</a></h2>
 <p>The role sluice connects as must be a superuser <strong>or</strong> carry the <code>REPLICATION</code> attribute — creating a logical slot requires it:</p>
 <pre><code>ALTER ROLE sluice_user WITH REPLICATION;</code></pre>
 <p>sluice does <strong>not</strong> silently degrade to polling when this is missing. A preflight probe (reading the world-readable <code>pg_roles.rolsuper OR rolreplication</code>) runs <em>before</em> the CDC reader opens, and refuses loudly — naming the role and every recovery path — rather than letting slot creation fail opaquely mid-cold-start with a raw <code>ERROR: permission denied to create replication slot</code> (SQLSTATE 42501):</p>
@@ -60,7 +61,7 @@ role; (c) on managed Postgres that forbids the REPLICATION attribute (Heroku
 Postgres Essential, Render Basic, Supabase free), use <span class="f">--source-driver</span>=postgres-trigger</code></pre>
 <p>There is deliberately no <code>--allow-missing-replication</code> escape hatch: the role genuinely cannot create a slot, so the honest choices are to grant the attribute, swap roles, or use the <a href="#slotless">slot-less engine</a>. This refusal fires only on the slot-based CDC path — a pure bulk <code>migrate</code> is unaffected.</p>
 
-<h2 id="slot-name">The replication slot</h2>
+<h2 id="slot-name">The replication slot <a class="hlink" href="#slot-name" aria-label="Permalink to this section">#</a></h2>
 <p>sluice creates one logical slot per stream, named <code>sluice_slot</code> by default. Override it with <code>--slot-name</code>; sluice prepends <code>sluice_</code> if your value doesn't already start with it (so <code>--slot-name shard_a</code> creates <code>sluice_shard_a</code>). The convention lets you find every sluice-owned slot with <code>WHERE slot_name LIKE 'sluice\_%'</code>. Give concurrent sluice instances against the same source distinct slot names — without them they collide on the default.</p>
 <p>List and drop slots from the CLI without dropping to psql:</p>
 <pre><code><span class="c"># List every slot on the source (columns mirror pg_replication_slots)</span>
@@ -71,7 +72,7 @@ Postgres Essential, Render Basic, Supabase free), use <span class="f">--source-d
 <span class="k">sluice</span> slot drop sluice_slot <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://user:pass@host:5432/app'</code></pre>
 <p>When you start a stream and setup fails partway (publication permissions, <code>START_REPLICATION</code> rejection, cancellation), the freshly-created slot is auto-dropped before the error returns — so failed cold-start attempts don't leave <code>sluice_slot</code>-named slots behind. Auto-cleanup deliberately skips a slot that pre-existed the call (it may carry someone else's progress) and a slot whose pump already emitted positioned changes (that's user data); for those, <code>sluice slot drop</code> is the explicit path.</p>
 
-<h2 id="failover">Slot survival under failover</h2>
+<h2 id="failover">Slot survival under failover <a class="hlink" href="#failover" aria-label="Permalink to this section">#</a></h2>
 <p>This is the part that bites people. <strong>A logical slot is a primary-local object by default</strong> — when the primary fails over, the slot does not move to the new primary, and a slot left behind is <strong>silently</strong> lost: no error, no warning, your CDC stream just begins missing changes. Confirm one slot-preservation mechanism is actually configured before betting production on it:</p>
 <ul>
   <li><strong>PlanetScale Postgres (Patroni):</strong> add the slot name to the <em>"Logical slot name"</em> field under <em>Cluster configuration &rarr; Parameters &rarr; Failover</em> (comma-delimited for multiple consumers). Slots not listed there are lost on failover.</li>
@@ -81,7 +82,7 @@ Postgres Essential, Render Basic, Supabase free), use <span class="f">--source-d
 </ul>
 <div class="note"><strong>The idle-slot trap.</strong> Even with all three mechanisms configured, a slot that hasn't <em>advanced</em> during the slot-sync window can still be lost on failover: the standby's copy stays at an old LSN, and promotion leaves it pointing at recycled WAL (<code>wal_status='lost'</code> on resume). The durable fix is to keep the slot advancing — run <code>sync start</code> continuously (its CDC reader sends a standby-status keepalive every 10s), and on quiet sources inject lightweight WAL. sluice has this built in.</div>
 
-<h3 id="heartbeat">Keeping an idle slot alive</h3>
+<h3 id="heartbeat">Keeping an idle slot alive <a class="hlink" href="#heartbeat" aria-label="Permalink to this section">#</a></h3>
 <p>Set <code>--source-heartbeat-interval</code> and sluice INSERTs a row into a source-owned table (default <code>sluice_heartbeat</code>) on each interval; the write generates WAL, advancing the consumer position against an idle source and preventing slot eviction (ADR-0061 / F17):</p>
 <pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://user:pass@host:5432/app' \
@@ -90,7 +91,7 @@ Postgres Essential, Render Basic, Supabase free), use <span class="f">--source-d
     <span class="f">--source-heartbeat-interval</span> 30s</code></pre>
 <p>It is <strong>opt-in</strong> (<code>0</code>, off, by default) because the INSERT is a behaviour change on the source that regulated systems must enable explicitly. The heartbeat table is auto-created and periodically pruned (<code>--source-heartbeat-prune-window</code>, default <code>1h</code>); on a role without <code>CREATE TABLE</code> the streamer WARNs once and continues without it. Rename the table with <code>--source-heartbeat-table-name</code>, or silence the warning with <code>--no-source-heartbeat</code>.</p>
 
-<h2 id="slot-health">Slot health and telemetry</h2>
+<h2 id="slot-health">Slot health and telemetry <a class="hlink" href="#slot-health" aria-label="Permalink to this section">#</a></h2>
 <p>A logical slot moves through these states, visible in <code>pg_replication_slots.wal_status</code>:</p>
 <table>
 <thead><tr><th>wal_status</th><th>Meaning</th></tr></thead>
@@ -115,7 +116,7 @@ sluice_pg_slot_spill_txns_total{stream_id="app",slot="sluice_slot"} 17
 sluice_pg_slot_spill_bytes_total{stream_id="app",slot="sluice_slot"} 5242880</code></pre>
 <p>Both counters are cumulative since slot creation, so alert on the <em>rate</em> (<code>rate(sluice_pg_slot_spill_bytes_total[5m])</code>). sluice deliberately omits the lines — rather than printing <code>0</code> — when it can't tell (PG &lt; 14, the slot hasn't decoded yet, or a non-Postgres source), so "no signal" is never mistaken for "no spill." If they climb, raise <code>logical_decoding_work_mem</code> on the source (live-reloadable) and split oversized application transactions.</p>
 
-<h2 id="slotless">Managed / locked-down Postgres: the slot-less trigger engine</h2>
+<h2 id="slotless">Managed / locked-down Postgres: the slot-less trigger engine <a class="hlink" href="#slotless" aria-label="Permalink to this section">#</a></h2>
 <p>When the host forbids logical replication — Heroku Postgres, RDS without the right grants, Supabase / Crunchy starter tiers — you cannot get a replication slot at all. sluice's answer is the <code>postgres-trigger</code> engine: per-table plpgsql triggers write every change into a capture table (<code>sluice_change_log</code>) and the engine tails it — Bucardo-style CDC with no slot and no <code>REPLICATION</code> attribute (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0066-postgres-trigger-cdc.md">ADR-0066</a>). The lifecycle is explicit — <strong>setup &rarr; run &rarr; teardown</strong> — so the source-side DDL is visible at the CLI, never silently applied on first sync.</p>
 <p><strong>1. Install the capture triggers.</strong> <code>--tables</code> is required. On a tier that also denies event-trigger creation (needed for automatic DDL detection), add <code>--allow-polled-fingerprint</code> to opt into the weaker polled schema-fingerprint fallback — the command refuses loudly without it so you acknowledge the trade-off:</p>
 <pre><code><span class="k">sluice</span> trigger setup \
@@ -134,7 +135,7 @@ sluice_pg_slot_spill_bytes_total{stream_id="app",slot="sluice_slot"} 5242880</co
     <span class="f">--dsn</span> 'postgres://user:pass@host:5432/app' <span class="f">--yes</span></code></pre>
 <p>The connecting role needs <code>CREATE</code> on the target schema, <code>TRIGGER</code> on each replicated table, and <code>INSERT</code> on <code>sluice_change_log</code> — a much smaller ask than <code>REPLICATION</code>. Tune how much of each row the capture writes with <code>--capture-payload</code> (<code>full</code> / <code>changed</code> / <code>minimal</code>), and reap durably-applied change-log rows while the sync runs with <code>sluice trigger prune</code>. The full command surface is in the <a href="/docs/commands/#trigger">trigger reference</a>, and the trigger-CDC walkthrough lives in <a href="/docs/getting-started/#trigger-cdc">Getting started</a>.</p>
 
-<h2 id="next">Next steps</h2>
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><a href="/docs/commands/#sync-start">sync start</a> — every flag for the continuous-sync command, including <code>--metrics-listen</code> and the notify thresholds.</li>
   <li><a href="/docs/commands/#trigger">trigger setup / teardown</a> — the slot-less engine's full reference.</li>
