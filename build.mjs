@@ -167,7 +167,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     ${pager}
   </main>
 </div>
-<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code></footer>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="${slug === "" ? "/docs/index.md" : "/docs/" + slug + "/index.md"}">View this page as Markdown</a></footer>
 </body>
 </html>`;
 }
