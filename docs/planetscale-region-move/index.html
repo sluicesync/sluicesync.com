@@ -35,7 +35,8 @@
 <h2 id="notes">Before you start &amp; gotchas <a class="hlink" href="#notes" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><strong>Foreign keys — enable them on the target first.</strong> PlanetScale does not accept <code>FOREIGN KEY</code> DDL by default (Vitess rejects it with <code>VT10001</code>). If your schema uses foreign keys, turn on <strong>"Allow foreign key constraints"</strong> in the <em>target</em> database's <strong>Settings → General</strong> tab <em>before</em> you migrate — with no open deploy requests — so sluice's foreign-key DDL is accepted and the constraints are preserved (<a href="https://planetscale.com/docs/vitess/foreign-key-constraints#how-to-enable-foreign-key-constraints">how to enable them</a>). It is supported on <em>unsharded</em> databases only, cyclic foreign keys with <code>CASCADE</code> are not supported, and deploy requests do not validate the referential integrity of pre-existing rows. If you would rather not carry the foreign keys at all, dropping them also works — sluice emits each column's covering index as a separate statement, so those are kept.</li>
-  <li><strong><code>--allow-cross-shard-merge</code></strong> is currently required on unsharded databases — see the current-version note under <a href="#connect">Provision the target</a>.</li>
+  <li><strong>Sharding.</strong> A normal unsharded PlanetScale database (the default) needs no special flag on <strong>v0.99.190+</strong>; <code>--allow-cross-shard-merge</code> applies only to a genuinely <em>sharded</em> source keyspace — see the note under <a href="#connect">Provision the target</a>.</li>
+  <li><strong>One run per keyspace.</strong> A PlanetScale database is a single keyspace, and each <code>sync start</code> / <code>migrate</code> moves one source keyspace to one target. To move several databases, run one per database (each with its own <code>--stream-id</code> and target) or supervise them with a <a href="/docs/operate-fleet/">sync fleet config</a> — no single run spans multiple source keyspaces.</li>
   <li><strong>The <code>sync stop --wait</code> drain message.</strong> On VStream teardown, <code>sync stop --wait</code> may print a "did not complete drain within …" timeout even though the stream <em>did</em> drain and exit cleanly. Verify the process actually exited rather than treating that message alone as a failure.</li>
   <li><strong>Throughput is target-tier-CPU-bound.</strong> The bulk copy is limited by the target cluster's CPU; scale the tier for a faster copy.</li>
 </ul>
@@ -52,7 +53,7 @@ USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-eu?tls=true</code></pre>
 <p><code>USERNAME</code> is the generated <code>username</code> field returned by <code>pscale password create &lt;db&gt; &lt;branch&gt; &lt;label&gt;</code> — <em>not</em> the label you pass on the command line — and <code>PASSWORD</code> is its <code>plain_text</code> value. Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting the DSN in argv, so credentials don't land in your shell history or process list.</p>
 <div class="note warn"><strong>The target driver is <code>planetscale</code>, not <code>mysql</code>.</strong> The <code>mysql</code> engine cold-copies with <code>LOAD DATA INFILE</code>, which Vitess/PlanetScale blocks; the <code>planetscale</code> engine uses batched inserts and speaks VStream for CDC. Use <code>--source-driver planetscale</code> and <code>--target-driver planetscale</code> on both ends.</div>
 <div class="note"><strong>The target password needs <code>--role admin</code>.</strong> sluice creates the data tables plus (for a sync) small control tables, and lesser roles (<code>reader</code>/<code>writer</code>/<code>readwriter</code>) are denied DDL on a production branch. Mint it with <code>pscale password create app-eu main mover --role admin</code>. The source password only needs read access.</div>
-<div class="note"><strong>Current-version flag.</strong> On unsharded PlanetScale databases, sluice ≤ v0.99.189 currently requires <code>--allow-cross-shard-merge</code> on <code>sync start</code> / <code>migrate</code> because of a shard-detection quirk (a fix is in progress). It is safe on a normal single-shard database, and the examples below include it so they work as shown.</div>
+<div class="note"><strong>No special flag for a normal database.</strong> On <strong>v0.99.190+</strong>, an ordinary <em>unsharded</em> PlanetScale database — the default, one keyspace per database — syncs and migrates with no extra flags. <code>--allow-cross-shard-merge</code> is only for a genuinely <em>sharded</em> source keyspace, where it opts out of the guard that stops rows from different shards colliding on a shared key (prefer <code>--inject-shard-column</code> when the key isn't globally unique across shards). On sluice ≤ v0.99.189 an unsharded database needed <code>--allow-cross-shard-merge</code> as a workaround for a shard-detection bug fixed in v0.99.190 — upgrade and drop it.</div>
 
 <h2 id="zero-downtime">Option A — zero-downtime (recommended) <a class="hlink" href="#zero-downtime" aria-label="Permalink to this section">#</a></h2>
 <p>A continuous sync snapshots and bulk-copies the source, then streams live CDC — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. Start with a dry-run to review the plan, then launch the long-lived stream:</p>
@@ -60,13 +61,13 @@ USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-eu?tls=true</code></pre>
 <span class="k">sluice</span> sync start <span class="f">--stream-id</span> region-move \
     <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET" \
-    <span class="f">--allow-cross-shard-merge</span> <span class="f">--dry-run</span> <span class="f">--format</span> json
+    <span class="f">--dry-run</span> <span class="f">--format</span> json
 
 <span class="c"># launch the long-lived stream (snapshot -&gt; bulk copy -&gt; live CDC)</span>
 <span class="k">sluice</span> sync start <span class="f">--stream-id</span> region-move \
     <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET" \
-    <span class="f">--apply-batch-size</span> 50 <span class="f">--allow-cross-shard-merge</span></code></pre>
+    <span class="f">--apply-batch-size</span> 50</code></pre>
 <p>Watch it catch up from another shell, and gate cutover on freshness:</p>
 <pre><code><span class="k">sluice</span> sync status <span class="f">--stream-id</span> region-move \
     <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET"
@@ -91,13 +92,11 @@ USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-eu?tls=true</code></pre>
 <p>If you can take a short maintenance window, a one-shot migrate is simpler — one command, no control tables left behind, and <code>identity_sync</code> auto-primes <code>AUTO_INCREMENT</code> so there's no separate cutover step:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
-    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET" \
-    <span class="f">--allow-cross-shard-merge</span> <span class="f">--dry-run</span>
+    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET" <span class="f">--dry-run</span>
 
 <span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
-    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET" \
-    <span class="f">--allow-cross-shard-merge</span>
+    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET"
 
 <span class="k">sluice</span> verify \
     <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \

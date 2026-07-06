@@ -8,7 +8,9 @@ A PlanetScale database is pinned to its region at creation, and there is no in-p
 
 - Foreign keys — enable them on the target first. PlanetScale does not accept FOREIGN KEY DDL by default (Vitess rejects it with VT10001). If your schema uses foreign keys, turn on "Allow foreign key constraints" in the target database's Settings → General tab before you migrate — with no open deploy requests — so sluice's foreign-key DDL is accepted and the constraints are preserved (how to enable them). It is supported on unsharded databases only, cyclic foreign keys with CASCADE are not supported, and deploy requests do not validate the referential integrity of pre-existing rows. If you would rather not carry the foreign keys at all, dropping them also works — sluice emits each column's covering index as a separate statement, so those are kept.
 
-- --allow-cross-shard-merge is currently required on unsharded databases — see the current-version note under Provision the target.
+- Sharding. A normal unsharded PlanetScale database (the default) needs no special flag on v0.99.190+; --allow-cross-shard-merge applies only to a genuinely sharded source keyspace — see the note under Provision the target.
+
+- One run per keyspace. A PlanetScale database is a single keyspace, and each sync start / migrate moves one source keyspace to one target. To move several databases, run one per database (each with its own --stream-id and target) or supervise them with a sync fleet config — no single run spans multiple source keyspaces.
 
 - The sync stop --wait drain message. On VStream teardown, sync stop --wait may print a "did not complete drain within …" timeout even though the stream did drain and exit cleanly. Verify the process actually exited rather than treating that message alone as a failure.
 
@@ -34,7 +36,7 @@ The target driver is planetscale, not mysql. The mysql engine cold-copies with L
 
 The target password needs --role admin. sluice creates the data tables plus (for a sync) small control tables, and lesser roles (reader/writer/readwriter) are denied DDL on a production branch. Mint it with pscale password create app-eu main mover --role admin. The source password only needs read access.
 
-Current-version flag. On unsharded PlanetScale databases, sluice ≤ v0.99.189 currently requires --allow-cross-shard-merge on sync start / migrate because of a shard-detection quirk (a fix is in progress). It is safe on a normal single-shard database, and the examples below include it so they work as shown.
+No special flag for a normal database. On v0.99.190+, an ordinary unsharded PlanetScale database — the default, one keyspace per database — syncs and migrates with no extra flags. --allow-cross-shard-merge is only for a genuinely sharded source keyspace, where it opts out of the guard that stops rows from different shards colliding on a shared key (prefer --inject-shard-column when the key isn't globally unique across shards). On sluice ≤ v0.99.189 an unsharded database needed --allow-cross-shard-merge as a workaround for a shard-detection bug fixed in v0.99.190 — upgrade and drop it.
 
 ## Option A — zero-downtime (recommended)
 
@@ -44,13 +46,13 @@ A continuous sync snapshots and bulk-copies the source, then streams live CDC �
     sluice sync start --stream-id region-move \
         --source-driver planetscale --source "$SLUICE_SOURCE" \
         --target-driver planetscale --target "$SLUICE_TARGET" \
-        --allow-cross-shard-merge --dry-run --format json
+        --dry-run --format json
 
     # launch the long-lived stream (snapshot -> bulk copy -> live CDC)
     sluice sync start --stream-id region-move \
         --source-driver planetscale --source "$SLUICE_SOURCE" \
         --target-driver planetscale --target "$SLUICE_TARGET" \
-        --apply-batch-size 50 --allow-cross-shard-merge
+        --apply-batch-size 50
 
 Watch it catch up from another shell, and gate cutover on freshness:
 
@@ -83,13 +85,11 @@ If you can take a short maintenance window, a one-shot migrate is simpler — on
 
     sluice migrate \
         --source-driver planetscale --source "$SLUICE_SOURCE" \
-        --target-driver planetscale --target "$SLUICE_TARGET" \
-        --allow-cross-shard-merge --dry-run
+        --target-driver planetscale --target "$SLUICE_TARGET" --dry-run
 
     sluice migrate \
         --source-driver planetscale --source "$SLUICE_SOURCE" \
-        --target-driver planetscale --target "$SLUICE_TARGET" \
-        --allow-cross-shard-merge
+        --target-driver planetscale --target "$SLUICE_TARGET"
 
     sluice verify \
         --source-driver planetscale --source "$SLUICE_SOURCE" \
