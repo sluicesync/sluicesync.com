@@ -2111,6 +2111,14 @@ write(
     body: `
 <p>A PlanetScale database is pinned to its region at creation, and there is no in-place region move. The path is straightforward: create a <strong>new</strong> PS-MySQL database in the <em>target</em> region, then use sluice to copy the data across — either a <strong>zero-downtime continuous sync + cutover</strong> (recommended) or a <strong>one-shot migrate</strong>. Both directions are MySQL→MySQL, so no cross-engine type translation is involved. Datasets that need this are typically well under 10&nbsp;GB.</p>
 
+<h2 id="notes">Before you start &amp; gotchas</h2>
+<ul>
+  <li><strong>Foreign keys — enable them on the target first.</strong> PlanetScale does not accept <code>FOREIGN KEY</code> DDL by default (Vitess rejects it with <code>VT10001</code>). If your schema uses foreign keys, turn on <strong>"Allow foreign key constraints"</strong> in the <em>target</em> database's <strong>Settings → General</strong> tab <em>before</em> you migrate — with no open deploy requests — so sluice's foreign-key DDL is accepted and the constraints are preserved (<a href="https://planetscale.com/docs/vitess/foreign-key-constraints#how-to-enable-foreign-key-constraints">how to enable them</a>). It is supported on <em>unsharded</em> databases only, cyclic foreign keys with <code>CASCADE</code> are not supported, and deploy requests do not validate the referential integrity of pre-existing rows. If you would rather not carry the foreign keys at all, dropping them also works — sluice emits each column's covering index as a separate statement, so those are kept.</li>
+  <li><strong><code>--allow-cross-shard-merge</code></strong> is currently required on unsharded databases — see the current-version note under <a href="#connect">Provision the target</a>.</li>
+  <li><strong>The <code>sync stop --wait</code> drain message.</strong> On VStream teardown, <code>sync stop --wait</code> may print a "did not complete drain within …" timeout even though the stream <em>did</em> drain and exit cleanly. Verify the process actually exited rather than treating that message alone as a failure.</li>
+  <li><strong>Throughput is target-tier-CPU-bound.</strong> The bulk copy is limited by the target cluster's CPU; scale the tier for a faster copy.</li>
+</ul>
+
 <h2 id="connect">Provision the target &amp; connect</h2>
 <p>Create the destination database in the new region, sized to match (or exceed) the source. A PS-10 branch takes roughly 7–8 minutes to reach <code>READY</code>:</p>
 ${pre(`pscale database create app-eu --region aws-sa-east-1 --cluster-size PS-10`)}
@@ -2177,14 +2185,6 @@ sluice verify \\
 
 <h2 id="which">Which to choose</h2>
 <p>Zero-downtime (Option A) is the better default for a real region move: no write freeze, and in testing it was also about <strong>3× faster on the bulk copy</strong> than one-shot (~5 minutes vs ~14 minutes for the same 1.2&nbsp;GB). One-shot (Option B) wins only on simplicity, when a brief maintenance window is acceptable and you'd rather not run a long-lived stream or a separate cutover.</p>
-
-<h2 id="notes">Before you start &amp; gotchas</h2>
-<ul>
-  <li><strong>Foreign keys.</strong> Vitess rejects <code>FOREIGN KEY</code> DDL (<code>VT10001</code>). If the source schema declares foreign keys, they must be dropped (kept as plain indexed columns) before the move. This applies to <em>any</em> DDL against PlanetScale, not just sluice.</li>
-  <li><strong><code>--allow-cross-shard-merge</code></strong> is currently required on unsharded databases — see the current-version note under <a href="#connect">Provision the target</a>.</li>
-  <li><strong>The <code>sync stop --wait</code> drain message.</strong> On VStream teardown, <code>sync stop --wait</code> may print a "did not complete drain within …" timeout even though the stream <em>did</em> drain and exit cleanly. Verify the process actually exited rather than treating that message alone as a failure.</li>
-  <li><strong>Throughput is target-tier-CPU-bound.</strong> The bulk copy is limited by the target cluster's CPU; scale the tier for a faster copy.</li>
-</ul>
 
 <h2 id="next">Next steps</h2>
 <ul>

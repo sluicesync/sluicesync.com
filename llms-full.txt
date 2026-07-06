@@ -2327,6 +2327,16 @@ PlanetScale has no native region move — create the database in the new region 
 
 A PlanetScale database is pinned to its region at creation, and there is no in-place region move. The path is straightforward: create a new PS-MySQL database in the target region, then use sluice to copy the data across — either a zero-downtime continuous sync + cutover (recommended) or a one-shot migrate. Both directions are MySQL→MySQL, so no cross-engine type translation is involved. Datasets that need this are typically well under 10 GB.
 
+## Before you start & gotchas
+
+- Foreign keys — enable them on the target first. PlanetScale does not accept FOREIGN KEY DDL by default (Vitess rejects it with VT10001). If your schema uses foreign keys, turn on "Allow foreign key constraints" in the target database's Settings → General tab before you migrate — with no open deploy requests — so sluice's foreign-key DDL is accepted and the constraints are preserved (how to enable them). It is supported on unsharded databases only, cyclic foreign keys with CASCADE are not supported, and deploy requests do not validate the referential integrity of pre-existing rows. If you would rather not carry the foreign keys at all, dropping them also works — sluice emits each column's covering index as a separate statement, so those are kept.
+
+- --allow-cross-shard-merge is currently required on unsharded databases — see the current-version note under Provision the target.
+
+- The sync stop --wait drain message. On VStream teardown, sync stop --wait may print a "did not complete drain within …" timeout even though the stream did drain and exit cleanly. Verify the process actually exited rather than treating that message alone as a failure.
+
+- Throughput is target-tier-CPU-bound. The bulk copy is limited by the target cluster's CPU; scale the tier for a faster copy.
+
 ## Provision the target & connect
 
 Create the destination database in the new region, sized to match (or exceed) the source. A PS-10 branch takes roughly 7–8 minutes to reach READY:
@@ -2413,16 +2423,6 @@ The catch: a migrate is a point-in-time copy with no CDC, so any row written to 
 ## Which to choose
 
 Zero-downtime (Option A) is the better default for a real region move: no write freeze, and in testing it was also about 3× faster on the bulk copy than one-shot (~5 minutes vs ~14 minutes for the same 1.2 GB). One-shot (Option B) wins only on simplicity, when a brief maintenance window is acceptable and you'd rather not run a long-lived stream or a separate cutover.
-
-## Before you start & gotchas
-
-- Foreign keys. Vitess rejects FOREIGN KEY DDL (VT10001). If the source schema declares foreign keys, they must be dropped (kept as plain indexed columns) before the move. This applies to any DDL against PlanetScale, not just sluice.
-
-- --allow-cross-shard-merge is currently required on unsharded databases — see the current-version note under Provision the target.
-
-- The sync stop --wait drain message. On VStream teardown, sync stop --wait may print a "did not complete drain within …" timeout even though the stream did drain and exit cleanly. Verify the process actually exited rather than treating that message alone as a failure.
-
-- Throughput is target-tier-CPU-bound. The bulk copy is limited by the target cluster's CPU; scale the tier for a faster copy.
 
 ## Next steps
 
