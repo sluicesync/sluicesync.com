@@ -2,7 +2,7 @@
 
 > PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.
 
-PlanetScale Postgres is managed PostgreSQL, not Vitess — no keyspaces, no sharding, no VStream. So unlike PlanetScale MySQL (which needs the planetscale driver and the VStream feed — see the region-move guide), you drive it with sluice's ordinary postgres engine: COPY-based cold copy and native logical-replication (replication-slot) CDC. Both a one-shot migrate and a zero-downtime sync work end-to-end (validated on v0.99.194). Cross-engine value translation applies as usual only if the other side is MySQL or SQLite; Postgres→Postgres is byte-exact.
+PlanetScale Postgres is managed PostgreSQL, not Vitess — no keyspaces, no sharding, no VStream. So unlike PlanetScale MySQL (which needs the planetscale driver and the VStream feed — see the region-move guide), you drive it with sluice's ordinary postgres engine: COPY-based cold copy and native logical-replication (replication-slot) CDC. Both a zero-downtime sync and a one-shot migrate work end-to-end (validated on v0.99.194). Cross-engine value translation applies as usual only if the other side is MySQL or SQLite; Postgres→Postgres is byte-exact.
 
 ## Provision & connect
 
@@ -23,22 +23,6 @@ The DSN is a standard libpq URL. Note the database is literally postgres and the
 Prefer environment variables (SLUICE_SOURCE / SLUICE_TARGET) over putting the DSN in argv, so credentials don't land in your shell history or process list.
 
 Rewrite sslmode=verify-full to sslmode=require. The database_url PlanetScale emits carries sslmode=verify-full, but PlanetScale's Postgres server certificate isn't in the public/OS trust store, so verify-full fails the handshake. Change it to sslmode=require — still encrypted, just without hostname/CA verification — and sluice connects cleanly.
-
-## One-shot migrate
-
-A migrate is a point-in-time COPY with no CDC — a good fit when you can quiesce source writes for the copy window. Copy, then verify:
-
-    sluice migrate \
-        --source-driver postgres --source "$SLUICE_SOURCE" \
-        --target-driver postgres --target "$SLUICE_TARGET"
-
-    sluice verify \
-        --source-driver postgres --source "$SLUICE_SOURCE" \
-        --target-driver postgres --target "$SLUICE_TARGET"
-
-Postgres→Postgres value fidelity is byte-exact — numeric, timestamptz, jsonb, and boolean all round-trip unchanged.
-
-Give the target tables a stable owner. migrate emits a WARN that the target tables land owned by the ephemeral pscale_api_* role a fresh DSN connects as. Connect the target as the Default postgres role (pscale role reset-default app main) so the tables get a durable owner instead of a short-lived API role.
 
 ## Zero-downtime sync
 
@@ -67,7 +51,23 @@ Two requirements on the source role.
 
 - The connecting role must own the source tables. Publication management needs table ownership, otherwise you hit must be owner of table / 42501. Cleanest is to create and own the source schema as postgres from the start.
 
-Slot-less fallback. --source-driver postgres-trigger is a trigger-based, slot-less CDC path for managed Postgres that forbids replication. You don't need it here — the Default postgres role unlocks native slot-based CDC — but it's the escape hatch if a platform ever denies the REPLICATION attribute.
+Slot-less fallback. --source-driver postgres-trigger is a trigger-based, slot-less CDC path for managed Postgres that forbids replication (see trigger-based CDC). You don't need it here — the Default postgres role unlocks native slot-based CDC — but it's the escape hatch if a platform ever denies the REPLICATION attribute.
+
+## One-shot migrate
+
+A migrate is a point-in-time COPY with no CDC — a good fit when you can quiesce source writes for the copy window. Copy, then verify:
+
+    sluice migrate \
+        --source-driver postgres --source "$SLUICE_SOURCE" \
+        --target-driver postgres --target "$SLUICE_TARGET"
+
+    sluice verify \
+        --source-driver postgres --source "$SLUICE_SOURCE" \
+        --target-driver postgres --target "$SLUICE_TARGET"
+
+Postgres→Postgres value fidelity is byte-exact — numeric, timestamptz, jsonb, and boolean all round-trip unchanged.
+
+Give the target tables a stable owner. migrate emits a WARN that the target tables land owned by the ephemeral pscale_api_* role a fresh DSN connects as. Connect the target as the Default postgres role (pscale role reset-default app main) so the tables get a durable owner instead of a short-lived API role.
 
 ## Next steps
 

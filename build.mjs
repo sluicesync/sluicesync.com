@@ -2264,7 +2264,7 @@ write(
     title: "Migrate & sync PlanetScale Postgres",
     subtitle: "PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.",
     body: `
-<p>PlanetScale Postgres is <strong>managed PostgreSQL, not Vitess</strong> — no keyspaces, no sharding, no VStream. So unlike PlanetScale <em>MySQL</em> (which needs the <code>planetscale</code> driver and the VStream feed — see <a href="/docs/planetscale-region-move/">the region-move guide</a>), you drive it with sluice's ordinary <strong><code>postgres</code></strong> engine: <code>COPY</code>-based cold copy and native <strong>logical-replication (replication-slot) CDC</strong>. Both a one-shot <a href="#migrate">migrate</a> and a zero-downtime <a href="#sync">sync</a> work end-to-end (validated on v0.99.194). Cross-engine value translation applies as usual only if the <em>other</em> side is MySQL or SQLite; Postgres→Postgres is byte-exact.</p>
+<p>PlanetScale Postgres is <strong>managed PostgreSQL, not Vitess</strong> — no keyspaces, no sharding, no VStream. So unlike PlanetScale <em>MySQL</em> (which needs the <code>planetscale</code> driver and the VStream feed — see <a href="/docs/planetscale-region-move/">the region-move guide</a>), you drive it with sluice's ordinary <strong><code>postgres</code></strong> engine: <code>COPY</code>-based cold copy and native <strong>logical-replication (replication-slot) CDC</strong>. Both a zero-downtime <a href="#sync">sync</a> and a one-shot <a href="#migrate">migrate</a> work end-to-end (validated on v0.99.194). Cross-engine value translation applies as usual only if the <em>other</em> side is MySQL or SQLite; Postgres→Postgres is byte-exact.</p>
 
 <h2 id="connect">Provision &amp; connect</h2>
 <p>Create the database with the Postgres engine — <code>--engine postgresql</code> is the pscale flag that selects managed Postgres rather than Vitess/MySQL. <code>--replicas 0</code> is a single node; <code>2</code> or more gives you HA. The default branch is <code>main</code>:</p>
@@ -2278,18 +2278,6 @@ ${pre(`pscale database create app --engine postgresql --region <region> --replic
 ${pre(`postgresql://<user>:<pass>@<region>.pg.psdb.cloud:5432/postgres?sslmode=require`)}
 <p>Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting the DSN in argv, so credentials don't land in your shell history or process list.</p>
 <div class="note warn"><strong>Rewrite <code>sslmode=verify-full</code> to <code>sslmode=require</code>.</strong> The <code>database_url</code> PlanetScale emits carries <code>sslmode=verify-full</code>, but PlanetScale's Postgres server certificate isn't in the public/OS trust store, so <code>verify-full</code> fails the handshake. Change it to <code>sslmode=require</code> — still encrypted, just without hostname/CA verification — and sluice connects cleanly.</div>
-
-<h2 id="migrate">One-shot migrate</h2>
-<p>A migrate is a point-in-time <code>COPY</code> with no CDC — a good fit when you can quiesce source writes for the copy window. Copy, then verify:</p>
-${pre(`sluice migrate \\
-    --source-driver postgres --source "$SLUICE_SOURCE" \\
-    --target-driver postgres --target "$SLUICE_TARGET"
-
-sluice verify \\
-    --source-driver postgres --source "$SLUICE_SOURCE" \\
-    --target-driver postgres --target "$SLUICE_TARGET"`)}
-<p>Postgres→Postgres value fidelity is byte-exact — <code>numeric</code>, <code>timestamptz</code>, <code>jsonb</code>, and boolean all round-trip unchanged.</p>
-<div class="note"><strong>Give the target tables a stable owner.</strong> migrate emits a WARN that the target tables land owned by the ephemeral <code>pscale_api_*</code> role a fresh DSN connects as. Connect the <em>target</em> as the Default <code>postgres</code> role (<code>pscale role reset-default app main</code>) so the tables get a durable owner instead of a short-lived API role.</div>
 
 <h2 id="sync">Zero-downtime sync</h2>
 <p>A continuous sync snapshots and bulk-copies the source, then tails native logical-replication CDC — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. PlanetScale Postgres ships <code>wal_level=logical</code> with 20 replication slots, so slot-based CDC works out of the box:</p>
@@ -2312,7 +2300,19 @@ sluice sync stop --stream-id ps-pg \\
   <li><strong>The connecting role must own the source tables.</strong> Publication management needs table ownership, otherwise you hit <code>must be owner of table</code> / <code>42501</code>. Cleanest is to create and own the source schema as <code>postgres</code> from the start.</li>
 </ol>
 </div>
-<div class="note"><strong>Slot-less fallback.</strong> <code>--source-driver postgres-trigger</code> is a trigger-based, slot-less CDC path for managed Postgres that forbids replication. You don't need it here — the Default <code>postgres</code> role unlocks native slot-based CDC — but it's the escape hatch if a platform ever denies the <code>REPLICATION</code> attribute.</div>
+<div class="note"><strong>Slot-less fallback.</strong> <code>--source-driver postgres-trigger</code> is a trigger-based, slot-less CDC path for managed Postgres that forbids replication (see <a href="/docs/getting-started/#trigger-cdc">trigger-based CDC</a>). You don't need it here — the Default <code>postgres</code> role unlocks native slot-based CDC — but it's the escape hatch if a platform ever denies the <code>REPLICATION</code> attribute.</div>
+
+<h2 id="migrate">One-shot migrate</h2>
+<p>A migrate is a point-in-time <code>COPY</code> with no CDC — a good fit when you can quiesce source writes for the copy window. Copy, then verify:</p>
+${pre(`sluice migrate \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"
+
+sluice verify \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"`)}
+<p>Postgres→Postgres value fidelity is byte-exact — <code>numeric</code>, <code>timestamptz</code>, <code>jsonb</code>, and boolean all round-trip unchanged.</p>
+<div class="note"><strong>Give the target tables a stable owner.</strong> migrate emits a WARN that the target tables land owned by the ephemeral <code>pscale_api_*</code> role a fresh DSN connects as. Connect the <em>target</em> as the Default <code>postgres</code> role (<code>pscale role reset-default app main</code>) so the tables get a durable owner instead of a short-lived API role.</div>
 
 <h2 id="next">Next steps</h2>
 <ul>
