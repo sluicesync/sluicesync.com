@@ -49,6 +49,8 @@ sqlite · A file path (./app.db) or a wrangler d1 export .sql dump (auto-detecte
 
 d1 · d1://<account_id>/<database_id> (or d1://<database_id> + CLOUDFLARE_ACCOUNT_ID); API token via CLOUDFLARE_API_TOKEN. ·
 
+A note on sslmode. The sslmode=require in these placeholder DSNs encrypts the connection but does not verify the server's certificate — a safe default that works against any TLS target regardless of its CA. Prefer sslmode=verify-full (encrypt and verify the CA chain + hostname, which defeats man-in-the-middle) whenever the target's certificate is trusted by your system store or you can pin its CA with sslrootcert. Managed providers with a public CA make this free — e.g. PlanetScale Postgres ships a Let's Encrypt certificate, so sluice connects with verify-full out of the box. sluice (pgx) passes sslmode and sslrootcert straight through to the driver and never downgrades TLS on its own.
+
 DSNs often contain credentials, so you can supply them via environment variables instead of flags:
 
     export SLUICE_SOURCE='root:rootpw@tcp(localhost:3306)/app'

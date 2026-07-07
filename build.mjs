@@ -308,6 +308,7 @@ sluice engines      # list the database engines built into this binary`)}
 <tr><td><code>d1</code></td><td><code>d1://&lt;account_id&gt;/&lt;database_id&gt;</code> (or <code>d1://&lt;database_id&gt;</code> + <code>CLOUDFLARE_ACCOUNT_ID</code>); API token via <code>CLOUDFLARE_API_TOKEN</code>.</td></tr>
 </tbody>
 </table>
+<div class="note"><strong>A note on <code>sslmode</code>.</strong> The <code>sslmode=require</code> in these placeholder DSNs encrypts the connection but does <em>not</em> verify the server's certificate — a safe default that works against any TLS target regardless of its CA. Prefer <strong><code>sslmode=verify-full</code></strong> (encrypt <em>and</em> verify the CA chain + hostname, which defeats man-in-the-middle) whenever the target's certificate is trusted by your system store or you can pin its CA with <code>sslrootcert</code>. Managed providers with a public CA make this free — e.g. <a href="/docs/planetscale-postgres/#connect">PlanetScale Postgres</a> ships a Let's Encrypt certificate, so sluice connects with <code>verify-full</code> out of the box. sluice (pgx) passes <code>sslmode</code> and <code>sslrootcert</code> straight through to the driver and never downgrades TLS on its own.</div>
 <p>DSNs often contain credentials, so you can supply them via environment variables instead of flags:</p>
 ${pre(`export SLUICE_SOURCE='root:rootpw@tcp(localhost:3306)/app'
 export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=disable'`)}
