@@ -2462,6 +2462,8 @@ Supervise many at once with a fleet config. Running each sync as its own process
 
 A genuinely sharded PlanetScale keyspace — multiple shards behind a vindex — is supported as a source on sluice v0.99.191+; earlier versions failed the cold copy with 0 rows. Because vtgate merges all shards into one logical stream, sluice's cross-shard-collision guard requires you to opt in: pass --allow-cross-shard-merge when your key is globally unique across shards (a hash vindex puts each id on exactly one shard, so ids are disjoint and the merge is safe), or --inject-shard-column to add a shard-discriminator column instead.
 
+Multi-keyspace sources are shard-complete (v0.99.196+). If your database holds several keyspaces, sluice cross-checks shard discovery against SHOW VITESS_TABLETS: vtgate's SHOW VITESS_SHARDS can silently omit a fully-serving secondary sharded keyspace, so trusting it alone could miss an entire keyspace's shards. sluice unions the two sources and warns on any discrepancy, so a sync or backup never silently skips a shard. A single-keyspace source was never affected (migrate isn't either — its bulk copy is a plain scatter query vtgate fans out across every serving shard).
+
 ### Sub-case A — merge into an unsharded target
 
 The simplest path, and it works out of the box: point the sharded source at an unsharded target database with --allow-cross-shard-merge, and every shard's rows land in the one target table. Live-proven — all rows copied, no FailedPrecondition. Note the source DSN's database is the keyspace name (here sks):
@@ -2476,7 +2478,7 @@ The simplest path, and it works out of the box: point the sharded source at an u
 
 To keep the data sharded, create a target keyspace sharded with the same vschema / vindex. sluice's cold copy and live CDC then route every row to the correct target shard — validated: INSERT / UPDATE / DELETE across both shards land on the matching shard, with under 20 seconds of CDC lag.
 
-Control tables live in a sidecar keyspace — handled automatically on v0.99.193+. A sharded target can't hold sluice's internal control tables (sluice_cdc_state, sluice_cdc_schema_history, sluice_shard_consolidation_lease) directly — Vitess requires every table in a sharded keyspace to carry a vindex. On v0.99.193+ sluice handles this: it auto-detects the database's default unsharded keyspace and creates its control tables there, so a sharded→sharded sync just works with no manual setup. Pass --control-keyspace <name> only to override (and if the database has several unsharded keyspaces, sluice asks you to choose one). On a sharded target the control-table write then rides the data transaction cross-keyspace (best-effort, not two-phase) — safe in practice, since a hard crash warm-resumes cleanly from the persisted position with no duplicates or gaps. On sluice before v0.99.193 this aborted with VT09001: … does not have a primary vindex before any rows copied; upgrade to v0.99.193+. (The merge sub-case A and one-shot backup/restore below never needed a sidecar at all.)
+Control tables live in a sidecar keyspace — handled automatically on v0.99.193+. A sharded target can't hold sluice's internal control tables (sluice_cdc_state, sluice_cdc_schema_history, sluice_shard_consolidation_lease) directly — Vitess requires every table in a sharded keyspace to carry a vindex. On v0.99.193+ sluice handles this: it auto-detects the database's default unsharded keyspace and creates its control tables there, so a sharded→sharded sync just works with no manual setup. Pass --control-keyspace <name> only to override (and if the database has several unsharded keyspaces, sluice asks you to choose one). On a sharded target the control-table write then rides the data transaction cross-keyspace (best-effort, not two-phase) — safe in practice, since a hard crash warm-resumes cleanly from the persisted position with no duplicates or gaps. On sluice before v0.99.193 this aborted with VT09001: … does not have a primary vindex before any rows copied; upgrade to v0.99.193+. (The merge sub-case A and a one-shot full backup/restore below never need a sidecar; a chain restore into a sharded target does — see below.)
 
 ### Backup / restore a sharded source
 
@@ -2490,6 +2492,15 @@ If you just want a point-in-time copy of a sharded keyspace into a plain databas
     sluice restore \
         --from-dir ./sks-backup \
         --target-driver planetscale --target "$SLUICE_TARGET"
+
+Restoring back into a sharded keyspace. Flattening on the backup side doesn't lock you into an unsharded target. Restore into a keyspace that's sharded with the same vindex and Vitess re-routes every row to its correct shard by the vindex hash — the same routing the live sync in sub-case B uses — so per-shard placement on the target matches the source exactly. Create the target keyspace sharded with a matching vschema first, then point restore at it (the --target database is the keyspace name):
+
+    sluice restore \
+        --from-dir ./sks-backup \
+        --target-driver planetscale \
+        --target "USER:PASS@tcp(aws.connect.psdb.cloud:3306)/sks?tls=true"
+
+A full restore just works; a chain restore needs the same sidecar as sync (v0.99.195+). A single full restore into a sharded target needs no extra flags — it writes only your data tables, which Vitess shards by their vindex, and creates no control tables; per-shard placement matches the source. A chain restore (a full plus one or more incrementals) is different: replaying the incrementals writes sluice's CDC control tables (sluice_cdc_state and friends), which a sharded keyspace can't hold — so restore --control-keyspace <name> routes them to an unsharded sidecar keyspace, auto-detected on v0.99.195+ exactly like the sync case above (pass the flag only to override, or if the database has several unsharded keyspaces). Before v0.99.195 a chain restore into a sharded target aborted with … does not have a primary vindex; a single full restore was always fine.
 
 ## Next steps
 
