@@ -2362,9 +2362,9 @@ ${pre(`pscale database create app --engine postgresql --region <region> --replic
   <li><strong>Custom role</strong> — <code>pscale role create app main mover --inherited-roles postgres --format json</code>.</li>
 </ul>
 <p>The DSN is a standard libpq URL. Note the database is literally <code>postgres</code> and the port is 5432:</p>
-${pre(`postgresql://<user>:<pass>@<region>.pg.psdb.cloud:5432/postgres?sslmode=require`)}
+${pre(`postgresql://<user>:<pass>@<region>.pg.psdb.cloud:5432/postgres?sslmode=verify-full`)}
 <p>Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting the DSN in argv, so credentials don't land in your shell history or process list.</p>
-<div class="note warn"><strong>Rewrite <code>sslmode=verify-full</code> to <code>sslmode=require</code>.</strong> The <code>database_url</code> PlanetScale emits carries <code>sslmode=verify-full</code>, but PlanetScale's Postgres server certificate isn't in the public/OS trust store, so <code>verify-full</code> fails the handshake. Change it to <code>sslmode=require</code> — still encrypted, just without hostname/CA verification — and sluice connects cleanly.</div>
+<div class="note"><strong>Keep <code>sslmode=verify-full</code> — it works out of the box.</strong> The <code>database_url</code> PlanetScale emits already carries <code>sslmode=verify-full</code>, and you should keep it. PlanetScale Postgres presents a <strong>Let's Encrypt</strong> certificate (chaining to ISRG Root&nbsp;X1) — a public CA in every standard trust store — and the certificate's hostname matches, so <code>verify-full</code> validates cleanly. sluice's Postgres driver (pgx) checks it against your OS system trust store automatically: Windows, macOS, and a standard Linux host all connect with <code>verify-full</code> as-is (add <code>&amp;sslrootcert=system</code> only if you want it explicit). The one exception is a <strong>minimal Linux container with no <code>ca-certificates</code> package</strong> — the stock <code>postgres</code> Docker image is one — where the fix is to install <code>ca-certificates</code>, not to weaken TLS. Dropping to <code>sslmode=require</code> skips hostname and CA verification and isn't necessary here — see PlanetScale's <a href="https://planetscale.com/docs/vitess/connecting/secure-connections#ca-root-configuration">note on why verify-full matters</a>.</div>
 
 <h2 id="sync">Zero-downtime sync</h2>
 <p>A continuous sync snapshots and bulk-copies the source, then tails native logical-replication CDC — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. PlanetScale Postgres ships <code>wal_level=logical</code> with 20 replication slots, so slot-based CDC works out of the box:</p>
@@ -2436,10 +2436,10 @@ write(
 ${pre(`pscale database create <new-db> --engine postgresql --major-version <NEW> \\
     --region <region> --replicas 0 --wait`)}
 <p>For an <strong>architecture change</strong>, provision the new instance on the target architecture instead. The architecture is selected at instance creation on PlanetScale (the exact instance-type surface can vary — see <a href="https://planetscale.com/docs">PlanetScale's instance-type docs</a> rather than pinning a specific flag here). Everything downstream is identical to the version case.</p>
-<p>Take the target DSN from the <strong>Default <code>postgres</code> role</strong> and <strong>rewrite <code>sslmode=verify-full</code> → <code>sslmode=require</code></strong> — the same recipe as the <a href="/docs/planetscale-postgres/">PlanetScale Postgres guide</a>:</p>
+<p>Take the target DSN from the <strong>Default <code>postgres</code> role</strong> and <strong>keep its <code>sslmode=verify-full</code></strong> — PlanetScale Postgres uses a public Let's Encrypt certificate that sluice validates against the system trust store, so verify-full connects as-is (details in the <a href="/docs/planetscale-postgres/#connect">PlanetScale Postgres guide</a>):</p>
 ${pre(`pscale role reset-default <new-db> main --force --format json   # -> database_url
 
-# DST_NEW = that database_url, with sslmode=verify-full rewritten to sslmode=require`)}
+# DST_NEW = that database_url (keep sslmode=verify-full)`)}
 <div class="note warn"><strong>Both ends connect as the Default <code>postgres</code> role.</strong> The <em>source</em> needs the <code>REPLICATION</code> attribute to create the logical-replication slot, which the custom <code>pscale_api_*</code> roles lack; the <em>target</em> wants a durable table owner. The Default <code>postgres</code> role has <code>REPLICATION</code> and owns the schema — use it on both. (Same requirement, and the same <code>SLUICE-E</code> refusal if you don't, as the <a href="/docs/planetscale-postgres/#sync">PlanetScale Postgres sync guide</a>.)</div>
 
 <h2 id="sync">Sync across the version</h2>
@@ -2468,7 +2468,7 @@ ${pre(`sluice sync stop --stream-id pg-upgrade \\
 <h2 id="gotchas">Gotchas</h2>
 <ul>
   <li><strong>Source and target both connect as the Default <code>postgres</code> role</strong> — the source for <code>REPLICATION</code> (slot creation), the target for durable table ownership. Custom <code>pscale_api_*</code> roles lack <code>REPLICATION</code>.</li>
-  <li><strong>Rewrite <code>sslmode=verify-full</code> → <code>sslmode=require</code></strong> on both DSNs — PlanetScale's Postgres server cert isn't in the public trust store, so <code>verify-full</code> fails the handshake.</li>
+  <li><strong>Keep <code>sslmode=verify-full</code></strong> on both DSNs — PlanetScale Postgres uses a public Let's Encrypt certificate that sluice validates against the system trust store, so verify-full connects as-is. No downgrade to <code>require</code> is needed; the only snag is a minimal Linux container with no <code>ca-certificates</code> package, where you install it rather than weakening TLS.</li>
   <li><strong><code>--major-version</code> defaults to the latest.</strong> If you want a specific target major, pin it explicitly; otherwise a fresh instance lands on the newest version PlanetScale offers.</li>
   <li><strong>No version-specific surprises at 17→18</strong> for the core type set — <code>numeric</code>, <code>timestamptz</code>, <code>jsonb</code>, boolean all round-tripped byte-identically, with no copy/CDC WARNs. A wider or more exotic type surface deserves its own <code>verify</code> before cutover regardless.</li>
   <li><strong>Provision the target with headroom.</strong> Size the new instance (PlanetScale sizing) to match or exceed the source before you cut over.</li>

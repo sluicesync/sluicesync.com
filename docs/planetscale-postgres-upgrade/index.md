@@ -23,11 +23,11 @@ Create the new instance on the target major version. --major-version selects the
 
 For an architecture change, provision the new instance on the target architecture instead. The architecture is selected at instance creation on PlanetScale (the exact instance-type surface can vary — see PlanetScale's instance-type docs rather than pinning a specific flag here). Everything downstream is identical to the version case.
 
-Take the target DSN from the Default postgres role and rewrite sslmode=verify-full → sslmode=require — the same recipe as the PlanetScale Postgres guide:
+Take the target DSN from the Default postgres role and keep its sslmode=verify-full — PlanetScale Postgres uses a public Let's Encrypt certificate that sluice validates against the system trust store, so verify-full connects as-is (details in the PlanetScale Postgres guide):
 
     pscale role reset-default <new-db> main --force --format json   # -> database_url
 
-    # DST_NEW = that database_url, with sslmode=verify-full rewritten to sslmode=require
+    # DST_NEW = that database_url (keep sslmode=verify-full)
 
 Both ends connect as the Default postgres role. The source needs the REPLICATION attribute to create the logical-replication slot, which the custom pscale_api_* roles lack; the target wants a durable table owner. The Default postgres role has REPLICATION and owns the schema — use it on both. (Same requirement, and the same SLUICE-E refusal if you don't, as the PlanetScale Postgres sync guide.)
 
@@ -68,7 +68,7 @@ verify lists sluice's own bookkeeping tables as informational. A clean sync leav
 
 - Source and target both connect as the Default postgres role — the source for REPLICATION (slot creation), the target for durable table ownership. Custom pscale_api_* roles lack REPLICATION.
 
-- Rewrite sslmode=verify-full → sslmode=require on both DSNs — PlanetScale's Postgres server cert isn't in the public trust store, so verify-full fails the handshake.
+- Keep sslmode=verify-full on both DSNs — PlanetScale Postgres uses a public Let's Encrypt certificate that sluice validates against the system trust store, so verify-full connects as-is. No downgrade to require is needed; the only snag is a minimal Linux container with no ca-certificates package, where you install it rather than weakening TLS.
 
 - --major-version defaults to the latest. If you want a specific target major, pin it explicitly; otherwise a fresh instance lands on the newest version PlanetScale offers.
 

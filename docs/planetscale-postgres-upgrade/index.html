@@ -45,10 +45,10 @@
 <pre><code>pscale database create &lt;new-db&gt; <span class="f">--engine</span> postgresql <span class="f">--major-version</span> &lt;NEW&gt; \
     <span class="f">--region</span> &lt;region&gt; <span class="f">--replicas</span> 0 <span class="f">--wait</span></code></pre>
 <p>For an <strong>architecture change</strong>, provision the new instance on the target architecture instead. The architecture is selected at instance creation on PlanetScale (the exact instance-type surface can vary — see <a href="https://planetscale.com/docs">PlanetScale's instance-type docs</a> rather than pinning a specific flag here). Everything downstream is identical to the version case.</p>
-<p>Take the target DSN from the <strong>Default <code>postgres</code> role</strong> and <strong>rewrite <code>sslmode=verify-full</code> → <code>sslmode=require</code></strong> — the same recipe as the <a href="/docs/planetscale-postgres/">PlanetScale Postgres guide</a>:</p>
+<p>Take the target DSN from the <strong>Default <code>postgres</code> role</strong> and <strong>keep its <code>sslmode=verify-full</code></strong> — PlanetScale Postgres uses a public Let's Encrypt certificate that sluice validates against the system trust store, so verify-full connects as-is (details in the <a href="/docs/planetscale-postgres/#connect">PlanetScale Postgres guide</a>):</p>
 <pre><code>pscale role reset-default &lt;new-db&gt; main <span class="f">--force</span> <span class="f">--format</span> json   # -&gt; database_url
 
-<span class="c"># DST_NEW = that database_url, with sslmode=verify-full rewritten to sslmode=require</span></code></pre>
+<span class="c"># DST_NEW = that database_url (keep sslmode=verify-full)</span></code></pre>
 <div class="note warn"><strong>Both ends connect as the Default <code>postgres</code> role.</strong> The <em>source</em> needs the <code>REPLICATION</code> attribute to create the logical-replication slot, which the custom <code>pscale_api_*</code> roles lack; the <em>target</em> wants a durable table owner. The Default <code>postgres</code> role has <code>REPLICATION</code> and owns the schema — use it on both. (Same requirement, and the same <code>SLUICE-E</code> refusal if you don't, as the <a href="/docs/planetscale-postgres/#sync">PlanetScale Postgres sync guide</a>.)</div>
 
 <h2 id="sync">Sync across the version <a class="hlink" href="#sync" aria-label="Permalink to this section">#</a></h2>
@@ -77,7 +77,7 @@
 <h2 id="gotchas">Gotchas <a class="hlink" href="#gotchas" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><strong>Source and target both connect as the Default <code>postgres</code> role</strong> — the source for <code>REPLICATION</code> (slot creation), the target for durable table ownership. Custom <code>pscale_api_*</code> roles lack <code>REPLICATION</code>.</li>
-  <li><strong>Rewrite <code>sslmode=verify-full</code> → <code>sslmode=require</code></strong> on both DSNs — PlanetScale's Postgres server cert isn't in the public trust store, so <code>verify-full</code> fails the handshake.</li>
+  <li><strong>Keep <code>sslmode=verify-full</code></strong> on both DSNs — PlanetScale Postgres uses a public Let's Encrypt certificate that sluice validates against the system trust store, so verify-full connects as-is. No downgrade to <code>require</code> is needed; the only snag is a minimal Linux container with no <code>ca-certificates</code> package, where you install it rather than weakening TLS.</li>
   <li><strong><code>--major-version</code> defaults to the latest.</strong> If you want a specific target major, pin it explicitly; otherwise a fresh instance lands on the newest version PlanetScale offers.</li>
   <li><strong>No version-specific surprises at 17→18</strong> for the core type set — <code>numeric</code>, <code>timestamptz</code>, <code>jsonb</code>, boolean all round-tripped byte-identically, with no copy/CDC WARNs. A wider or more exotic type surface deserves its own <code>verify</code> before cutover regardless.</li>
   <li><strong>Provision the target with headroom.</strong> Size the new instance (PlanetScale sizing) to match or exceed the source before you cut over.</li>

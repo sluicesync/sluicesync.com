@@ -18,11 +18,11 @@ Connections use Postgres roles, not the MySQL password/connect flow. pscale conn
 
 The DSN is a standard libpq URL. Note the database is literally postgres and the port is 5432:
 
-    postgresql://<user>:<pass>@<region>.pg.psdb.cloud:5432/postgres?sslmode=require
+    postgresql://<user>:<pass>@<region>.pg.psdb.cloud:5432/postgres?sslmode=verify-full
 
 Prefer environment variables (SLUICE_SOURCE / SLUICE_TARGET) over putting the DSN in argv, so credentials don't land in your shell history or process list.
 
-Rewrite sslmode=verify-full to sslmode=require. The database_url PlanetScale emits carries sslmode=verify-full, but PlanetScale's Postgres server certificate isn't in the public/OS trust store, so verify-full fails the handshake. Change it to sslmode=require — still encrypted, just without hostname/CA verification — and sluice connects cleanly.
+Keep sslmode=verify-full — it works out of the box. The database_url PlanetScale emits already carries sslmode=verify-full, and you should keep it. PlanetScale Postgres presents a Let's Encrypt certificate (chaining to ISRG Root X1) — a public CA in every standard trust store — and the certificate's hostname matches, so verify-full validates cleanly. sluice's Postgres driver (pgx) checks it against your OS system trust store automatically: Windows, macOS, and a standard Linux host all connect with verify-full as-is (add &sslrootcert=system only if you want it explicit). The one exception is a minimal Linux container with no ca-certificates package — the stock postgres Docker image is one — where the fix is to install ca-certificates, not to weaken TLS. Dropping to sslmode=require skips hostname and CA verification and isn't necessary here — see PlanetScale's note on why verify-full matters.
 
 ## Zero-downtime sync
 
