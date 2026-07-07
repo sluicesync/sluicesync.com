@@ -2114,7 +2114,7 @@ write(
     title: "Move a PlanetScale database between regions",
     subtitle: "PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.",
     body: `
-<p>A PlanetScale database is pinned to its region at creation, and there is no in-place region move. The path is straightforward: create a <strong>new</strong> PS-MySQL database in the <em>target</em> region, then use sluice to copy the data across — either a <strong>zero-downtime continuous sync + cutover</strong> (recommended) or a <strong>one-shot migrate</strong>. Both directions are MySQL→MySQL, so no cross-engine type translation is involved. Datasets that need this are typically well under 10&nbsp;GB.</p>
+<p>A PlanetScale database is pinned to its region at creation, and there is <strong>no native, in-place region move</strong>. The path is the same in spirit for every setup — create a <strong>new</strong> database in the <em>target</em> region and let sluice copy the data across (both ends are MySQL→MySQL, so no cross-engine type translation is involved) — but the exact shape depends on how your data is laid out. This guide covers three cases: <a href="#case-single"><strong>Case 1 — a single unsharded database</strong></a> (the common one), <a href="#case-multi"><strong>Case 2 — several unsharded databases</strong></a>, and <a href="#case-sharded"><strong>Case 3 — a sharded keyspace</strong></a>. Read <a href="#notes">Before you start</a> and <a href="#connect">Provision the target</a> first — they apply to all three — then jump to the case that matches your setup.</p>
 
 <h2 id="notes">Before you start &amp; gotchas</h2>
 <ul>
@@ -2139,7 +2139,10 @@ USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app-sa?tls=true`)}
 <div class="note"><strong>The target password needs <code>--role admin</code>.</strong> sluice creates the data tables plus (for a sync) small control tables, and lesser roles (<code>reader</code>/<code>writer</code>/<code>readwriter</code>) are denied DDL on a production branch. Mint it with <code>pscale password create app-sa main mover --role admin</code>. The source password only needs read access.</div>
 <div class="note"><strong>No special flag for a normal database.</strong> On <strong>v0.99.190+</strong>, an ordinary <em>unsharded</em> PlanetScale database — the default, one keyspace per database — syncs and migrates with no extra flags. <code>--allow-cross-shard-merge</code> is only for a genuinely <em>sharded</em> source keyspace, where it opts out of the guard that stops rows from different shards colliding on a shared key (prefer <code>--inject-shard-column</code> when the key isn't globally unique across shards). On sluice ≤ v0.99.189 an unsharded database needed <code>--allow-cross-shard-merge</code> as a workaround for a shard-detection bug fixed in v0.99.190 — upgrade and drop it.</div>
 
-<h2 id="zero-downtime">Option A — zero-downtime (recommended)</h2>
+<h2 id="case-single">Case 1 — a single unsharded database</h2>
+<p>The overwhelming majority of PlanetScale databases are a single unsharded keyspace — this is the straightforward case. Pick a <strong>zero-downtime continuous sync + cutover</strong> (recommended) or a <strong>one-shot migrate</strong>; both are MySQL→MySQL. Datasets that need this are typically well under 10&nbsp;GB.</p>
+
+<h3 id="zero-downtime">Option A — zero-downtime (recommended)</h3>
 <p>A continuous sync snapshots and bulk-copies the source, then streams live CDC — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. Start with a dry-run to review the plan, then launch the long-lived stream:</p>
 ${pre(`# review the plan first
 sluice sync start --stream-id region-move \\
@@ -2172,7 +2175,7 @@ sluice verify \\
 <div class="note"><strong>Wait for caught-up before cutover.</strong> A <em>trickle</em> of changes can take tens of seconds to ~2 minutes to appear on the target — that latency is PlanetScale VStream's roughly 60&nbsp;s server-side delivery cadence, <em>not</em> sluice (the applier commits within seconds of <em>receiving</em> an event). Under sustained write load, lag stays low. So before you cut over, wait for <code>sync health</code> / <code>verify</code> to report caught-up rather than trusting a fixed timer.</div>
 <div class="note"><strong>Keep <code>--apply-batch-size</code> in the 25–50 range on a PS target.</strong> Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here.</div>
 
-<h2 id="one-shot">Option B — one-shot migrate</h2>
+<h3 id="one-shot">Option B — one-shot migrate</h3>
 <p>If you can take a short maintenance window, a one-shot migrate is simpler — one command, no control tables left behind, and <code>identity_sync</code> auto-primes <code>AUTO_INCREMENT</code> so there's no separate cutover step:</p>
 ${pre(`sluice migrate \\
     --source-driver planetscale --source "$SLUICE_SOURCE" \\
@@ -2187,8 +2190,50 @@ sluice verify \\
     --target-driver planetscale --target "$SLUICE_TARGET"`)}
 <p>The catch: a migrate is a point-in-time copy with <strong>no CDC</strong>, so any row written to the source after it starts is missed. That means you must <strong>freeze writes to the source for the entire copy window</strong> — about <strong>14 minutes</strong> for the 1.2&nbsp;GB test dataset. It's a good fit for a small database you can quiesce briefly.</p>
 
-<h2 id="which">Which to choose</h2>
+<h3 id="which">Which to choose</h3>
 <p>Zero-downtime (Option A) is the better default for a real region move: no write freeze, and in testing it was also about <strong>3× faster on the bulk copy</strong> than one-shot (~5 minutes vs ~14 minutes for the same 1.2&nbsp;GB). One-shot (Option B) wins only on simplicity, when a brief maintenance window is acceptable and you'd rather not run a long-lived stream or a separate cutover.</p>
+
+<h2 id="case-multi">Case 2 — several unsharded databases</h2>
+<p>A PlanetScale database is one keyspace, and each <code>sync start</code> / <code>migrate</code> moves exactly one source keyspace to one target — so moving several databases means <strong>one run per database</strong>, each with its own <code>--stream-id</code> and its own target. There is nothing exotic here: it is Case 1 repeated per keyspace, run in parallel or supervised together.</p>
+<p>Per database: create the target database in the new region, mint its <code>--role admin</code> password, and run the same Case-1 flow (Option A or Option B) with a distinct <code>--stream-id</code>. Moving two databases (<code>app-us-1</code>→<code>app-sa-1</code> and <code>app-us-2</code>→<code>app-sa-2</code>) is just two independent invocations, each pointed at its own source and target:</p>
+${pre(`# database 1
+sluice sync start --stream-id app-1-region-move \\
+    --source-driver planetscale --source "$SLUICE_SOURCE_1" \\
+    --target-driver planetscale --target "$SLUICE_TARGET_1" \\
+    --apply-batch-size 50
+
+# database 2 — independent stream, independent target
+sluice sync start --stream-id app-2-region-move \\
+    --source-driver planetscale --source "$SLUICE_SOURCE_2" \\
+    --target-driver planetscale --target "$SLUICE_TARGET_2" \\
+    --apply-batch-size 50`)}
+<div class="note"><strong>Supervise many at once with a fleet config.</strong> Running each sync as its own process gets unwieldy past a handful. A <a href="/docs/operate-fleet/">sync fleet config</a> collapses them into one supervised, failure-isolated process — one entry per database, each with its own stream-id and target — so a whole fleet of region moves runs and reloads from a single place.</div>
+
+<h2 id="case-sharded">Case 3 — a sharded keyspace</h2>
+<p>A genuinely <em>sharded</em> PlanetScale keyspace — multiple shards behind a vindex — is supported as a source on <strong>sluice v0.99.191+</strong>; earlier versions failed the cold copy with 0&nbsp;rows. Because vtgate merges all shards into one logical stream, sluice's cross-shard-collision guard requires you to opt in: pass <code>--allow-cross-shard-merge</code> when your key is globally unique across shards (a hash vindex puts each id on exactly one shard, so ids are disjoint and the merge is safe), or <code>--inject-shard-column</code> to add a shard-discriminator column instead.</p>
+
+<h3 id="sharded-merge">Sub-case A — merge into an unsharded target</h3>
+<p>The simplest path, and it works out of the box: point the sharded source at an <em>unsharded</em> target database with <code>--allow-cross-shard-merge</code>, and every shard's rows land in the one target table. Live-proven — all rows copied, no <code>FailedPrecondition</code>. Note the source DSN's database is the <em>keyspace</em> name (here <code>sks</code>):</p>
+${pre(`sluice migrate \\
+    --source-driver planetscale \\
+    --source "USER:PASS@tcp(aws.connect.psdb.cloud:3306)/sks?tls=true" \\
+    --target-driver planetscale --target "$SLUICE_TARGET" \\
+    --allow-cross-shard-merge`)}
+
+<h3 id="sharded-preserve">Sub-case B — preserve sharding (sharded → sharded)</h3>
+<p>To keep the data sharded, create a target keyspace sharded with the <strong>same</strong> vschema / vindex. sluice's cold copy <em>and</em> live CDC then route every row to the correct target shard — validated: INSERT / UPDATE / DELETE across both shards land on the matching shard, with under 20&nbsp;seconds of CDC lag.</p>
+<div class="note warn"><strong>Known rough edge — a sharded target rejects sluice's control tables today.</strong> A <em>sharded</em> PlanetScale target currently rejects sluice's internal control tables (<code>sluice_cdc_state</code>, <code>sluice_cdc_schema_history</code>, <code>sluice_shard_consolidation_lease</code>) with <code>VT09001: … does not have a primary vindex</code>, which aborts the sync <em>before any rows copy</em> — Vitess requires every table in a sharded keyspace to carry a vindex. Until sluice registers them automatically, the workaround is to add those three control tables to the target keyspace's vschema with a vindex on their primary keys (e.g. <code>unicode_loose_md5</code> on <code>stream_id</code> / <code>version_key</code> / <code>target_table_full_name</code>) <em>before</em> <code>sync start</code>. This is an honest known rough edge for the sharded-target case; the merge sub-case (A) and the one-shot backup/restore below avoid it entirely.</div>
+
+<h3 id="sharded-backup">Backup / restore a sharded source</h3>
+<p>If you just want a point-in-time copy of a sharded keyspace into a plain database, <code>backup full</code> reads a sharded source with <strong>no special flag</strong> — it flattens the shards into one logical stream — and <code>restore</code> into a PlanetScale MySQL database needs no <code>--allow-cross-shard-merge</code>, because the backup already flattened it:</p>
+${pre(`sluice backup full \\
+    --source-driver planetscale \\
+    --source "USER:PASS@tcp(aws.connect.psdb.cloud:3306)/sks?tls=true" \\
+    --output-dir ./sks-backup
+
+sluice restore \\
+    --from-dir ./sks-backup \\
+    --target-driver planetscale --target "$SLUICE_TARGET"`)}
 
 <h2 id="next">Next steps</h2>
 <ul>

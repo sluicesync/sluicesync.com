@@ -2335,7 +2335,7 @@ PlanetScale-Postgres (PS-PG) is not Vitess-fronted for sluice's purposes — the
 
 PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.
 
-A PlanetScale database is pinned to its region at creation, and there is no in-place region move. The path is straightforward: create a new PS-MySQL database in the target region, then use sluice to copy the data across — either a zero-downtime continuous sync + cutover (recommended) or a one-shot migrate. Both directions are MySQL→MySQL, so no cross-engine type translation is involved. Datasets that need this are typically well under 10 GB.
+A PlanetScale database is pinned to its region at creation, and there is no native, in-place region move. The path is the same in spirit for every setup — create a new database in the target region and let sluice copy the data across (both ends are MySQL→MySQL, so no cross-engine type translation is involved) — but the exact shape depends on how your data is laid out. This guide covers three cases: Case 1 — a single unsharded database (the common one), Case 2 — several unsharded databases, and Case 3 — a sharded keyspace. Read Before you start and Provision the target first — they apply to all three — then jump to the case that matches your setup.
 
 ## Before you start & gotchas
 
@@ -2371,7 +2371,11 @@ The target password needs --role admin. sluice creates the data tables plus (for
 
 No special flag for a normal database. On v0.99.190+, an ordinary unsharded PlanetScale database — the default, one keyspace per database — syncs and migrates with no extra flags. --allow-cross-shard-merge is only for a genuinely sharded source keyspace, where it opts out of the guard that stops rows from different shards colliding on a shared key (prefer --inject-shard-column when the key isn't globally unique across shards). On sluice ≤ v0.99.189 an unsharded database needed --allow-cross-shard-merge as a workaround for a shard-detection bug fixed in v0.99.190 — upgrade and drop it.
 
-## Option A — zero-downtime (recommended)
+## Case 1 — a single unsharded database
+
+The overwhelming majority of PlanetScale databases are a single unsharded keyspace — this is the straightforward case. Pick a zero-downtime continuous sync + cutover (recommended) or a one-shot migrate; both are MySQL→MySQL. Datasets that need this are typically well under 10 GB.
+
+### Option A — zero-downtime (recommended)
 
 A continuous sync snapshots and bulk-copies the source, then streams live CDC — so the source stays writable the whole time and you flip traffic in a brief, controlled window. Start with a dry-run to review the plan, then launch the long-lived stream:
 
@@ -2412,7 +2416,7 @@ Wait for caught-up before cutover. A trickle of changes can take tens of seconds
 
 Keep --apply-batch-size in the 25–50 range on a PS target. Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here.
 
-## Option B — one-shot migrate
+### Option B — one-shot migrate
 
 If you can take a short maintenance window, a one-shot migrate is simpler — one command, no control tables left behind, and identity_sync auto-primes AUTO_INCREMENT so there's no separate cutover step:
 
@@ -2430,9 +2434,62 @@ If you can take a short maintenance window, a one-shot migrate is simpler — on
 
 The catch: a migrate is a point-in-time copy with no CDC, so any row written to the source after it starts is missed. That means you must freeze writes to the source for the entire copy window — about 14 minutes for the 1.2 GB test dataset. It's a good fit for a small database you can quiesce briefly.
 
-## Which to choose
+### Which to choose
 
 Zero-downtime (Option A) is the better default for a real region move: no write freeze, and in testing it was also about 3× faster on the bulk copy than one-shot (~5 minutes vs ~14 minutes for the same 1.2 GB). One-shot (Option B) wins only on simplicity, when a brief maintenance window is acceptable and you'd rather not run a long-lived stream or a separate cutover.
+
+## Case 2 — several unsharded databases
+
+A PlanetScale database is one keyspace, and each sync start / migrate moves exactly one source keyspace to one target — so moving several databases means one run per database, each with its own --stream-id and its own target. There is nothing exotic here: it is Case 1 repeated per keyspace, run in parallel or supervised together.
+
+Per database: create the target database in the new region, mint its --role admin password, and run the same Case-1 flow (Option A or Option B) with a distinct --stream-id. Moving two databases (app-us-1→app-sa-1 and app-us-2→app-sa-2) is just two independent invocations, each pointed at its own source and target:
+
+    # database 1
+    sluice sync start --stream-id app-1-region-move \
+        --source-driver planetscale --source "$SLUICE_SOURCE_1" \
+        --target-driver planetscale --target "$SLUICE_TARGET_1" \
+        --apply-batch-size 50
+
+    # database 2 — independent stream, independent target
+    sluice sync start --stream-id app-2-region-move \
+        --source-driver planetscale --source "$SLUICE_SOURCE_2" \
+        --target-driver planetscale --target "$SLUICE_TARGET_2" \
+        --apply-batch-size 50
+
+Supervise many at once with a fleet config. Running each sync as its own process gets unwieldy past a handful. A sync fleet config collapses them into one supervised, failure-isolated process — one entry per database, each with its own stream-id and target — so a whole fleet of region moves runs and reloads from a single place.
+
+## Case 3 — a sharded keyspace
+
+A genuinely sharded PlanetScale keyspace — multiple shards behind a vindex — is supported as a source on sluice v0.99.191+; earlier versions failed the cold copy with 0 rows. Because vtgate merges all shards into one logical stream, sluice's cross-shard-collision guard requires you to opt in: pass --allow-cross-shard-merge when your key is globally unique across shards (a hash vindex puts each id on exactly one shard, so ids are disjoint and the merge is safe), or --inject-shard-column to add a shard-discriminator column instead.
+
+### Sub-case A — merge into an unsharded target
+
+The simplest path, and it works out of the box: point the sharded source at an unsharded target database with --allow-cross-shard-merge, and every shard's rows land in the one target table. Live-proven — all rows copied, no FailedPrecondition. Note the source DSN's database is the keyspace name (here sks):
+
+    sluice migrate \
+        --source-driver planetscale \
+        --source "USER:PASS@tcp(aws.connect.psdb.cloud:3306)/sks?tls=true" \
+        --target-driver planetscale --target "$SLUICE_TARGET" \
+        --allow-cross-shard-merge
+
+### Sub-case B — preserve sharding (sharded → sharded)
+
+To keep the data sharded, create a target keyspace sharded with the same vschema / vindex. sluice's cold copy and live CDC then route every row to the correct target shard — validated: INSERT / UPDATE / DELETE across both shards land on the matching shard, with under 20 seconds of CDC lag.
+
+Known rough edge — a sharded target rejects sluice's control tables today. A sharded PlanetScale target currently rejects sluice's internal control tables (sluice_cdc_state, sluice_cdc_schema_history, sluice_shard_consolidation_lease) with VT09001: … does not have a primary vindex, which aborts the sync before any rows copy — Vitess requires every table in a sharded keyspace to carry a vindex. Until sluice registers them automatically, the workaround is to add those three control tables to the target keyspace's vschema with a vindex on their primary keys (e.g. unicode_loose_md5 on stream_id / version_key / target_table_full_name) before sync start. This is an honest known rough edge for the sharded-target case; the merge sub-case (A) and the one-shot backup/restore below avoid it entirely.
+
+### Backup / restore a sharded source
+
+If you just want a point-in-time copy of a sharded keyspace into a plain database, backup full reads a sharded source with no special flag — it flattens the shards into one logical stream — and restore into a PlanetScale MySQL database needs no --allow-cross-shard-merge, because the backup already flattened it:
+
+    sluice backup full \
+        --source-driver planetscale \
+        --source "USER:PASS@tcp(aws.connect.psdb.cloud:3306)/sks?tls=true" \
+        --output-dir ./sks-backup
+
+    sluice restore \
+        --from-dir ./sks-backup \
+        --target-driver planetscale --target "$SLUICE_TARGET"
 
 ## Next steps
 
