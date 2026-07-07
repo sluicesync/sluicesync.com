@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upgrade or re-platform a PlanetScale Postgres database — sluice docs</title>
+<meta name="description" content="PlanetScale Postgres has no in-place major-version upgrade or CPU-architecture swap — provision a new instance on the target, let sluice sync across, then cut over.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/planetscale-postgres-upgrade/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk active" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Upgrade or re-platform a PlanetScale Postgres database</h1>
+    <p class="subtitle">PlanetScale Postgres has no in-place major-version upgrade or CPU-architecture swap — provision a new instance on the target, let sluice sync across, then cut over.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#when">When you need this</a></li><li><a href="#provision">Provision the target</a></li><li><a href="#sync">Sync across the version</a></li><li><a href="#cutover">Verify and cut over</a></li><li><a href="#gotchas">Gotchas</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>PlanetScale Postgres has <strong>no hands-off, in-place major-version upgrade</strong> — and no in-place CPU-architecture swap. The near-zero-downtime path is the same pattern the <a href="/docs/planetscale-region-move/">region-move guide</a> uses, along a different axis: <strong>provision a new PlanetScale Postgres instance on the target version (or architecture), use sluice to cold-copy and continuously sync the data across, verify, then cut traffic over.</strong> Because sluice's Postgres CDC is <strong>logical</strong> replication — row-level changes, not physical WAL pages — it carries data across a major-version boundary the way logical replication is the standard tool for near-zero-downtime PG major upgrades, and it's indifferent to the underlying CPU architecture. <strong>Live-validated: a real PlanetScale PG 17.10 → PG 18.4 move — cold-copy + continuous CDC + verify all clean, byte-identical value fidelity, no version-specific surprises.</strong></p>
+
+<h2 id="when">When you need this <a class="hlink" href="#when" aria-label="Permalink to this section">#</a></h2>
+<p>Two axes, one flow:</p>
+<ul>
+  <li><strong>Major-version upgrade</strong> (e.g. 17→18, and 18→19 when it lands) — to stay current and pick up new PostgreSQL features and performance work. PlanetScale doesn't upgrade a database's major version in place, so you move to a fresh instance created on the newer version.</li>
+  <li><strong>CPU-architecture change</strong> (ARM→x86, or back) — when your instance is on an architecture whose instance sizes are constrained and you need to move to the other. The architecture is chosen when the instance is created, so this too is a spin-up-new-instance move.</li>
+</ul>
+<p>Both reduce to the same three steps: <strong>spin up a new instance on the target, sync, cut over.</strong> sluice doesn't touch or even observe the architecture — logical replication is arch-transparent, so an ARM-source → x86-target sync is <em>identical</em> to the version-upgrade flow below. The live test's source and target both ran on <code>aarch64</code>; the version delta is the harder case (it crosses a catalog/format boundary) and it passed clean. The architecture case adds no schema or catalog difference at all — it's the same PG data on different silicon — so it's the strictly-simpler variant of the same procedure, not a separate one.</p>
+
+<h2 id="provision">Provision the target <a class="hlink" href="#provision" aria-label="Permalink to this section">#</a></h2>
+<p>Create the new instance on the target major version. <code>--major-version</code> selects the PG major; the default is the latest (18 today), and 17 is also available — pin it explicitly if you want a specific target:</p>
+<pre><code>pscale database create &lt;new-db&gt; <span class="f">--engine</span> postgresql <span class="f">--major-version</span> &lt;NEW&gt; \
+    <span class="f">--region</span> &lt;region&gt; <span class="f">--replicas</span> 0 <span class="f">--wait</span></code></pre>
+<p>For an <strong>architecture change</strong>, provision the new instance on the target architecture instead. The architecture is selected at instance creation on PlanetScale (the exact instance-type surface can vary — see <a href="https://planetscale.com/docs">PlanetScale's instance-type docs</a> rather than pinning a specific flag here). Everything downstream is identical to the version case.</p>
+<p>Take the target DSN from the <strong>Default <code>postgres</code> role</strong> and <strong>rewrite <code>sslmode=verify-full</code> → <code>sslmode=require</code></strong> — the same recipe as the <a href="/docs/planetscale-postgres/">PlanetScale Postgres guide</a>:</p>
+<pre><code>pscale role reset-default &lt;new-db&gt; main <span class="f">--force</span> <span class="f">--format</span> json   # -&gt; database_url
+
+<span class="c"># DST_NEW = that database_url, with sslmode=verify-full rewritten to sslmode=require</span></code></pre>
+<div class="note warn"><strong>Both ends connect as the Default <code>postgres</code> role.</strong> The <em>source</em> needs the <code>REPLICATION</code> attribute to create the logical-replication slot, which the custom <code>pscale_api_*</code> roles lack; the <em>target</em> wants a durable table owner. The Default <code>postgres</code> role has <code>REPLICATION</code> and owns the schema — use it on both. (Same requirement, and the same <code>SLUICE-E</code> refusal if you don't, as the <a href="/docs/planetscale-postgres/#sync">PlanetScale Postgres sync guide</a>.)</div>
+
+<h2 id="sync">Sync across the version <a class="hlink" href="#sync" aria-label="Permalink to this section">#</a></h2>
+<p>This is the exact validated sequence. One <code>sync start</code>, both ends the plain <code>postgres</code> driver:</p>
+<pre><code><span class="k">sluice</span> sync start <span class="f">--stream-id</span> pg-upgrade \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SRC_OLD" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST_NEW"</code></pre>
+<p>sluice cold-copies every row, then logs <code>bulk-copy complete; entering CDC mode</code> and tails logical-replication CDC — so the old instance stays <strong>fully writable</strong> the entire time while the new one catches up. Watch freshness from another shell and gate cutover on it:</p>
+<pre><code><span class="k">sluice</span> sync status <span class="f">--stream-id</span> pg-upgrade \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST_NEW"
+
+<span class="k">sluice</span> sync health <span class="f">--stream-id</span> pg-upgrade \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST_NEW" <span class="f">--max-stale-seconds</span> 30</code></pre>
+<p><strong>Live result (PG 17.10 → 18.4):</strong> 50 rows cold-copied, then 6 INSERT / 1 UPDATE / 1 DELETE on the source replicated to the PG&nbsp;18 target in about <strong>15 seconds</strong>. A subsequent <code>verify</code> reported <code>1 table checked, 1 clean, 0 mismatched</code>, and <code>numeric</code> / <code>timestamptz</code> / <code>jsonb</code> / boolean values were <strong>byte-identical across the version boundary</strong> — no copy or CDC WARNs.</p>
+
+<h2 id="cutover">Verify and cut over <a class="hlink" href="#cutover" aria-label="Permalink to this section">#</a></h2>
+<p>Gate cutover on a clean <code>verify</code> plus a fresh <code>sync health</code>:</p>
+<pre><code><span class="k">sluice</span> verify \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SRC_OLD" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST_NEW"</code></pre>
+<p>Then drain the stream cleanly and repoint your application's <code>DATABASE_URL</code> at the new (upgraded) instance:</p>
+<pre><code><span class="k">sluice</span> sync stop <span class="f">--stream-id</span> pg-upgrade \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST_NEW" <span class="f">--wait</span></code></pre>
+<div class="note"><strong><code>verify</code> lists sluice's own bookkeeping tables as informational.</strong> A clean sync leaves sluice's control tables (<code>sluice_cdc_schema_history</code>, <code>sluice_shard_consolidation_lease</code>) on the target; <code>verify</code> reports them as target-only rows for transparency, <em>not</em> as mismatches. Your data tables are what the <code>0 mismatched</code> line covers.</div>
+
+<h2 id="gotchas">Gotchas <a class="hlink" href="#gotchas" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>Source and target both connect as the Default <code>postgres</code> role</strong> — the source for <code>REPLICATION</code> (slot creation), the target for durable table ownership. Custom <code>pscale_api_*</code> roles lack <code>REPLICATION</code>.</li>
+  <li><strong>Rewrite <code>sslmode=verify-full</code> → <code>sslmode=require</code></strong> on both DSNs — PlanetScale's Postgres server cert isn't in the public trust store, so <code>verify-full</code> fails the handshake.</li>
+  <li><strong><code>--major-version</code> defaults to the latest.</strong> If you want a specific target major, pin it explicitly; otherwise a fresh instance lands on the newest version PlanetScale offers.</li>
+  <li><strong>No version-specific surprises at 17→18</strong> for the core type set — <code>numeric</code>, <code>timestamptz</code>, <code>jsonb</code>, boolean all round-tripped byte-identically, with no copy/CDC WARNs. A wider or more exotic type surface deserves its own <code>verify</code> before cutover regardless.</li>
+  <li><strong>Provision the target with headroom.</strong> Size the new instance (PlanetScale sizing) to match or exceed the source before you cut over.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/planetscale-postgres/">Migrate &amp; sync PlanetScale Postgres</a> — the connection recipe (roles, <code>sslmode</code>) and migrate/sync depth this guide builds on.</li>
+  <li><a href="/docs/planetscale-region-move/">Move PlanetScale regions</a> — the same provision-sync-cutover flow across a different axis (regions).</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the snapshot→CDC cutover flow in depth, engine-agnostic.</li>
+  <li><a href="/docs/commands/#sync-start">Command reference</a> — every flag named here, with defaults.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/planetscale-postgres/">← PlanetScale Postgres</a><a class="next" href="/docs/operate-fleet/">Operate a sync fleet →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/planetscale-postgres-upgrade/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
