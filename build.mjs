@@ -45,6 +45,7 @@ const NAV = [
       { slug: "import-sqlite-d1", label: "Import SQLite or Cloudflare D1" },
       { slug: "multi-database", label: "Migrate many databases or schemas" },
       { slug: "postgres-source-prep", label: "Prepare a Postgres source" },
+      { slug: "managed-postgres-slotless", label: "Managed Postgres (slot-less)" },
       { slug: "planetscale-vitess", label: "PlanetScale & Vitess" },
       { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
       { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
@@ -165,6 +166,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "schema-changes",
     "redact-pii",
     "postgres-source-prep",
+    "managed-postgres-slotless",
     "planetscale-vitess",
     "planetscale-region-move",
     "planetscale-postgres",
@@ -2003,6 +2005,89 @@ ${pre(`sluice trigger teardown \\
 </ul>
 `,
     prev: { href: "/docs/multi-database/", label: "Migrate many databases or schemas" },
+    next: { href: "/docs/managed-postgres-slotless/", label: "Managed Postgres (slot-less)" },
+  })
+);
+
+// nav-label: Managed Postgres (slot-less)
+write(
+  "managed-postgres-slotless",
+  page({
+    slug: "managed-postgres-slotless",
+    title: "Sync from managed Postgres without a replication slot",
+    subtitle: "Heroku Postgres, RDS without grants, Supabase / Crunchy starter tiers — managed Postgres that forbids logical replication still streams via sluice's trigger-based postgres-trigger engine. No slot, no REPLICATION attribute.",
+    body: `
+<p>sluice's default Postgres CDC engine reads the write-ahead log through a <a href="/docs/postgres-source-prep/#slot-name">logical replication slot</a> — which needs the connecting role to be a superuser or carry the <code>REPLICATION</code> attribute. Plenty of managed tiers forbid exactly that. For those, sluice ships a deliberate slot-less path: the <code>postgres-trigger</code> engine captures changes with per-table triggers instead of a slot. This guide covers when you need it, the explicit <strong>setup &rarr; run &rarr; teardown</strong> lifecycle, and the flagship <a href="#heroku">Heroku Postgres &rarr; PlanetScale</a> move.</p>
+
+<h2 id="when">When you need slot-less CDC</h2>
+<p>A one-shot <a href="/docs/commands/#migrate">migrate</a> from Postgres needs only <code>SELECT</code> and runs anywhere, including the most locked-down tiers. <strong>Continuous sync</strong> is where the slot requirement bites: creating a logical replication slot requires the <code>REPLICATION</code> role attribute, and these managed tiers don't grant it:</p>
+<ul>
+  <li><strong>Heroku Postgres</strong> — no <code>rolreplication</code>, no <code>CREATE_REPLICATION_SLOT</code>, no event-trigger creation. The canonical case.</li>
+  <li><strong>AWS RDS without the right grants</strong> — logical replication is off unless the parameter group and role grants are set up for it.</li>
+  <li><strong>Supabase / Crunchy Bridge starter tiers</strong> — the starter roles don't carry the attribute.</li>
+  <li><strong>PlanetScale Postgres custom <code>pscale_api_*</code> roles</strong> — these API roles lack <code>REPLICATION</code>; slot-based CDC into PS-PG needs the Default <code>postgres</code> role. (Full detail in the <a href="/docs/planetscale-postgres/">PlanetScale Postgres guide</a>.)</li>
+</ul>
+<p>sluice does <strong>not</strong> silently degrade to polling when the slot path is unavailable. The slot-based reader runs a preflight probe <em>before</em> it opens — reading the world-readable <code>pg_roles.rolsuper OR rolreplication</code> — and refuses loudly, naming the role and pointing straight at this engine, rather than letting slot creation fail opaquely mid-cold-start with a raw <code>ERROR: permission denied to create replication slot</code>:</p>
+${pre(`the source connecting role "app_user" is not a superuser and lacks the
+REPLICATION attribute. Slot-based Postgres CDC (--source-driver=postgres) creates
+a logical replication slot at cold start ... Recovery: (a) grant the attribute:
+ALTER ROLE app_user REPLICATION; (b) re-run with a superuser or replication-enabled
+role; (c) on managed Postgres that forbids the REPLICATION attribute (Heroku
+Postgres Essential, Render Basic, Supabase free), use --source-driver=postgres-trigger`)}
+<p>There is deliberately no <code>--allow-missing-replication</code> escape hatch: the role genuinely cannot create a slot, so the honest choices are to grant the attribute, swap roles, or take this slot-less path. The <code>postgres-trigger</code> engine installs per-table plpgsql <code>AFTER</code> triggers that write every change into a capture table (<code>sluice_change_log</code>); the engine tails that log — Bucardo-style CDC with no slot and no <code>REPLICATION</code> attribute (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0066-postgres-trigger-engine-variant.md">ADR-0066</a>). The lifecycle is explicit, so the source-side DDL is visible at the CLI, never silently applied on first sync.</p>
+
+<h2 id="setup">1. Install the capture triggers</h2>
+<p><code>sluice trigger setup</code> installs the change-log table, the capture function, and the per-table triggers. <code>--tables</code> is required — name every table you want captured:</p>
+${pre(`sluice trigger setup \\
+    --source-driver postgres-trigger \\
+    --dsn 'postgres://user:pass@host:5432/app' \\
+    --tables orders,customers,line_items \\
+    --allow-polled-fingerprint`)}
+<p>On a tier that <em>also</em> denies event-trigger creation (Heroku is one) automatic DDL detection can't use an event trigger, so add <code>--allow-polled-fingerprint</code> to opt into the weaker polled schema-fingerprint fallback. The command refuses loudly without it, so you explicitly acknowledge the trade-off rather than silently getting the degraded DDL-detection mode. The connecting role needs <code>CREATE</code> on the target schema, <code>TRIGGER</code> on each replicated table, and <code>INSERT</code> on <code>sluice_change_log</code> — a much smaller ask than <code>REPLICATION</code>. Preview the exact DDL without touching the source with <code>--dry-run</code>; the full set of objects it installs is listed under <a href="/docs/database-objects/#trigger-source">Objects sluice creates</a>.</p>
+<div class="note">Tune how much of each changed row the capture writes with <code>--capture-payload</code> (<code>full</code>, the default, keeps the full before- and after-image; <code>changed</code> trims the after-image to PK + changed columns; <code>minimal</code> reduces the apply to a last-write-wins PK match — safe for one-way CDC with no concurrent target writers, and it reaches toward roughly 2× source-write overhead instead of more).</div>
+
+<h2 id="run">2. Stream with the trigger engine</h2>
+<p>The source driver is <code>postgres-trigger</code>; everything else is an ordinary <a href="/docs/commands/#sync-start">sync start</a> — cold-copy first, then CDC tailed off the trigger log, with the same value fidelity, warm-resume, and encryption as any sluice sync:</p>
+${pre(`sluice sync start \\
+    --source-driver postgres-trigger --source 'postgres://user:pass@host:5432/app' \\
+    --target-driver postgres         --target 'postgres://user:pass@target:5432/app?sslmode=require' \\
+    --stream-id app`)}
+<div class="note"><strong>Cross-engine directions.</strong> A <code>postgres-trigger</code> source can stream to a <strong>Postgres</strong> target <em>and</em> to a <strong>MySQL</strong> / PlanetScale-MySQL target — PG&nbsp;↔&nbsp;MySQL is sluice's supported cross-engine direction, and the trigger engine counts as a Postgres source for that purpose. Set <code>--target-driver mysql</code> (or <code>planetscale</code>) and the target DSN accordingly. The same PG-native shapes that have no clean MySQL form — PostGIS geometry, <code>pg_trgm</code> operator-class indexes, <code>EXCLUDE</code> constraints — refuse loudly before any data moves, exactly as they do for the vanilla <code>postgres</code> source.</div>
+<p>The source change-log grows for the life of a continuous sync; reap durably-applied rows while the sync runs with <code>sluice trigger prune</code> (it reads the target's durably-applied frontier as the only safe lower bound and refuses to prune blind). See the <a href="/docs/commands/#trigger">trigger reference</a> for its flags.</p>
+
+<h2 id="teardown">3. Tear down cleanly</h2>
+<p>When the stream is finished, <code>sluice trigger teardown</code> drops every per-table trigger and (by default) the <code>sluice_change_log</code> table, leaving zero residue on the source:</p>
+${pre(`sluice trigger teardown \\
+    --source-driver postgres-trigger \\
+    --dsn 'postgres://user:pass@host:5432/app' --yes`)}
+<p><code>--yes</code> skips the destructive-action confirmation prompt (for scripted/CI use). Pass <code>--keep-data</code> to retain the change-log table for forensics instead of dropping it. Teardown is idempotent — re-running against a partially-uninstalled source proceeds cleanly via <code>DROP ... IF EXISTS</code>.</p>
+
+<h2 id="heroku">Heroku Postgres → PlanetScale</h2>
+<p>Heroku Postgres forbids replication slots outright, so it's the canonical <code>postgres-trigger</code> scenario. The three commands above work standalone against a Heroku source — read the <code>DATABASE_URL</code> fresh at each invocation (Heroku rotates it under failover) and append <code>?sslmode=require</code> (Heroku rejects non-TLS connections):</p>
+${pre(`sluice trigger setup \\
+    --source-driver postgres-trigger \\
+    --dsn "$(heroku config:get DATABASE_URL --app myapp)?sslmode=require" \\
+    --tables users,orders,items \\
+    --allow-polled-fingerprint
+
+sluice sync start \\
+    --source-driver postgres-trigger \\
+    --source "$(heroku config:get DATABASE_URL --app myapp)?sslmode=require" \\
+    --target-driver postgres \\
+    --target 'postgres://...your-target...?sslmode=require' \\
+    --stream-id heroku-myapp`)}
+<p>For a hands-off, dashboard-driven move there's a packaged wrapper: <strong><a href="https://github.com/sluicesync/sluice-heroku-migrator">sluice-heroku-migrator</a></strong> — a fork of PlanetScale's <code>heroku-migrator</code> with the replication engine swapped from <strong>Bucardo</strong> to sluice's <code>postgres-trigger</code> engine. Because sluice is a lightweight Go binary rather than an embedded PostgreSQL daemon, it deploys on a Standard-1x/2x dyno regardless of database size. It packages the same setup &rarr; sync &rarr; cutover flow this guide runs by hand — with TCP keepalives tuned for cloud NAT and psql-based status/cutover — behind a four-phase dashboard (Setup, Data Sync, Traffic Switch, Complete). You deploy it as a Heroku container app, set the <code>HEROKU_URL</code>, <code>PLANETSCALE_URL</code>, and <code>PASSWORD</code> config vars, and drive the phases from its dashboard. Prerequisites it enforces: every table has a primary key, the required extensions exist on the PlanetScale side, schema migrations are paused during the move, and the target has 1.5–2× the Heroku data size provisioned. The wrapper only automates the manual flow above — nothing it does isn't reproducible with the three sluice commands directly.</p>
+<div class="note">The <code>--tables</code>-first, explicit-lifecycle shape is what makes the trigger engine safe to run on someone else's managed database: nothing is installed on the source until you name it, and teardown removes every trace. This is a deliberate operability contrast with trigger tools that install capture state implicitly and leave residue behind.</div>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — the slot-based path's required GUCs, the <code>REPLICATION</code> attribute, and slot lifecycle (the engine this guide is the alternative to).</li>
+  <li><a href="/docs/getting-started/#trigger-cdc">Getting started: trigger-based CDC</a> — a worked slot-less walkthrough.</li>
+  <li><a href="/docs/commands/#trigger">trigger setup / teardown / prune</a> — the slot-less engine's full command reference.</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — confirm the target matches the source after the copy, identical to any sluice sync.</li>
+</ul>
+`,
+    prev: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
     next: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
   })
 );
@@ -2103,7 +2188,7 @@ ${pre(`sluice metrics-watch \\
   <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the snapshot→CDC cutover flow this guide's flags feed.</li>
 </ul>
 `,
-    prev: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
+    prev: { href: "/docs/managed-postgres-slotless/", label: "Managed Postgres (slot-less)" },
     next: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
   })
 );
