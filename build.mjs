@@ -47,6 +47,7 @@ const NAV = [
       { slug: "postgres-source-prep", label: "Prepare a Postgres source" },
       { slug: "planetscale-vitess", label: "PlanetScale & Vitess" },
       { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
+      { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
       { slug: "operate-fleet", label: "Operate a sync fleet" },
       { slug: "encrypted-backups", label: "Take encrypted backups" },
       { slug: "from-backup-sync", label: "Sync from a backup chain" },
@@ -166,6 +167,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "postgres-source-prep",
     "planetscale-vitess",
     "planetscale-region-move",
+    "planetscale-postgres",
     "operate-fleet",
     "encrypted-backups",
     "agent-skills",
@@ -2243,6 +2245,76 @@ sluice restore \\
 </ul>
 `,
     prev: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
+    next: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
+  })
+);
+
+// nav-label: PlanetScale Postgres
+write(
+  "planetscale-postgres",
+  page({
+    slug: "planetscale-postgres",
+    title: "Migrate & sync PlanetScale Postgres",
+    subtitle: "PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.",
+    body: `
+<p>PlanetScale Postgres is <strong>managed PostgreSQL, not Vitess</strong> — no keyspaces, no sharding, no VStream. So unlike PlanetScale <em>MySQL</em> (which needs the <code>planetscale</code> driver and the VStream feed — see <a href="/docs/planetscale-region-move/">the region-move guide</a>), you drive it with sluice's ordinary <strong><code>postgres</code></strong> engine: <code>COPY</code>-based cold copy and native <strong>logical-replication (replication-slot) CDC</strong>. Both a one-shot <a href="#migrate">migrate</a> and a zero-downtime <a href="#sync">sync</a> work end-to-end (validated on v0.99.194). Cross-engine value translation applies as usual only if the <em>other</em> side is MySQL or SQLite; Postgres→Postgres is byte-exact.</p>
+
+<h2 id="connect">Provision &amp; connect</h2>
+<p>Create the database with the Postgres engine — <code>--engine postgresql</code> is the pscale flag that selects managed Postgres rather than Vitess/MySQL. <code>--replicas 0</code> is a single node; <code>2</code> or more gives you HA. The default branch is <code>main</code>:</p>
+${pre(`pscale database create app --engine postgresql --region <region> --replicas 0 --wait`)}
+<p><strong>Connections use Postgres <em>roles</em>, not the MySQL password/connect flow.</strong> <code>pscale connect</code> is Vitess-only and refuses a Postgres database. Instead, take a DSN from a role's <code>database_url</code> field:</p>
+<ul>
+  <li><strong>Default role</strong> — <code>pscale role reset-default app main --format json</code> returns the stable <code>postgres</code> role's <code>database_url</code>.</li>
+  <li><strong>Custom role</strong> — <code>pscale role create app main mover --inherited-roles postgres --format json</code>.</li>
+</ul>
+<p>The DSN is a standard libpq URL. Note the database is literally <code>postgres</code> and the port is 5432:</p>
+${pre(`postgresql://<user>:<pass>@<region>.pg.psdb.cloud:5432/postgres?sslmode=require`)}
+<p>Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting the DSN in argv, so credentials don't land in your shell history or process list.</p>
+<div class="note warn"><strong>Rewrite <code>sslmode=verify-full</code> to <code>sslmode=require</code>.</strong> The <code>database_url</code> PlanetScale emits carries <code>sslmode=verify-full</code>, but PlanetScale's Postgres server certificate isn't in the public/OS trust store, so <code>verify-full</code> fails the handshake. Change it to <code>sslmode=require</code> — still encrypted, just without hostname/CA verification — and sluice connects cleanly.</div>
+
+<h2 id="migrate">One-shot migrate</h2>
+<p>A migrate is a point-in-time <code>COPY</code> with no CDC — a good fit when you can quiesce source writes for the copy window. Copy, then verify:</p>
+${pre(`sluice migrate \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"
+
+sluice verify \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"`)}
+<p>Postgres→Postgres value fidelity is byte-exact — <code>numeric</code>, <code>timestamptz</code>, <code>jsonb</code>, and boolean all round-trip unchanged.</p>
+<div class="note"><strong>Give the target tables a stable owner.</strong> migrate emits a WARN that the target tables land owned by the ephemeral <code>pscale_api_*</code> role a fresh DSN connects as. Connect the <em>target</em> as the Default <code>postgres</code> role (<code>pscale role reset-default app main</code>) so the tables get a durable owner instead of a short-lived API role.</div>
+
+<h2 id="sync">Zero-downtime sync</h2>
+<p>A continuous sync snapshots and bulk-copies the source, then tails native logical-replication CDC — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. PlanetScale Postgres ships <code>wal_level=logical</code> with 20 replication slots, so slot-based CDC works out of the box:</p>
+${pre(`sluice sync start --stream-id ps-pg \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"`)}
+<p>Watch it catch up from another shell, gate cutover on freshness, then stop and drain:</p>
+${pre(`sluice sync status --stream-id ps-pg \\
+    --target-driver postgres --target "$SLUICE_TARGET"
+
+sluice sync health --stream-id ps-pg \\
+    --target-driver postgres --target "$SLUICE_TARGET" --max-stale-seconds 30
+
+sluice sync stop --stream-id ps-pg \\
+    --target-driver postgres --target "$SLUICE_TARGET" --wait`)}
+<p>sluice creates the slot, snapshots, tails, and applies live INSERT / UPDATE / DELETE with fidelity; <code>sync stop --wait</code> then drains cleanly. Two source-side requirements gate this:</p>
+<div class="note warn"><strong>Two requirements on the source role.</strong>
+<ol>
+  <li><strong>Connect the source as the Default <code>postgres</code> role.</strong> Custom <code>pscale_api_*</code> roles lack the <code>REPLICATION</code> attribute and can't create a slot — sluice refuses loudly up front with a <code>SLUICE-E</code> error that names the fix (grant a replication role, or fall back to <code>--source-driver=postgres-trigger</code>). The Default <code>postgres</code> role <em>has</em> <code>REPLICATION</code>; use it for the source.</li>
+  <li><strong>The connecting role must own the source tables.</strong> Publication management needs table ownership, otherwise you hit <code>must be owner of table</code> / <code>42501</code>. Cleanest is to create and own the source schema as <code>postgres</code> from the start.</li>
+</ol>
+</div>
+<div class="note"><strong>Slot-less fallback.</strong> <code>--source-driver postgres-trigger</code> is a trigger-based, slot-less CDC path for managed Postgres that forbids replication. You don't need it here — the Default <code>postgres</code> role unlocks native slot-based CDC — but it's the escape hatch if a platform ever denies the <code>REPLICATION</code> attribute.</div>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — replication-slot lifecycle, slot invalidation, and failover for the native CDC engine.</li>
+  <li><a href="/docs/planetscale-region-move/">Move PlanetScale regions</a> — the PlanetScale <em>MySQL</em> story (the <code>planetscale</code> driver, VStream, sharded keyspaces).</li>
+  <li><a href="/docs/commands/#sync-start">Command reference</a> — every flag named here, with defaults.</li>
+</ul>
+`,
+    prev: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
     next: { href: "/docs/operate-fleet/", label: "Operate a sync fleet" },
   })
 );
@@ -2350,7 +2422,7 @@ sluice sync tui --connect :9300 --refresh 2s`)}
 <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the single-stream cutover flow each fleet sync runs internally.</li>
 </ul>
 `,
-    prev: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
+    prev: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
     next: { href: "/docs/encrypted-backups/", label: "Take encrypted backups" },
   })
 );

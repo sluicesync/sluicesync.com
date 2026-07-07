@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrate &amp; sync PlanetScale Postgres — sluice docs</title>
+<meta name="description" content="PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/planetscale-postgres/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><a class="lnk active" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrate &amp; sync PlanetScale Postgres</h1>
+    <p class="subtitle">PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#connect">Provision &amp; connect</a></li><li><a href="#migrate">One-shot migrate</a></li><li><a href="#sync">Zero-downtime sync</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>PlanetScale Postgres is <strong>managed PostgreSQL, not Vitess</strong> — no keyspaces, no sharding, no VStream. So unlike PlanetScale <em>MySQL</em> (which needs the <code>planetscale</code> driver and the VStream feed — see <a href="/docs/planetscale-region-move/">the region-move guide</a>), you drive it with sluice's ordinary <strong><code>postgres</code></strong> engine: <code>COPY</code>-based cold copy and native <strong>logical-replication (replication-slot) CDC</strong>. Both a one-shot <a href="#migrate">migrate</a> and a zero-downtime <a href="#sync">sync</a> work end-to-end (validated on v0.99.194). Cross-engine value translation applies as usual only if the <em>other</em> side is MySQL or SQLite; Postgres→Postgres is byte-exact.</p>
+
+<h2 id="connect">Provision &amp; connect <a class="hlink" href="#connect" aria-label="Permalink to this section">#</a></h2>
+<p>Create the database with the Postgres engine — <code>--engine postgresql</code> is the pscale flag that selects managed Postgres rather than Vitess/MySQL. <code>--replicas 0</code> is a single node; <code>2</code> or more gives you HA. The default branch is <code>main</code>:</p>
+<pre><code>pscale database create app <span class="f">--engine</span> postgresql <span class="f">--region</span> &lt;region&gt; <span class="f">--replicas</span> 0 <span class="f">--wait</span></code></pre>
+<p><strong>Connections use Postgres <em>roles</em>, not the MySQL password/connect flow.</strong> <code>pscale connect</code> is Vitess-only and refuses a Postgres database. Instead, take a DSN from a role's <code>database_url</code> field:</p>
+<ul>
+  <li><strong>Default role</strong> — <code>pscale role reset-default app main --format json</code> returns the stable <code>postgres</code> role's <code>database_url</code>.</li>
+  <li><strong>Custom role</strong> — <code>pscale role create app main mover --inherited-roles postgres --format json</code>.</li>
+</ul>
+<p>The DSN is a standard libpq URL. Note the database is literally <code>postgres</code> and the port is 5432:</p>
+<pre><code>postgresql://&lt;user&gt;:&lt;pass&gt;@&lt;region&gt;.pg.psdb.cloud:5432/postgres?sslmode=require</code></pre>
+<p>Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting the DSN in argv, so credentials don't land in your shell history or process list.</p>
+<div class="note warn"><strong>Rewrite <code>sslmode=verify-full</code> to <code>sslmode=require</code>.</strong> The <code>database_url</code> PlanetScale emits carries <code>sslmode=verify-full</code>, but PlanetScale's Postgres server certificate isn't in the public/OS trust store, so <code>verify-full</code> fails the handshake. Change it to <code>sslmode=require</code> — still encrypted, just without hostname/CA verification — and sluice connects cleanly.</div>
+
+<h2 id="migrate">One-shot migrate <a class="hlink" href="#migrate" aria-label="Permalink to this section">#</a></h2>
+<p>A migrate is a point-in-time <code>COPY</code> with no CDC — a good fit when you can quiesce source writes for the copy window. Copy, then verify:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET"
+
+<span class="k">sluice</span> verify \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET"</code></pre>
+<p>Postgres→Postgres value fidelity is byte-exact — <code>numeric</code>, <code>timestamptz</code>, <code>jsonb</code>, and boolean all round-trip unchanged.</p>
+<div class="note"><strong>Give the target tables a stable owner.</strong> migrate emits a WARN that the target tables land owned by the ephemeral <code>pscale_api_*</code> role a fresh DSN connects as. Connect the <em>target</em> as the Default <code>postgres</code> role (<code>pscale role reset-default app main</code>) so the tables get a durable owner instead of a short-lived API role.</div>
+
+<h2 id="sync">Zero-downtime sync <a class="hlink" href="#sync" aria-label="Permalink to this section">#</a></h2>
+<p>A continuous sync snapshots and bulk-copies the source, then tails native logical-replication CDC — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. PlanetScale Postgres ships <code>wal_level=logical</code> with 20 replication slots, so slot-based CDC works out of the box:</p>
+<pre><code><span class="k">sluice</span> sync start <span class="f">--stream-id</span> ps-pg \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SLUICE_SOURCE" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET"</code></pre>
+<p>Watch it catch up from another shell, gate cutover on freshness, then stop and drain:</p>
+<pre><code><span class="k">sluice</span> sync status <span class="f">--stream-id</span> ps-pg \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET"
+
+<span class="k">sluice</span> sync health <span class="f">--stream-id</span> ps-pg \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" <span class="f">--max-stale-seconds</span> 30
+
+<span class="k">sluice</span> sync stop <span class="f">--stream-id</span> ps-pg \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" <span class="f">--wait</span></code></pre>
+<p>sluice creates the slot, snapshots, tails, and applies live INSERT / UPDATE / DELETE with fidelity; <code>sync stop --wait</code> then drains cleanly. Two source-side requirements gate this:</p>
+<div class="note warn"><strong>Two requirements on the source role.</strong>
+<ol>
+  <li><strong>Connect the source as the Default <code>postgres</code> role.</strong> Custom <code>pscale_api_*</code> roles lack the <code>REPLICATION</code> attribute and can't create a slot — sluice refuses loudly up front with a <code>SLUICE-E</code> error that names the fix (grant a replication role, or fall back to <code>--source-driver=postgres-trigger</code>). The Default <code>postgres</code> role <em>has</em> <code>REPLICATION</code>; use it for the source.</li>
+  <li><strong>The connecting role must own the source tables.</strong> Publication management needs table ownership, otherwise you hit <code>must be owner of table</code> / <code>42501</code>. Cleanest is to create and own the source schema as <code>postgres</code> from the start.</li>
+</ol>
+</div>
+<div class="note"><strong>Slot-less fallback.</strong> <code>--source-driver postgres-trigger</code> is a trigger-based, slot-less CDC path for managed Postgres that forbids replication. You don't need it here — the Default <code>postgres</code> role unlocks native slot-based CDC — but it's the escape hatch if a platform ever denies the <code>REPLICATION</code> attribute.</div>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — replication-slot lifecycle, slot invalidation, and failover for the native CDC engine.</li>
+  <li><a href="/docs/planetscale-region-move/">Move PlanetScale regions</a> — the PlanetScale <em>MySQL</em> story (the <code>planetscale</code> driver, VStream, sharded keyspaces).</li>
+  <li><a href="/docs/commands/#sync-start">Command reference</a> — every flag named here, with defaults.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/planetscale-region-move/">← Move PlanetScale regions</a><a class="next" href="/docs/operate-fleet/">Operate a sync fleet →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/planetscale-postgres/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
