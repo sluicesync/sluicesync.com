@@ -10,10 +10,9 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 - [Getting started](https://sluicesync.com/docs/getting-started/): Install sluice, point it at a source and target, and run your first migration and continuous sync.
 - [Configuration](https://sluicesync.com/docs/configuration/): Connection strings, environment variables, the YAML config file, and the global flags every command shares.
 
-## Guides
+## General Guides
 
 - [Migrate MySQL → Postgres](https://sluicesync.com/docs/migrate-mysql-to-postgres/): The flagship first migration: connect, preview the plan, copy the data, and verify it landed.
-- [How sluice copies your data](https://sluicesync.com/docs/how-sluice-copies/): Same-engine vs cross-engine: which internal path a copy takes, and why the fast path never trades correctness for speed.
 - [Preview & validate before you migrate](https://sluicesync.com/docs/preview-and-validate/): See the exact target DDL, steer the type translation, and confirm the copy — without guessing.
 - [Verify & reconcile](https://sluicesync.com/docs/verify-reconcile/): Confirm every row landed and no structural drift crept in — then know exactly what to do when it didn't.
 - [Zero-downtime migration (continuous sync)](https://sluicesync.com/docs/zero-downtime-cutover/): Cold-start the data, let CDC catch up while the app keeps writing, then cut over in a brief, controlled window.
@@ -22,21 +21,26 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 - [Import SQLite or Cloudflare D1](https://sluicesync.com/docs/import-sqlite-d1/): Move a SQLite file, a wrangler D1 export, or a live Cloudflare D1 into Postgres or MySQL — losslessly.
 - [Migrate many databases or schemas](https://sluicesync.com/docs/multi-database/): Fan a whole MySQL server or a multi-schema Postgres source out to same-named target namespaces in one run.
 - [Copy a subset of tables](https://sluicesync.com/docs/copy-table-subset/): Copy one-to-several tables from an existing Postgres database to a PlanetScale MySQL/Vitess (or plain MySQL) target and keep just those continuously in sync.
-- [Foreign keys on Vitess](https://sluicesync.com/docs/foreign-keys-vitess/): Migrating or syncing a foreign-key-bearing source into Vitess or PlanetScale MySQL — the two strategies (skip-and-index, or enable FK support) and how to choose.
 - [Prepare a Postgres source](https://sluicesync.com/docs/postgres-source-prep/): What a Postgres source needs before it can feed a continuous sync — the required GUCs, the REPLICATION role attribute, replication-slot lifecycle, and the slot-less path for managed Postgres.
 - [Managed Postgres (slot-less)](https://sluicesync.com/docs/managed-postgres-slotless/): Heroku Postgres, RDS without grants, Supabase / Crunchy starter tiers — managed Postgres that forbids logical replication still streams via sluice's trigger-based postgres-trigger engine. No slot, no REPLICATION attribute.
-- [PlanetScale & Vitess](https://sluicesync.com/docs/planetscale-vitess/): Migrate and continuously sync from PlanetScale-MySQL or any Vitess deployment through the VStream gRPC feed.
-- [Move PlanetScale regions](https://sluicesync.com/docs/planetscale-region-move/): PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.
-- [Self-hosted MySQL → PlanetScale](https://sluicesync.com/docs/mysql-to-planetscale/): Move an on-prem / self-hosted MySQL onto PlanetScale MySQL — a one-shot bulk migrate plus continuous binlog-CDC sync, so you cold-copy, keep the old primary writable, and cut over in a controlled window.
-- [PlanetScale Postgres](https://sluicesync.com/docs/planetscale-postgres/): PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.
-- [Upgrade PlanetScale Postgres](https://sluicesync.com/docs/planetscale-postgres-upgrade/): PlanetScale Postgres has no in-place major-version upgrade or CPU-architecture swap — provision a new instance on the target, let sluice sync across, then cut over.
 - [Operate a sync fleet](https://sluicesync.com/docs/operate-fleet/): Supervise many continuous syncs from one process — failure-isolated, observable, and reconfigurable without a restart.
 - [Take encrypted backups](https://sluicesync.com/docs/encrypted-backups/): sluice's logical backup model in depth — chains, compression, encryption at rest, object stores, retention, and restore.
 - [Sync from a backup chain](https://sluicesync.com/docs/from-backup-sync/): Replay a backup chain into a target as a long-running broker — no direct source↔target connectivity required.
 - [Drive sluice from an AI agent](https://sluicesync.com/docs/agent-skills/): sluice ships task-scoped agent skills — plain-markdown playbooks that let Claude Code, Cursor, or any skill-aware assistant run a migration, verify a sync, or operate a backup chain on your behalf, inside the same safety gate.
 
+## PlanetScale Guides
+
+- [PlanetScale & Vitess](https://sluicesync.com/docs/planetscale-vitess/): Migrate and continuously sync from PlanetScale-MySQL or any Vitess deployment through the VStream gRPC feed.
+- [Self-hosted MySQL → PlanetScale](https://sluicesync.com/docs/mysql-to-planetscale/): Move an on-prem / self-hosted MySQL onto PlanetScale MySQL — a one-shot bulk migrate plus continuous binlog-CDC sync, so you cold-copy, keep the old primary writable, and cut over in a controlled window.
+- [Foreign keys on Vitess](https://sluicesync.com/docs/foreign-keys-vitess/): Migrating or syncing a foreign-key-bearing source into Vitess or PlanetScale MySQL — the two strategies (skip-and-index, or enable FK support) and how to choose.
+- [PlanetScale Postgres](https://sluicesync.com/docs/planetscale-postgres/): PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.
+- [Upgrade PlanetScale Postgres](https://sluicesync.com/docs/planetscale-postgres-upgrade/): PlanetScale Postgres has no in-place major-version upgrade or CPU-architecture swap — provision a new instance on the target, let sluice sync across, then cut over.
+- [Move PlanetScale regions](https://sluicesync.com/docs/planetscale-region-move/): PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.
+
 ## Reference
 
+- [Supported directions](https://sluicesync.com/docs/supported-directions/): Every source → target pair sluice can move, for one-shot migrate and for continuous sync — and which pairs each surface does not cover.
+- [How sluice copies your data](https://sluicesync.com/docs/how-sluice-copies/): Same-engine vs cross-engine: which internal path a copy takes, and why the fast path never trades correctness for speed.
 - [Command reference](https://sluicesync.com/docs/commands/): Every sluice command, its purpose, the flags that matter most, and worked examples.
 - [Error & exit codes](https://sluicesync.com/docs/error-codes/): The stable SLUICE-E-* error codes and the process exit-code contract — a greppable branching surface for scripts, log pipelines, and agents driving the CLI.
 - [Type mapping](https://sluicesync.com/docs/type-mapping/): What your MySQL TINYINT(1) / ENUM / DECIMAL / JSON / temporal types become on Postgres (and vice versa), and on SQLite / D1 — the cross-engine translation policies.

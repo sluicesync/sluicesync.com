@@ -1948,6 +1948,77 @@ Every skill also follows sluice's own discipline: verify by reading state back, 
 
 
 ===============================================================
+# Supported directions
+(https://sluicesync.com/docs/supported-directions/)
+
+Every source → target pair sluice can move, for one-shot migrate and for continuous sync — and which pairs each surface does not cover.
+
+sluice moves data between database engines through two surfaces: migrate (a one-shot schema + data copy) and sync (continuous change-data-capture). A "direction" is just a source engine → target engine pair. Which pairs are supported differs between the two surfaces, because migrate and sync have different engine roles — a few engines can be read continuously but not written to, and a couple can only ever be a source. The authoritative, always-current list for the binary in your hand is sluice engines; this page is the operator-facing summary of what those roles add up to.
+
+    sluice engines   # lists every engine built into this binary and its role (migrate / CDC, source / target)
+
+## Migrate — one-shot copy
+
+Migrate reads a source once and writes a fresh copy into a target. Every migrate source copies to every migrate target — the cell is never "unsupported", only "faster" on the same-engine diagonal. Cross-engine pairs flow through the typed IR; same-engine pairs take an optimized path but the same fidelity.
+
+Source ↓  /  Target → · MySQL · PlanetScale / Vitess · Postgres · SQLite ·
+
+MySQL · ✓ a · ✓ b · ✓ · ✓ ·
+
+PlanetScale / Vitess · ✓ · ✓ b · ✓ · ✓ ·
+
+Postgres · ✓ · ✓ b · ✓ c · ✓ ·
+
+SQLite (file / .sql dump) · ✓ · ✓ b · ✓ · ✓ ·
+
+Cloudflare D1 (live) · ✓ · ✓ b · ✓ · ✓ ·
+
+a same-engine MySQL uses the native LOAD DATA LOCAL INFILE loader.   b a PlanetScale / Vitess target blocks LOAD DATA LOCAL, so cold-copy falls back to batched multi-row INSERT (use the planetscale / vitess engine name, not mysql, against a Vitess-backed host).   c same-engine Postgres byte-pipes the native COPY stream — the raw-copy fast lane — when there's no transform to apply. See How sluice copies your data for which internal path each cell takes.
+
+Targets are MySQL, PlanetScale / Vitess, Postgres, or SQLite. Cloudflare D1 is a migrate source only (read live over its HTTP API), never a migrate target. The trigger-CDC engines (postgres-trigger, sqlite-trigger, d1-trigger) are sync-only and don't appear here.
+
+## Sync — continuous change-data-capture
+
+Sync does an initial snapshot, then streams every subsequent change from the source until you cut over. It has more sources than migrate — including three trigger-based engines for platforms that can't hand out a native replication feed — but fewer targets: changes are only ever applied to a MySQL-family or Postgres target.
+
+Source ↓  /  Target → · MySQL · PlanetScale / Vitess · Postgres ·
+
+MySQL — binlog · ✓ · ✓ · ✓ ·
+
+PlanetScale / Vitess — VStream · ✓ · ✓ · ✓ ·
+
+Postgres — replication slot · ✓ · ✓ · ✓ ·
+
+Postgres — slot-less (postgres-trigger) · ✓ · ✓ · ✓ ·
+
+SQLite — sqlite-trigger · ✓ · ✓ · ✓ ·
+
+Cloudflare D1 — d1-trigger · ✓ · ✓ · ✓ ·
+
+SQLite and D1 are sync sources, not sync targets. A continuous stream from SQLite or D1 runs through the sqlite-trigger / d1-trigger engines (the plain sqlite / d1 engines have no CDC); a stream never lands into SQLite or D1. For managed Postgres that can't grant a replication slot (Heroku, some RDS/Supabase tiers), postgres-trigger is the slot-less source path.
+
+## The four MySQL ↔ Postgres directions
+
+The combination sluice was built for — the fully bidirectional MySQL ↔ Postgres matrix — is every cell where both sides are one of those two engines, and all four work in both migrate and sync:
+
+- MySQL → Postgres and Postgres → MySQL — cross-engine, through the IR (type translation, value-fidelity checks, PII redaction, overrides).
+
+- MySQL → MySQL and Postgres → Postgres — same-engine, nothing to translate; the native loader / raw-COPY fast lane applies on migrate.
+
+PlanetScale and self-hosted Vitess are MySQL-dialect flavors, so anywhere this page says "MySQL" as a direction, the Vitess-backed flavors slot into the same cell — you just pick the matching engine name so sluice uses VStream and batched-insert instead of binlog and LOAD DATA.
+
+## Next steps
+
+- How sluice copies your data — the internal path (IR vs raw fast lane) each direction takes, and why the fast lane never trades correctness for speed.
+
+- Command reference: engines — the per-engine role table (bulk-load / CDC capabilities, DSN shapes) this page summarizes.
+
+- Getting started — connect a source and target and run your first migrate.
+
+- Import SQLite or Cloudflare D1 — the SQLite / D1 source specifics end to end.
+
+
+===============================================================
 # How sluice copies your data
 (https://sluicesync.com/docs/how-sluice-copies/)
 
@@ -1966,6 +2037,18 @@ When both sides are Postgres and there is no transformation to apply, the bytes 
 ## MySQL → MySQL — no translation to do, plus a native loader
 
 A same-engine MySQL copy still flows through the IR (there is no raw byte-pipe for MySQL today), but with source and target identical there is nothing to translate — every type round-trips exactly — and sluice writes through MySQL's native bulk loader (LOAD DATA LOCAL INFILE) on the parallel copy path, the fastest ingest MySQL offers. (PlanetScale blocks LOAD DATA LOCAL, so a PlanetScale target falls back to batched multi-row INSERT.)
+
+## SQLite and Cloudflare D1 — always the IR path, with a lossless read projection
+
+A SQLite file, a wrangler d1 export .sql dump, or a live Cloudflare D1 database imports into Postgres or MySQL (and SQLite is itself a migrate target). These always take the IR path — there is no raw byte-pipe for SQLite or D1, and there doesn't need to be: the copy is cross-engine, so every value is being translated anyway. The engineering that matters here is on the read side, because SQLite's dynamic typing and D1's HTTP-only access each make "read the value exactly" the hard part.
+
+- Dynamic types, read losslessly. SQLite stores a storage class per value, not a declared column type. sluice reads each column through a (typeof(col), CAST(col AS TEXT) / hex(col)) projection, so an integer above 253 keeps every bit and a BLOB round-trips byte-for-byte instead of going through a lossy float or UTF-8 coercion. A decimal written into a SQLite target lands byte-exact as TEXT.
+
+- Declared temporal types are an explicit decode, never a guess. SQLite has no native date/time storage, so a column declared DATE / DATETIME is decoded per --sqlite-date-encoding (iso default, or unixepoch / unixmillis / julian). A stored value whose storage class doesn't match the chosen encoding is refused loudly — never silently turned into a wrong date.
+
+- Live D1 stays online. The d1 engine reads over D1's HTTP query API (token via CLOUDFLARE_API_TOKEN) using the same lossless projection; the read doesn't take the database offline (ADR-0132).
+
+This is the one-shot migrate copy path. Continuous sync from SQLite or D1 is a separate, trigger-based mechanism — the sqlite-trigger / d1-trigger CDC engines — not this cold-copy lane. See Import SQLite or Cloudflare D1 for the full walkthrough, and Supported directions for which SQLite/D1 pairs are one-shot vs continuous.
 
 ## The fast lane is not "more accurate" — it is the same fidelity, less work
 

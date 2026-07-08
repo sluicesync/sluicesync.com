@@ -33,10 +33,9 @@ const NAV = [
     ],
   },
   {
-    group: "Guides",
+    group: "General Guides",
     items: [
       { slug: "migrate-mysql-to-postgres", label: "Migrate MySQL → Postgres" },
-      { slug: "how-sluice-copies", label: "How sluice copies your data" },
       { slug: "preview-and-validate", label: "Preview & validate before you migrate" },
       { slug: "verify-reconcile", label: "Verify & reconcile" },
       { slug: "zero-downtime-cutover", label: "Zero-downtime migration (continuous sync)" },
@@ -45,14 +44,8 @@ const NAV = [
       { slug: "import-sqlite-d1", label: "Import SQLite or Cloudflare D1" },
       { slug: "multi-database", label: "Migrate many databases or schemas" },
       { slug: "copy-table-subset", label: "Copy a subset of tables" },
-      { slug: "foreign-keys-vitess", label: "Foreign keys on Vitess" },
       { slug: "postgres-source-prep", label: "Prepare a Postgres source" },
       { slug: "managed-postgres-slotless", label: "Managed Postgres (slot-less)" },
-      { slug: "planetscale-vitess", label: "PlanetScale & Vitess" },
-      { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
-      { slug: "mysql-to-planetscale", label: "Self-hosted MySQL → PlanetScale" },
-      { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
-      { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
       { slug: "operate-fleet", label: "Operate a sync fleet" },
       { slug: "encrypted-backups", label: "Take encrypted backups" },
       { slug: "from-backup-sync", label: "Sync from a backup chain" },
@@ -60,8 +53,21 @@ const NAV = [
     ],
   },
   {
+    group: "PlanetScale Guides",
+    items: [
+      { slug: "planetscale-vitess", label: "PlanetScale & Vitess" },
+      { slug: "mysql-to-planetscale", label: "Self-hosted MySQL → PlanetScale" },
+      { slug: "foreign-keys-vitess", label: "Foreign keys on Vitess" },
+      { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
+      { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
+      { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
+    ],
+  },
+  {
     group: "Reference",
     items: [
+      { slug: "supported-directions", label: "Supported directions" },
+      { slug: "how-sluice-copies", label: "How sluice copies your data" },
       {
         slug: "commands",
         label: "Command reference",
@@ -180,7 +186,6 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "multi-database",
     "copy-table-subset",
     "foreign-keys-vitess",
-    "how-sluice-copies",
     "verify-reconcile",
     "schema-changes",
     "redact-pii",
@@ -195,7 +200,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "encrypted-backups",
     "agent-skills",
   ];
-  const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "error-codes" || slug === "type-mapping" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
+  const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "supported-directions" || slug === "how-sluice-copies" || slug === "error-codes" || slug === "type-mapping" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
   const top = '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>';
   let pager = "";
   if (prev || next) {
@@ -1223,7 +1228,7 @@ ${pre(`sluice verify \\
 <p>Both are <a href="/docs/configuration/#global-flags">global flags</a> — see Configuration for the full discussion.</p>
 `,
     prev: { href: "/docs/getting-started/", label: "Getting started" },
-    next: { href: "/docs/how-sluice-copies/", label: "How sluice copies your data" },
+    next: { href: "/docs/preview-and-validate/", label: "Preview & validate before you migrate" },
   })
 );
 
@@ -1283,7 +1288,7 @@ sluice verify --source-driver mysql --source "$SLUICE_SOURCE" \\
     --depth sample --sample-rows-per-table 500`)}
 <p>Both modes accept <code>--format json</code> and <code>-o FILE</code> for piping into a CI gate or alertmanager. A full per-row hash mode is planned but not yet shipped.</p>
 `,
-    prev: { href: "/docs/how-sluice-copies/", label: "How sluice copies your data" },
+    prev: { href: "/docs/migrate-mysql-to-postgres/", label: "Migrate MySQL → Postgres" },
     next: { href: "/docs/verify-reconcile/", label: "Verify & reconcile" },
   })
 );
@@ -1609,7 +1614,7 @@ ${pre(`sluice migrate \\
 </ul>
 `,
     prev: { href: "/docs/multi-database/", label: "Migrate many databases or schemas" },
-    next: { href: "/docs/foreign-keys-vitess/", label: "Foreign keys on a Vitess target" },
+    next: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
   })
 );
 
@@ -1662,8 +1667,8 @@ ${pre(`sluice migrate \\
   <li><a href="/docs/commands/#migrate">Command reference</a> — <code>--skip-foreign-keys</code>, <code>--allow-degraded-fks</code>, and every other flag, with defaults.</li>
 </ul>
 `,
-    prev: { href: "/docs/copy-table-subset/", label: "Copy a subset of tables" },
-    next: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
+    prev: { href: "/docs/mysql-to-planetscale/", label: "Self-hosted MySQL → PlanetScale" },
+    next: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
   })
 );
 
@@ -1796,10 +1801,66 @@ ${pre(`./skills/install.sh`)}
 </ul>
 `,
     prev: { href: "/docs/from-backup-sync/", label: "Sync from a backup chain" },
-    next: { href: "/docs/commands/", label: "Command reference" },
+    next: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
   })
 );
 
+
+// nav-label: Supported directions
+write(
+  "supported-directions",
+  page({
+    slug: "supported-directions",
+    title: "Supported directions",
+    subtitle: "Every source → target pair sluice can move, for one-shot migrate and for continuous sync — and which pairs each surface does not cover.",
+    body: `
+<p>sluice moves data between database engines through two surfaces: <strong>migrate</strong> (a one-shot schema + data copy) and <strong>sync</strong> (continuous change-data-capture). A "direction" is just a <em>source engine → target engine</em> pair. Which pairs are supported differs between the two surfaces, because migrate and sync have different engine roles — a few engines can be read continuously but not written to, and a couple can only ever be a source. The authoritative, always-current list for the binary in your hand is <code>sluice engines</code>; this page is the operator-facing summary of what those roles add up to.</p>
+${pre(`sluice engines   # lists every engine built into this binary and its role (migrate / CDC, source / target)`)}
+
+<h2 id="migrate">Migrate — one-shot copy</h2>
+<p>Migrate reads a source once and writes a fresh copy into a target. <strong>Every migrate source copies to every migrate target</strong> — the cell is never "unsupported", only "faster" on the same-engine diagonal. Cross-engine pairs flow through the typed <a href="/docs/how-sluice-copies/#ir-path">IR</a>; same-engine pairs take an optimized path but the same fidelity.</p>
+<table><thead><tr><th>Source ↓ &nbsp;/&nbsp; Target →</th><th>MySQL</th><th>PlanetScale / Vitess</th><th>Postgres</th><th>SQLite</th></tr></thead><tbody>
+  <tr><td><strong>MySQL</strong></td><td class="desc">✓ <sup>a</sup></td><td class="desc">✓ <sup>b</sup></td><td class="desc">✓</td><td class="desc">✓</td></tr>
+  <tr><td><strong>PlanetScale / Vitess</strong></td><td class="desc">✓</td><td class="desc">✓ <sup>b</sup></td><td class="desc">✓</td><td class="desc">✓</td></tr>
+  <tr><td><strong>Postgres</strong></td><td class="desc">✓</td><td class="desc">✓ <sup>b</sup></td><td class="desc">✓ <sup>c</sup></td><td class="desc">✓</td></tr>
+  <tr><td><strong>SQLite</strong> (file / <code>.sql</code> dump)</td><td class="desc">✓</td><td class="desc">✓ <sup>b</sup></td><td class="desc">✓</td><td class="desc">✓</td></tr>
+  <tr><td><strong>Cloudflare D1</strong> (live)</td><td class="desc">✓</td><td class="desc">✓ <sup>b</sup></td><td class="desc">✓</td><td class="desc">✓</td></tr>
+</tbody></table>
+<p><sup>a</sup> same-engine MySQL uses the native <code>LOAD DATA LOCAL INFILE</code> loader. &nbsp; <sup>b</sup> a PlanetScale / Vitess <em>target</em> blocks <code>LOAD DATA LOCAL</code>, so cold-copy falls back to batched multi-row <code>INSERT</code> (use the <code>planetscale</code> / <code>vitess</code> engine name, not <code>mysql</code>, against a Vitess-backed host). &nbsp; <sup>c</sup> same-engine Postgres byte-pipes the native <code>COPY</code> stream — the <a href="/docs/how-sluice-copies/#pg-fast-lane">raw-copy fast lane</a> — when there's no transform to apply. See <a href="/docs/how-sluice-copies/">How sluice copies your data</a> for which internal path each cell takes.</p>
+<div class="note"><strong>Targets are MySQL, PlanetScale / Vitess, Postgres, or SQLite.</strong> Cloudflare D1 is a migrate <em>source</em> only (read live over its HTTP API), never a migrate target. The trigger-CDC engines (<code>postgres-trigger</code>, <code>sqlite-trigger</code>, <code>d1-trigger</code>) are sync-only and don't appear here.</div>
+
+<h2 id="sync">Sync — continuous change-data-capture</h2>
+<p>Sync does an initial snapshot, then streams every subsequent change from the source until you cut over. It has <em>more</em> sources than migrate — including three trigger-based engines for platforms that can't hand out a native replication feed — but <em>fewer</em> targets: changes are only ever applied to a MySQL-family or Postgres target.</p>
+<table><thead><tr><th>Source ↓ &nbsp;/&nbsp; Target →</th><th>MySQL</th><th>PlanetScale / Vitess</th><th>Postgres</th></tr></thead><tbody>
+  <tr><td><strong>MySQL</strong> — binlog</td><td class="desc">✓</td><td class="desc">✓</td><td class="desc">✓</td></tr>
+  <tr><td><strong>PlanetScale / Vitess</strong> — VStream</td><td class="desc">✓</td><td class="desc">✓</td><td class="desc">✓</td></tr>
+  <tr><td><strong>Postgres</strong> — replication slot</td><td class="desc">✓</td><td class="desc">✓</td><td class="desc">✓</td></tr>
+  <tr><td><strong>Postgres</strong> — slot-less (<code>postgres-trigger</code>)</td><td class="desc">✓</td><td class="desc">✓</td><td class="desc">✓</td></tr>
+  <tr><td><strong>SQLite</strong> — <code>sqlite-trigger</code></td><td class="desc">✓</td><td class="desc">✓</td><td class="desc">✓</td></tr>
+  <tr><td><strong>Cloudflare D1</strong> — <code>d1-trigger</code></td><td class="desc">✓</td><td class="desc">✓</td><td class="desc">✓</td></tr>
+</tbody></table>
+<div class="note"><strong>SQLite and D1 are sync sources, not sync targets.</strong> A continuous stream <em>from</em> SQLite or D1 runs through the <code>sqlite-trigger</code> / <code>d1-trigger</code> engines (the plain <code>sqlite</code> / <code>d1</code> engines have no CDC); a stream never lands <em>into</em> SQLite or D1. For managed Postgres that can't grant a replication slot (Heroku, some RDS/Supabase tiers), <code>postgres-trigger</code> is the slot-less source path.</div>
+
+<h2 id="four-directions">The four MySQL ↔ Postgres directions</h2>
+<p>The combination sluice was built for — the fully bidirectional MySQL ↔ Postgres matrix — is every cell where both sides are one of those two engines, and all four work in both migrate and sync:</p>
+<ul>
+  <li><strong>MySQL → Postgres</strong> and <strong>Postgres → MySQL</strong> — cross-engine, through the IR (type translation, value-fidelity checks, PII redaction, overrides).</li>
+  <li><strong>MySQL → MySQL</strong> and <strong>Postgres → Postgres</strong> — same-engine, nothing to translate; the native loader / raw-<code>COPY</code> fast lane applies on migrate.</li>
+</ul>
+<p>PlanetScale and self-hosted Vitess are MySQL-dialect flavors, so anywhere this page says "MySQL" as a <em>direction</em>, the Vitess-backed flavors slot into the same cell — you just pick the matching engine name so sluice uses VStream and batched-insert instead of binlog and <code>LOAD DATA</code>.</p>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/how-sluice-copies/">How sluice copies your data</a> — the internal path (IR vs raw fast lane) each direction takes, and why the fast lane never trades correctness for speed.</li>
+  <li><a href="/docs/commands/#engines">Command reference: engines</a> — the per-engine role table (bulk-load / CDC capabilities, DSN shapes) this page summarizes.</li>
+  <li><a href="/docs/getting-started/">Getting started</a> — connect a source and target and run your first migrate.</li>
+  <li><a href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a> — the SQLite / D1 source specifics end to end.</li>
+</ul>
+`,
+    prev: { href: "/docs/", label: "Overview" },
+    next: { href: "/docs/how-sluice-copies/", label: "How sluice copies your data" },
+  })
+);
 
 // nav-label: How sluice copies your data
 write(
@@ -1819,6 +1880,15 @@ write(
 
 <h2 id="mysql-same-engine">MySQL → MySQL — no translation to do, plus a native loader</h2>
 <p>A same-engine MySQL copy still flows through the IR (there is no raw byte-pipe for MySQL today), but with source and target identical there is nothing to <em>translate</em> — every type round-trips exactly — and sluice writes through MySQL's native bulk loader (<code>LOAD DATA LOCAL INFILE</code>) on the parallel copy path, the fastest ingest MySQL offers. (PlanetScale blocks <code>LOAD DATA LOCAL</code>, so a PlanetScale target falls back to batched multi-row <code>INSERT</code>.)</p>
+
+<h2 id="sqlite-d1">SQLite and Cloudflare D1 — always the IR path, with a lossless read projection</h2>
+<p>A SQLite file, a <code>wrangler d1 export</code> <code>.sql</code> dump, or a live Cloudflare D1 database imports into Postgres or MySQL (and SQLite is itself a migrate target). These always take the <a href="#ir-path">IR path</a> — there is no raw byte-pipe for SQLite or D1, and there doesn't need to be: the copy is cross-engine, so every value is being translated anyway. The engineering that matters here is on the <em>read</em> side, because SQLite's dynamic typing and D1's HTTP-only access each make "read the value exactly" the hard part.</p>
+<ul>
+  <li><strong>Dynamic types, read losslessly.</strong> SQLite stores a storage <em>class</em> per value, not a declared column type. sluice reads each column through a <code>(typeof(col), CAST(col AS TEXT) / hex(col))</code> projection, so an integer above 2<sup>53</sup> keeps every bit and a <code>BLOB</code> round-trips byte-for-byte instead of going through a lossy float or UTF-8 coercion. A decimal written into a SQLite target lands byte-exact as <code>TEXT</code>.</li>
+  <li><strong>Declared temporal types are an explicit decode, never a guess.</strong> SQLite has no native date/time storage, so a column <em>declared</em> <code>DATE</code> / <code>DATETIME</code> is decoded per <code>--sqlite-date-encoding</code> (<code>iso</code> default, or <code>unixepoch</code> / <code>unixmillis</code> / <code>julian</code>). A stored value whose storage class doesn't match the chosen encoding is <strong>refused loudly</strong> — never silently turned into a wrong date.</li>
+  <li><strong>Live D1 stays online.</strong> The <code>d1</code> engine reads over D1's HTTP query API (token via <code>CLOUDFLARE_API_TOKEN</code>) using the same lossless projection; the read doesn't take the database offline (ADR-0132).</li>
+</ul>
+<p>This is the one-shot <code>migrate</code> copy path. Continuous sync <em>from</em> SQLite or D1 is a separate, trigger-based mechanism — the <code>sqlite-trigger</code> / <code>d1-trigger</code> CDC engines — not this cold-copy lane. See <a href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a> for the full walkthrough, and <a href="/docs/supported-directions/">Supported directions</a> for which SQLite/D1 pairs are one-shot vs continuous.</p>
 
 <h2 id="same-fidelity">The fast lane is not "more accurate" — it is the same fidelity, less work</h2>
 <p>Worth stating plainly: the Postgres byte-pipe is <strong>not a more exact copy</strong> than the IR path. Both are exact. It is faster precisely <em>because</em> it only runs when there is provably nothing to change — so it can move bytes instead of re-deriving them.</p>
@@ -1847,8 +1917,8 @@ sluice migrate \\
   <li><a href="/docs/preview-and-validate/">Preview &amp; validate</a> — see the plan before you run it.</li>
 </ul>
 `,
-    prev: { href: "/docs/migrate-mysql-to-postgres/", label: "Migrate MySQL → Postgres" },
-    next: { href: "/docs/preview-and-validate/", label: "Preview & validate before you migrate" },
+    prev: { href: "/docs/supported-directions/", label: "Supported directions" },
+    next: { href: "/docs/commands/", label: "Command reference" },
   })
 );
 
@@ -2366,7 +2436,7 @@ ${pre(`sluice trigger teardown \\
   <li><a href="/docs/getting-started/#trigger-cdc">Getting started: trigger-based CDC</a> — a worked slot-less walkthrough.</li>
 </ul>
 `,
-    prev: { href: "/docs/foreign-keys-vitess/", label: "Foreign keys on a Vitess target" },
+    prev: { href: "/docs/copy-table-subset/", label: "Copy a subset of tables" },
     next: { href: "/docs/managed-postgres-slotless/", label: "Managed Postgres (slot-less)" },
   })
 );
@@ -2450,7 +2520,7 @@ sluice sync start \\
 </ul>
 `,
     prev: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
-    next: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
+    next: { href: "/docs/operate-fleet/", label: "Operate a sync fleet" },
   })
 );
 
@@ -2550,8 +2620,8 @@ ${pre(`sluice metrics-watch \\
   <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the snapshot→CDC cutover flow this guide's flags feed.</li>
 </ul>
 `,
-    prev: { href: "/docs/managed-postgres-slotless/", label: "Managed Postgres (slot-less)" },
-    next: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
+    prev: { href: "/docs/agent-skills/", label: "Drive sluice from an AI agent" },
+    next: { href: "/docs/mysql-to-planetscale/", label: "Self-hosted MySQL → PlanetScale" },
   })
 );
 
@@ -2698,8 +2768,8 @@ ${pre(`sluice restore \\
   <li><a href="/docs/commands/#sync-start">sync start reference</a> — every flag named here, with defaults.</li>
 </ul>
 `,
-    prev: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
-    next: { href: "/docs/mysql-to-planetscale/", label: "Self-hosted MySQL → PlanetScale" },
+    prev: { href: "/docs/planetscale-postgres-upgrade/", label: "Upgrade PlanetScale Postgres" },
+    next: { href: "/docs/commands/", label: "Command reference" },
   })
 );
 
@@ -2781,8 +2851,8 @@ ${pre(`sluice sync stop --stream-id <id> \\
   <li><a href="/docs/commands/">Command reference</a> and <a href="/docs/error-codes/">error codes</a> — every flag named here, with defaults.</li>
 </ul>
 `,
-    prev: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
-    next: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
+    prev: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
+    next: { href: "/docs/foreign-keys-vitess/", label: "Foreign keys on a Vitess target" },
   })
 );
 
@@ -2851,7 +2921,7 @@ sluice verify \\
   <li><a href="/docs/commands/#sync-start">Command reference</a> — every flag named here, with defaults.</li>
 </ul>
 `,
-    prev: { href: "/docs/mysql-to-planetscale/", label: "Self-hosted MySQL → PlanetScale" },
+    prev: { href: "/docs/foreign-keys-vitess/", label: "Foreign keys on a Vitess target" },
     next: { href: "/docs/planetscale-postgres-upgrade/", label: "Upgrade PlanetScale Postgres" },
   })
 );
@@ -2926,7 +2996,7 @@ ${pre(`sluice sync stop --stream-id pg-upgrade \\
 </ul>
 `,
     prev: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
-    next: { href: "/docs/operate-fleet/", label: "Operate a sync fleet" },
+    next: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
   })
 );
 
@@ -3033,7 +3103,7 @@ sluice sync tui --connect :9300 --refresh 2s`)}
 <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the single-stream cutover flow each fleet sync runs internally.</li>
 </ul>
 `,
-    prev: { href: "/docs/planetscale-postgres-upgrade/", label: "Upgrade PlanetScale Postgres" },
+    prev: { href: "/docs/managed-postgres-slotless/", label: "Managed Postgres (slot-less)" },
     next: { href: "/docs/encrypted-backups/", label: "Take encrypted backups" },
   })
 );

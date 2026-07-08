@@ -16,6 +16,18 @@ When both sides are Postgres and there is no transformation to apply, the bytes 
 
 A same-engine MySQL copy still flows through the IR (there is no raw byte-pipe for MySQL today), but with source and target identical there is nothing to translate — every type round-trips exactly — and sluice writes through MySQL's native bulk loader (LOAD DATA LOCAL INFILE) on the parallel copy path, the fastest ingest MySQL offers. (PlanetScale blocks LOAD DATA LOCAL, so a PlanetScale target falls back to batched multi-row INSERT.)
 
+## SQLite and Cloudflare D1 — always the IR path, with a lossless read projection
+
+A SQLite file, a wrangler d1 export .sql dump, or a live Cloudflare D1 database imports into Postgres or MySQL (and SQLite is itself a migrate target). These always take the IR path — there is no raw byte-pipe for SQLite or D1, and there doesn't need to be: the copy is cross-engine, so every value is being translated anyway. The engineering that matters here is on the read side, because SQLite's dynamic typing and D1's HTTP-only access each make "read the value exactly" the hard part.
+
+- Dynamic types, read losslessly. SQLite stores a storage class per value, not a declared column type. sluice reads each column through a (typeof(col), CAST(col AS TEXT) / hex(col)) projection, so an integer above 253 keeps every bit and a BLOB round-trips byte-for-byte instead of going through a lossy float or UTF-8 coercion. A decimal written into a SQLite target lands byte-exact as TEXT.
+
+- Declared temporal types are an explicit decode, never a guess. SQLite has no native date/time storage, so a column declared DATE / DATETIME is decoded per --sqlite-date-encoding (iso default, or unixepoch / unixmillis / julian). A stored value whose storage class doesn't match the chosen encoding is refused loudly — never silently turned into a wrong date.
+
+- Live D1 stays online. The d1 engine reads over D1's HTTP query API (token via CLOUDFLARE_API_TOKEN) using the same lossless projection; the read doesn't take the database offline (ADR-0132).
+
+This is the one-shot migrate copy path. Continuous sync from SQLite or D1 is a separate, trigger-based mechanism — the sqlite-trigger / d1-trigger CDC engines — not this cold-copy lane. See Import SQLite or Cloudflare D1 for the full walkthrough, and Supported directions for which SQLite/D1 pairs are one-shot vs continuous.
+
 ## The fast lane is not "more accurate" — it is the same fidelity, less work
 
 Worth stating plainly: the Postgres byte-pipe is not a more exact copy than the IR path. Both are exact. It is faster precisely because it only runs when there is provably nothing to change — so it can move bytes instead of re-deriving them.
