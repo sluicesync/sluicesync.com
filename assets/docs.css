@@ -41,8 +41,8 @@ main.content p{margin:12px 0}
 main.content ul,main.content ol{margin:12px 0;padding-left:22px}
 main.content li{margin:5px 0}
 
-code:not(pre code){background:#f3ece7;color:#9a3a12;padding:2px 6px;border-radius:5px;font-size:.88em;border:1px solid #ece1d9}
-pre{background:var(--dark);color:#e9f0f2;border-radius:11px;padding:18px 20px;overflow:auto;font-size:13.5px;line-height:1.7;margin:16px 0}
+code:not(pre code){background:#f3ece7;color:#9a3a12;padding:2px 6px;border-radius:5px;font-size:.88em;border:1px solid #ece1d9;overflow-wrap:anywhere}
+pre{background:var(--dark);color:#e9f0f2;border-radius:11px;padding:18px 20px;overflow:auto;font-size:13.5px;line-height:1.7;margin:16px 0;max-width:100%}
 pre code{background:none;color:inherit;padding:0;border:none}
 pre .c{color:#7fa0ab}
 pre .k{color:var(--cream)}
@@ -75,11 +75,13 @@ footer.foot{border-top:1px solid var(--line);color:var(--muted);font-size:13px;p
 /* mobile */
 .menu-btn{display:none}
 @media(max-width:880px){
-  .layout{grid-template-columns:1fr}
+  html,body{overflow-x:hidden}
+  .layout{grid-template-columns:minmax(0,1fr)}
   aside.sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line);
     display:none;padding:18px 22px}
   aside.sidebar.open{display:block}
   main.content{padding:26px 22px 70px}
+  main.content table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
   .menu-btn{display:inline-block;background:none;border:1px solid #36505a;color:#dbe5e9;
     border-radius:7px;padding:5px 11px;font-size:14px;cursor:pointer}
 }
