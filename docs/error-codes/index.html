@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Error codes &amp; exit codes — sluice docs</title>
+<meta name="description" content="The stable SLUICE-E-* error codes and the process exit-code contract — a greppable branching surface for scripts, log pipelines, and agents driving the CLI.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/error-codes/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk active" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Error codes &amp; exit codes</h1>
+    <p class="subtitle">The stable SLUICE-E-* error codes and the process exit-code contract — a greppable branching surface for scripts, log pipelines, and agents driving the CLI.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#exit-codes">Exit codes</a></li><li><a href="#codes">Error codes</a></li></ul></nav>
+    
+<p>sluice's error messages have always named the remedy in prose — "pass <code>--zero-date=null</code>", "use <code>--resume</code>". Prose is a poor branching surface for scripts, log pipelines, and AI agents driving the CLI, so every error class that carries an operator hint also carries a <strong>stable error code</strong>: a frozen <code>SLUICE-E-&lt;DOMAIN&gt;-&lt;SLUG&gt;</code> identifier machines can match exactly. The human-facing message is unchanged; the code and a concise remedy ride along as metadata.</p>
+<p>A <code>SLUICE-E-*</code> code in sluice's output is <strong>stable and greppable</strong> — once shipped, the string is frozen (renaming or removing one is a breaking change), and it maps deterministically to an exit code (<strong>2</strong> for a config error, <strong>3</strong> for a named refusal). The registry in <code>internal/sluicecode</code> is the single source of truth, and a unit test enforces that it matches this table in both directions. Codes are minted only for errors that already carry an operator hint — it is deliberately not a catalogue of every possible error.</p>
+<p>Where the metadata surfaces: under the global <code>--log-format json</code> flag a terminal coded error emits one ERROR record with <code>code</code>, <code>hint</code>, and <code>err</code> attributes (text-format logging shows the same record in slog's text shape); the exit code lets a caller distinguish "sluice refused and named the remedy — retrying won't help" from a generic runtime failure without parsing anything.</p>
+
+<h2 id="exit-codes">Exit codes <a class="hlink" href="#exit-codes" aria-label="Permalink to this section">#</a></h2>
+<p>sluice historically exited <code>0</code> on success and <code>1</code> on everything else. The taxonomy below keeps those two meanings stable and carves two classes out of the generic-failure bucket, so nothing that checks <code>!= 0</code> changes behaviour.</p>
+<div class="table-scroll"><table><thead><tr><th>Exit code</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>0</code></td><td class="desc"><strong>Success.</strong> For <code>verify</code>, <code>diff</code>, and <code>sync-health</code>: success <em>and</em> clean.</td></tr>
+<tr><td><code>1</code></td><td class="desc"><strong>Generic runtime failure.</strong> For <code>verify</code>/<code>diff</code>/<code>sync-health</code> this is those commands' long-standing per-command meaning: the check ran and found a mismatch / drift / stale stream.</td></tr>
+<tr><td><code>2</code></td><td class="desc"><strong>Config error:</strong> the <code>--config</code> file could not be loaded or parsed. (The read-side commands <code>verify</code>/<code>diff</code>/<code>sync-health</code>/<code>metrics-watch</code> have always used 2 more broadly for "the check could not run at all".)</td></tr>
+<tr><td><code>3</code></td><td class="desc"><strong>Named refusal:</strong> sluice declined to proceed (or to silently alter a value) and named the remedy — the refusal-class codes below. Retrying without acting on the hint fails identically.</td></tr>
+<tr><td><code>80</code></td><td class="desc"><strong>Usage error:</strong> kong (the CLI parser) exits 80 on unknown flags/commands and missing required arguments, before any sluice code runs. sluice adopts this rather than remapping it.</td></tr>
+</tbody></table></div>
+<div class="note"><strong>Backward compatibility.</strong> Scripts and unit files that check <code>exit != 0</code> (including a systemd <code>Restart=on-failure</code>) are unaffected — every failure class is still non-zero. Scripts that check <code>exit == 1</code> <em>specifically</em> should be updated: config errors and named refusals that previously exited 1 now exit 2 and 3.</div>
+
+<h2 id="codes">Error codes <a class="hlink" href="#codes" aria-label="Permalink to this section">#</a></h2>
+<p>The <strong>class</strong> drives the exit code: a terminal <code>refusal</code> exits <code>3</code>, a terminal <code>runtime</code> code exits <code>1</code> like any other failure — the code is in the log record either way.</p>
+<div class="table-scroll"><table><thead><tr><th>Code</th><th>Class</th><th>Meaning</th><th>Remedy</th></tr></thead><tbody>
+<tr><td><code>SLUICE-E-CONNECT-REFUSED</code></td><td class="desc">runtime</td><td class="desc">The database host/port is unreachable from this machine.</td><td class="desc">Verify the DSN host/port and network reachability.</td></tr>
+<tr><td><code>SLUICE-E-CONNECT-AUTH-FAILED</code></td><td class="desc">runtime</td><td class="desc">The database rejected the DSN credentials.</td><td class="desc">Verify the DSN username and password.</td></tr>
+<tr><td><code>SLUICE-E-CONNECT-DATABASE-MISSING</code></td><td class="desc">runtime</td><td class="desc">The DSN names a database that does not exist on the server.</td><td class="desc">Verify the DSN database name.</td></tr>
+<tr><td><code>SLUICE-E-BULKCOPY-TARGET-TABLE-MISSING</code></td><td class="desc">runtime</td><td class="desc">Bulk-copy hit a missing target table — schema-apply failed or wrote into a different schema.</td><td class="desc">Check the schema-apply phase's output and the target schema/database the DSN points at.</td></tr>
+<tr><td><code>SLUICE-E-BULKCOPY-TABLE-FAILED</code></td><td class="desc">runtime</td><td class="desc">A table failed mid-bulk-copy; earlier tables have data but not their declared secondary indexes yet (the indexes phase runs after all tables finish copying).</td><td class="desc">Fix the offending table and continue with <code>--resume</code>, or skip it with <code>--exclude-table=&lt;name&gt;</code>.</td></tr>
+<tr><td><code>SLUICE-E-SCHEMA-PERMISSION-DENIED</code></td><td class="desc">runtime</td><td class="desc">The target role lacks CREATE on the schema.</td><td class="desc">GRANT the privilege or use a different role.</td></tr>
+<tr><td><code>SLUICE-E-INDEX-STATEMENT-TIME-LIMIT</code></td><td class="desc">runtime</td><td class="desc">A post-copy index build hit PlanetScale's statement-time limit (MySQL errno 3024); the data is already copied.</td><td class="desc"><code>--resume</code> finishes just the indexes with no re-copy (grow the cluster first for a faster build), or start fresh with <code>--upfront-indexes</code>.</td></tr>
+<tr><td><code>SLUICE-E-INDEX-DIRECT-DDL-DISABLED</code></td><td class="desc">runtime</td><td class="desc">PlanetScale safe-migrations is enabled on the target branch and blocks direct DDL (errno 1105).</td><td class="desc">Disable safe-migrations on the branch for the migration; sluice does not yet drive PlanetScale deploy requests.</td></tr>
+<tr><td><code>SLUICE-E-CDC-REPLICATION-PERMISSION</code></td><td class="desc">runtime</td><td class="desc">The connecting role lacks the REPLICATION attribute.</td><td class="desc"><code>ALTER ROLE x REPLICATION</code>; see <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a>.</td></tr>
+<tr><td><code>SLUICE-E-COLDSTART-TARGET-NOT-EMPTY</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">Cold-start refused: a target table already contains data (usually a previous run died mid-copy).</td><td class="desc">Sync: re-run with <code>--reset-target-data --yes</code>. Migrate: use <code>--resume</code>. Either mode: <code>--force-cold-start</code> to copy into the populated table anyway (collides on PRIMARY KEY in most cases).</td></tr>
+<tr><td><code>SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A column's type is owned by a PostgreSQL extension the operator has not opted into.</td><td class="desc">Pass <code>--enable-pg-extension &lt;ext&gt;</code>; see <a href="/docs/type-mapping/">Type mapping</a>.</td></tr>
+<tr><td><code>SLUICE-E-VALUE-ZERO-DATE</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A MySQL zero/partial date (<code>0000-00-00 …</code>) has no valid calendar value the target can hold.</td><td class="desc">Pass <code>--zero-date=null</code> or <code>--zero-date=epoch</code> to carry it.</td></tr>
+<tr><td><code>SLUICE-E-VALUE-NUL-BYTE</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A string value carries a NUL byte (0x00), which PostgreSQL text types cannot store.</td><td class="desc">Clean the source data, or map the column to bytea with <code>--type-override COL=bytea</code>.</td></tr>
+<tr><td><code>SLUICE-E-EXPR-BACKSLASH-LITERAL</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A SQLite expression's string literal contains a backslash (or a double-quoted token), which MySQL would silently reinterpret under its default sql_mode.</td><td class="desc">Rewrite the expression on the SQLite source, or re-create it on the MySQL target post-migration.</td></tr>
+<tr><td><code>SLUICE-E-CONFIRMATION-REQUIRED</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A destructive command was run without <code>--yes</code>. sluice is non-interactive and never prompts, so it refuses loudly instead of blocking (<code>slot drop</code> is the current caller).</td><td class="desc">Re-run with <code>--yes</code> (or <code>-y</code>) to confirm the destructive operation.</td></tr>
+<tr><td><code>SLUICE-E-DRIVER-HOST-MISMATCH</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">The chosen driver cannot drive the DSN's host — today: the vanilla <code>mysql</code> driver pointed at a PlanetScale endpoint (<code>*.connect.psdb.cloud</code>), whose binlog CDC and <code>LOAD DATA</code> cold-copy Vitess blocks. Caught up front, before any connection.</td><td class="desc">Pass <code>--source-driver planetscale</code> / <code>--target-driver planetscale</code> for the PlanetScale endpoint.</td></tr>
+</tbody></table></div>
+
+    <div class="pager"><a class="prev" href="/docs/commands/">← Command reference</a><a class="next" href="/docs/type-mapping/">Type mapping →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/error-codes/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

@@ -37,6 +37,8 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 ## Reference
 
 - [Command reference](https://sluicesync.com/docs/commands/): Every sluice command, its purpose, the flags that matter most, and worked examples.
+- [Error & exit codes](https://sluicesync.com/docs/error-codes/): The stable SLUICE-E-* error codes and the process exit-code contract — a greppable branching surface for scripts, log pipelines, and agents driving the CLI.
+- [Type mapping](https://sluicesync.com/docs/type-mapping/): What your MySQL TINYINT(1) / ENUM / DECIMAL / JSON / temporal types become on Postgres (and vice versa), and on SQLite / D1 — the cross-engine translation policies.
 - [Objects sluice creates](https://sluicesync.com/docs/database-objects/): The full inventory of sluice's bookkeeping tables, slots, publications, and triggers — what each is for, when it appears, and how to remove it.
 
 ## Source-repo markdown (best for LLMs)

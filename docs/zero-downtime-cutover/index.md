@@ -59,6 +59,18 @@ Confirm the data agrees, then point your application at the target:
 
 The full sequence: start the stream → wait for fresh → freeze source writes → sync stop --wait → cutover → verify → repoint the app. Only the last three steps fall inside the write-freeze window, so downtime is measured in seconds-to-minutes, not the length of the copy.
 
+## 6. Rolling back a cutover
+
+The safety net for a cutover is a reverse sync. Until you're confident in the new database, keep the old primary intact — do not drop or repurpose it. If something goes wrong after you flip traffic and you must fail back, you point the application at the old database again — but any writes the new database took while it was live need to travel back the other direction.
+
+You can't naively cold-start a reverse sync (new → old) to carry them: the old database still holds all its original rows, so it isn't empty, and a fresh cold-start refuses loudly rather than bulk-copy into a populated target — SLUICE-E-COLDSTART-TARGET-NOT-EMPTY. That refusal is the guard working as designed; you don't want a full re-copy, you want just the delta. Two ways to be ready for it:
+
+- Run the reverse stream from the start (recommended for true reversibility). Right after the forward cutover, start a second stream in the opposite direction with its own --stream-id, so the old database keeps tracking the new one continuously. Failing back is then just a traffic flip plus a cutover on the old side to re-prime its sequences — no re-copy, no refusal.
+
+- Reconcile the delta manually. If you didn't keep a reverse stream running, resync the window of new-database writes back to the old database the other direction and verify before re-flipping traffic — rather than forcing a cold-start into the non-empty old database.
+
+Why the old primary must survive the window. The reverse path only exists while the old database is still there and consistent. Dropping it immediately after cutover throws away your rollback option; keep it until the new database has proven itself, then decommission.
+
 Schema changes during a long-running sync. By default a stream forwards unambiguous source DDL (ADD/DROP/ALTER COLUMN, CREATE/DROP INDEX, …) onto the target automatically so it stays online through schema evolution — including a destructive DROP COLUMN. To gate DDL through a separate change process, start with --schema-changes=refuse. See the warning box in the sync start reference.
 
 ---

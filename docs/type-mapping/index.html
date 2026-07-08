@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Type mapping — sluice docs</title>
+<meta name="description" content="What your MySQL TINYINT(1) / ENUM / DECIMAL / JSON / temporal types become on Postgres (and vice versa), and on SQLite / D1 — the cross-engine translation policies.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/type-mapping/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk active" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Type mapping</h1>
+    <p class="subtitle">What your MySQL TINYINT(1) / ENUM / DECIMAL / JSON / temporal types become on Postgres (and vice versa), and on SQLite / D1 — the cross-engine translation policies.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#core-vs-extension">Core vs extension types</a></li><li><a href="#mysql-pg">MySQL ↔ Postgres</a></li><li><a href="#sqlite-d1">SQLite &amp; Cloudflare D1</a></li><li><a href="#overrides">Per-column overrides</a></li></ul></nav>
+    
+<p>sluice never translates one dialect straight to another. Every column type maps <strong>source-dialect → typed IR → target-dialect</strong>: source-specific knowledge lives in readers, target-specific knowledge in writers, and the IR is the only shared contract. That's why the four-direction matrix needs four readers and four writers, not twelve pairwise tables. This page is the operator-facing summary of those policies; the canonical, always-current source is <a href="https://raw.githubusercontent.com/sluicesync/sluice/main/docs/type-mapping.md">docs/type-mapping.md</a> and the runtime value contract in <a href="https://raw.githubusercontent.com/sluicesync/sluice/main/docs/value-types.md">docs/value-types.md</a>.</p>
+
+<h2 id="core-vs-extension">Core vs extension types <a class="hlink" href="#core-vs-extension" aria-label="Permalink to this section">#</a></h2>
+<p>The IR type system is a two-tier hierarchy, and the tier decides what happens on an engine that lacks a type:</p>
+<ul>
+<li><strong>Core types</strong> — integers, decimal, float, boolean, char/varchar/text, binary/blob, date/time/datetime/timestamp, JSON — are the types every relational engine has in some form. Every engine reads and writes them; they are the lingua franca.</li>
+<li><strong>Extension types</strong> — <code>ENUM</code>, <code>SET</code>, <code>UUID</code>, arrays, PostGIS geometry, and the Postgres network types (<code>inet</code>/<code>cidr</code>/<code>macaddr</code>) — are types only some engines support natively. Each engine declares which it handles; an engine that lacks one either applies a <strong>documented degradation</strong> (e.g. Postgres array → MySQL <code>JSON</code>) or <strong>refuses loudly</strong>. Postgres extension types (<code>hstore</code>, <code>citext</code>, <code>pgvector</code>, PostGIS) are opt-in via <code>--enable-pg-extension EXT</code> and refuse loudly at schema-read if the flag is absent (<a href="/docs/error-codes/"><code>SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED</code></a>) — never silently dropped.</li>
+</ul>
+<p>Adding a new engine never amends the core; it declares which extension types it supports and provides the reader/writer code. The orchestrator never asks "are you MySQL?" — it asks "do you support arrays?"</p>
+
+<h2 id="mysql-pg">MySQL ↔ Postgres <a class="hlink" href="#mysql-pg" aria-label="Permalink to this section">#</a></h2>
+<p>The most-travelled direction. Notable rows below; the full table is in the canonical doc.</p>
+<div class="table-scroll"><table><thead><tr><th>MySQL</th><th>Postgres</th><th>Notes</th></tr></thead><tbody>
+<tr><td><code>TINYINT(1)</code></td><td class="desc"><code>boolean</code></td><td class="desc">The MySQL boolean convention. A value outside <code>{0,1}</code> collapses to <code>true</code>; sluice WARNs loudly once per column and names the row. Override with <code>--type-override col=smallint</code> to keep the integer (<code>smallint</code> is the safe floor — a <code>tinyint</code> override could round-trip back to a boolean).</td></tr>
+<tr><td><code>TINYINT</code> / <code>SMALLINT</code> / <code>MEDIUMINT</code> / <code>INT</code> / <code>BIGINT</code></td><td class="desc"><code>smallint</code> / <code>smallint</code> / <code>integer</code> / <code>integer</code> / <code>bigint</code></td><td class="desc"><code>MEDIUMINT</code> widens to <code>integer</code> on PG (no 3-byte int). Signed ranks map straight across.</td></tr>
+<tr><td><code>… UNSIGNED</code></td><td class="desc">widens one rank</td><td class="desc"><code>tinyint</code>→<code>smallint</code>, <code>smallint</code>→<code>integer</code>, <code>mediumint</code>/<code>int</code>→<code>bigint</code>. <strong><code>bigint unsigned</code> → <code>bigint</code> (uniform)</strong>: PG has no unsigned 64-bit, so values in <code>(2^63-1, 2^64-1]</code> aren't representable — but this is the only mapping that keeps an <code>AUTO_INCREMENT PK</code> and its FK children type-consistent (the default Rails/Laravel/Django schema). Surfaced by a loud range-narrowing notice at <code>schema preview</code> / <code>migrate</code> preflight; override to <code>numeric</code> to keep the full range (then the column can't be an identity key).</td></tr>
+<tr><td><code>DECIMAL(p,s)</code> / <code>NUMERIC</code></td><td class="desc"><code>numeric(p,s)</code></td><td class="desc">Carried as a string end-to-end; precision is lossless. A bare Postgres <code>numeric</code> (no p/s) is arbitrary-precision — PG→PG round-trips it bare; PG→MySQL widens to <code>DECIMAL(65,30)</code> (MySQL's max) with a loud widening notice.</td></tr>
+<tr><td><code>FLOAT</code> / <code>DOUBLE</code></td><td class="desc"><code>real</code> / <code>double precision</code></td><td class="desc">IEEE special floats (<code>NaN</code>, <code>±Inf</code>) ride through exactly.</td></tr>
+<tr><td><code>CHAR(n)</code> / <code>VARCHAR(n)</code> / <code>TINY..LONGTEXT</code></td><td class="desc"><code>char(n)</code> / <code>varchar(n)</code> / <code>text</code></td><td class="desc">A PG <code>varchar(N)</code> above MySQL's representable cap down-maps to the smallest MySQL <code>TEXT</code>-family type, with a loud advisory. Charset/collation are carried same-engine, dropped-with-WARN cross-engine (collation names aren't portable).</td></tr>
+<tr><td><code>DATE</code> / <code>TIME(p)</code> / <code>DATETIME(p)</code> / <code>TIMESTAMP(p)</code></td><td class="desc"><code>date</code> / <code>time(p)</code> / <code>timestamp(p)</code> / <code>timestamptz(p)</code></td><td class="desc">MySQL <code>TIMESTAMP</code> always stores UTC → PG <code>timestamptz</code>. A bare PG <code>time</code>/<code>timestamp</code> (no precision) round-trips bare PG→PG but materializes <code>(6)</code> on a MySQL target. A PG <code>timetz</code> → MySQL drops the zone (MySQL has no tz-aware time). Zero/partial MySQL dates (<code>0000-00-00</code>) are refused unless <code>--zero-date=null|epoch</code> (<a href="/docs/error-codes/"><code>SLUICE-E-VALUE-ZERO-DATE</code></a>).</td></tr>
+<tr><td><code>ENUM('a','b')</code></td><td class="desc"><code>enum</code> type (default) or <code>text</code> + <code>CHECK</code></td><td class="desc">Default emits a PG <code>CREATE TYPE … AS ENUM</code>; per-column override for <code>text</code> + a <code>CHECK</code> constraint. A PG enum → MySQL becomes a column-level <code>ENUM(...)</code> (no shared type; each column gets its own).</td></tr>
+<tr><td><code>SET('a','b')</code></td><td class="desc"><code>text[]</code> + <code>CHECK</code></td><td class="desc">Membership preserved via a CHECK; override to a comma-delimited <code>text</code>.</td></tr>
+<tr><td><code>JSON</code></td><td class="desc"><code>jsonb</code> (default) / <code>json</code></td><td class="desc">MySQL <code>JSON</code> and PG <code>jsonb</code> both validate + normalise; PG <code>json</code> (no b) preserves whitespace/key order. Carried as raw bytes.</td></tr>
+<tr><td class="desc">(no MySQL type)</td><td class="desc"><code>uuid</code></td><td class="desc">PG <code>uuid</code> → MySQL <code>CHAR(36)</code> / <code>BINARY(16)</code>.</td></tr>
+<tr><td class="desc"><code>JSON</code> (degraded)</td><td class="desc"><code>T[]</code> (array)</td><td class="desc">MySQL has no array type: a PG array → MySQL <code>JSON</code> (empty <code>{}</code>→<code>[]</code>, NULL element→JSON <code>null</code>, nested preserved). Override <code>array_strategy: concat</code> for simple scalar arrays.</td></tr>
+<tr><td class="desc"><code>VARCHAR(45/30)</code></td><td class="desc"><code>inet</code> / <code>cidr</code> / <code>macaddr</code></td><td class="desc">PG network types have no MySQL native form: <code>inet</code>/<code>cidr</code>→<code>VARCHAR(45)</code>, <code>macaddr</code>→<code>VARCHAR(30)</code> (auto-shaped since v0.7.0; overridable).</td></tr>
+<tr><td class="desc">spatial types</td><td class="desc"><code>geometry</code> (PostGIS)</td><td class="desc">Requires PostGIS on the target via <code>--enable-pg-extension</code>; carried as WKB. Every subtype/SRID preserved.</td></tr>
+</tbody></table></div>
+
+<h2 id="sqlite-d1">SQLite &amp; Cloudflare D1 <a class="hlink" href="#sqlite-d1" aria-label="Permalink to this section">#</a></h2>
+<p>SQLite (and D1, which is SQLite over HTTP) is the one engine whose <em>value</em> storage isn't pinned by its <em>column</em> declaration — a column has a type <strong>affinity</strong>, and each stored value carries its own storage class. sluice resolves an IR type from the <strong>declared type</strong> in a load-bearing order: declared temporal / bool spellings win first, affinity second.</p>
+<div class="table-scroll"><table><thead><tr><th>SQLite declared / affinity</th><th>IR &rarr; typical target</th><th>Notes</th></tr></thead><tbody>
+<tr><td class="desc"><code>DATE</code> / <code>DATETIME</code>·<code>TIMESTAMP</code> / <code>TIME</code></td><td class="desc"><code>date</code> / <code>timestamp</code> (no tz) / <code>time</code></td><td class="desc">Declared spelling overrides affinity (they'd otherwise read as NUMERIC decimals). The <em>value</em> encoding is an operator choice — <code>--sqlite-date-encoding</code> (<code>iso</code> default / <code>unixepoch</code> / <code>unixmillis</code> / <code>julian</code>); a storage-class mismatch is refused loudly, naming the row.</td></tr>
+<tr><td class="desc"><code>BOOL</code> / <code>BOOLEAN</code></td><td class="desc"><code>boolean</code></td><td class="desc">Decodes <code>0</code>/<code>1</code> and truthy text; anything else is refused.</td></tr>
+<tr><td class="desc">INTEGER affinity</td><td class="desc"><code>bigint</code></td><td class="desc">SQLite integers are 64-bit signed. Integers above 2<sup>53</sup> round-trip exactly via the <code>(typeof, text/hex)</code> projection (the lossless live-D1 reader path).</td></tr>
+<tr><td class="desc">TEXT affinity</td><td class="desc"><code>text</code></td><td class="desc">Unbounded — declared <code>VARCHAR(n)</code> lengths aren't enforced by SQLite, so no misleading bound is carried.</td></tr>
+<tr><td class="desc">REAL affinity</td><td class="desc"><code>double precision</code></td><td class="desc">8-byte IEEE-754.</td></tr>
+<tr><td class="desc">NUMERIC affinity</td><td class="desc">unconstrained <code>numeric</code></td><td class="desc">Arbitrary precision.</td></tr>
+</tbody></table></div>
+<p>As a migrate <strong>target</strong>, SQLite emits the declared type its reader reads back to the same IR type. The one load-bearing wrinkle: an <code>ir.Decimal</code> is stored with <strong>TEXT</strong> affinity (the exact decimal string), not NUMERIC — NUMERIC affinity would coerce <code>19.99</code> to the binary float <code>19.989999999999998</code> and silently corrupt money (Bug 162); it reads back as <code>text</code> (a documented downgrade). Anything SQLite has no faithful storage for — geometry, <code>inet</code>/<code>cidr</code>/<code>macaddr</code>, <code>bit</code>, <code>interval</code>, array, domain — is <strong>refused loudly at emit time</strong>, never coerced to a silently-wrong column. D1 is not a write target: emit a SQLite <code>.db</code> (<code>--target-driver sqlite</code>) and <code>wrangler d1 import</code> it.</p>
+
+<h2 id="overrides">Per-column overrides <a class="hlink" href="#overrides" aria-label="Permalink to this section">#</a></h2>
+<p>The default policies cover the common case; override per column in YAML (<code>mappings:</code>) or on the CLI. Overrides are typed against the IR, not dialect syntax:</p>
+<ul>
+<li><code>--type-override TABLE.COLUMN=TYPE</code> — force a target column type (repeatable). The override rewrites the IR type the <em>reader</em> decodes with, so e.g. <code>=smallint</code> on a <code>TINYINT(1)</code> reads the cell as an integer end-to-end.</li>
+<li><code>--enable-pg-extension EXT</code> — opt into a Postgres extension type (<code>hstore</code>, <code>citext</code>, <code>vector</code>, PostGIS) so its columns pass through instead of refusing.</li>
+<li>YAML <code>mappings:</code> entries also carry <code>enum_strategy</code>, <code>array_strategy</code>, <code>on_zero_date</code>, and per-column <code>target_type</code> options.</li>
+</ul>
+<p>Run <code>sluice schema preview</code> first to see the exact target DDL sluice would emit, including every widening/narrowing advisory and any untranslatable-expression refusal — before touching the target.</p>
+
+    <div class="pager"><a class="prev" href="/docs/error-codes/">← Error & exit codes</a><a class="next" href="/docs/database-objects/">Objects sluice creates →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/type-mapping/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

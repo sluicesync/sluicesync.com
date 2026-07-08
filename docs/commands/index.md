@@ -238,6 +238,47 @@ Inspect, gracefully stop, and health-check a running stream. All take --stream-i
 
    sync health's freshness check is --max-stale-seconds N (target-side wall-clock seconds since the last apply; 0 = informational only). When you also pass --source-driver + --source the probe reads the source position too and, on a PG→PG pair, exposes --max-lag-bytes N (source LSN bytes ahead of target; MySQL GTID sets aren't byte-distance comparable). Both exit 1 when breached — cron-friendly.
 
+## sync run / sync tui
+
+### sluice sync run --config syncs.yaml
+Supervise many syncs from one process (ADR-0122): each sync is failure-isolated with bounded-backoff restart, and a bad neighbor never takes the fleet down.
+
+Flag · Purpose ·
+
+--config, -c · Required (the global flag). Path to a syncs.yaml fleet config — a syncs: list of per-sync specs (each a curated subset of the sync start knobs) plus an optional fleet-wide restart: policy. Load-time validation refuses a duplicate stream-id, a colliding Postgres slot name, or an unknown/misspelled key (a typo'd knob is a loud failure, never a silent drop). ·
+
+--dashboard-listen · Serve a read-only fleet dashboard — a self-contained HTML page plus a stable GET /api/fleet JSON API — on ADDR (e.g. :9300). Empty = off. It exposes only what sync status --all does (stream-ids, states, errors — no DSNs, no row data) and has no authentication: bind to localhost or a trusted network. A bind failure is loud-fatal (the fleet won't start without the dashboard you asked for). ·
+
+--dry-run, -n · Validate the fleet config (required fields, stream-id + slot-name uniqueness, retry bounds) and print the resolved plan — start nothing. ·
+
+  The process blocks until every sync exits; Ctrl-C / SIGTERM stops them all cleanly. Live reload without a restart: edit syncs.yaml and send the process SIGHUP — sluice re-reads and re-validates the file, then reconciles the live fleet (starts added syncs, drains removed ones, restarts changed ones, leaves unchanged ones untouched). A reload that fails to parse or validate is refused loudly and the running fleet keeps going on the old config. SIGHUP is POSIX-only; on Windows, restart the process to change the fleet. The full walkthrough is in Operate a sync fleet.
+
+    # validate + print the plan, start nothing
+    sluice sync run --config syncs.yaml --dry-run
+
+    # run the fleet with a read-only dashboard API on :9300
+    sluice sync run --config syncs.yaml --dashboard-listen :9300
+
+    # reload the running fleet after editing syncs.yaml (POSIX)
+    kill -HUP "$(pgrep -f 'sluice sync run')"
+
+### sluice sync tui --connect ADDR
+A full-screen terminal dashboard for a running fleet (ADR-0125) — it polls a 'sync run --dashboard-listen' server's /api/fleet endpoint, so it works locally or over an SSH tunnel without disturbing the fleet process.
+
+Flag · Purpose ·
+
+--connect · Required. host:port or URL of a running sync run --dashboard-listen server — :9300, localhost:9300, http://host:9300, or a full …/api/fleet URL. The TUI polls its /api/fleet endpoint. ·
+
+--refresh · How often to poll /api/fleet for a fresh fleet view (default 2s). ·
+
+  The TUI keeps the last-known fleet on screen with an "unreachable" banner if a poll fails, instead of blanking.
+
+    # terminal 1: run the fleet with the dashboard API exposed
+    sluice sync run --config syncs.yaml --dashboard-listen :9300
+
+    # terminal 2 (local or over an SSH tunnel): live terminal view
+    sluice sync tui --connect :9300 --refresh 2s
+
 ## schema add-table
 
 ### sluice schema add-table <table>
@@ -428,6 +469,37 @@ Flag · Purpose ·
 --dry-run, -n / --yes, -y · Print the DDL and exit / skip the destructive-action confirmation prompt. ·
 
     sluice trigger teardown --dsn 'postgres://user:pass@host:5432/app' --yes
+
+### sluice trigger prune
+Reap durably-applied rows from a trigger-CDC source's sluice_change_log while a sync is live — the capture path never removes consumed rows, so the change-log grows unbounded for the life of a continuous sync (ADR-0137).
+
+Flag · Purpose ·
+
+--source-driver / --source · The trigger-CDC source whose change-log to prune: postgres-trigger (default), sqlite-trigger, or d1-trigger, and the DSN where sluice_change_log lives (a PG DSN, a SQLite file path, or the d1:// form; token via CLOUDFLARE_API_TOKEN). ·
+
+--target-driver / --target · The target engine + DSN the sync applies to — where the durably-applied CDC position lives. prune reads the target's persisted frontier as the only safe lower bound and refuses loudly if it can't read one (it never prunes blind). ·
+
+--stream-id · Required — the same --stream-id the sync uses. Its durable position bounds the prune; prune cross-checks the recorded source fingerprint to refuse a --source/--stream-id mis-pairing. ·
+
+--keep · Safety margin: keep the most-recent N change-log ids below the durable frontier unpruned (default 1000). Belt-and-suspenders — the frontier itself is already durably applied, so even 0 is safe. ·
+
+--vacuum · After pruning, VACUUM to reclaim file space — sqlite-trigger / d1-trigger only (Postgres relies on autovacuum). Off by default; VACUUM rewrites the whole database. ·
+
+--schema · PG source schema holding sluice_change_log (postgres-trigger only); defaults to the DSN's schema parameter. ·
+
+--dry-run, -n · Compute and print the prune bound without deleting anything. ·
+
+  The correctness crux: a change-log row is pruned only if its id is at or below the watermark the applier has persisted to the target. The exactly-once contract advances that watermark only on durable apply, so the target's persisted position is the durably-applied frontier — pruning on the source's MAX(id), the read cursor, or a TTL would delete not-yet-applied rows and cause silent permanent loss on the next warm-resume. Run it periodically against a live trigger-CDC sync (especially d1-trigger, where change-log growth and per-write billing both matter):
+
+    # preview the bound, delete nothing
+    sluice trigger prune --source-driver sqlite-trigger --source ./app.db \
+        --target-driver postgres --target 'postgres://user:pass@host:5432/app' \
+        --stream-id app --dry-run
+
+    # reap durably-applied rows, keeping a 1000-id margin, then reclaim space
+    sluice trigger prune --source-driver sqlite-trigger --source ./app.db \
+        --target-driver postgres --target 'postgres://user:pass@host:5432/app' \
+        --stream-id app --keep 1000 --vacuum
 
 ## schema preview / diff
 

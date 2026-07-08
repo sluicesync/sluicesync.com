@@ -69,12 +69,14 @@ const NAV = [
           ["migrate", "migrate"],
           ["sync-start", "sync start"],
           ["sync-manage", "sync status / stop / health"],
+          ["sync-fleet", "sync run / sync tui"],
           ["schema-add-table", "schema add-table"],
           ["sync-from-backup", "sync from-backup"],
           ["cutover", "cutover"],
           ["backup", "backup"],
           ["restore", "restore"],
           ["trigger", "trigger setup / teardown"],
+          ["trigger-prune", "trigger prune"],
           ["schema", "schema preview / diff"],
           ["verify", "verify"],
           ["matview", "matview refresh"],
@@ -82,6 +84,8 @@ const NAV = [
           ["diagnose", "diagnose"],
         ],
       },
+      { slug: "error-codes", label: "Error & exit codes" },
+      { slug: "type-mapping", label: "Type mapping" },
       { slug: "database-objects", label: "Objects sluice creates" },
     ],
   },
@@ -189,7 +193,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "encrypted-backups",
     "agent-skills",
   ];
-  const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
+  const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "error-codes" || slug === "type-mapping" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
   const top = '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>';
   let pager = "";
   if (prev || next) {
@@ -587,6 +591,42 @@ sluice sync health --stream-id app-prod --target-driver postgres --target ... \\
    <p><code>sync health</code>'s freshness check is <code>--max-stale-seconds N</code> (target-side wall-clock seconds since the last apply; <code>0</code> = informational only). When you also pass <code>--source-driver</code> + <code>--source</code> the probe reads the source position too and, on a <strong>PG→PG</strong> pair, exposes <code>--max-lag-bytes N</code> (source LSN bytes ahead of target; MySQL GTID sets aren't byte-distance comparable). Both exit <code>1</code> when breached — cron-friendly.</p>`
 )}
 
+<h2 id="sync-fleet">sync run / sync tui</h2>
+${cmd(
+  "sync-run-c",
+  "sluice sync run --config syncs.yaml",
+  "Supervise many syncs from one process (ADR-0122): each sync is failure-isolated with bounded-backoff restart, and a bad neighbor never takes the fleet down.",
+  `<table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
+  <tr><td><code>--config</code>, <code>-c</code></td><td class="desc"><strong>Required</strong> (the global flag). Path to a <code>syncs.yaml</code> fleet config — a <code>syncs:</code> list of per-sync specs (each a curated subset of the <a href="/docs/commands/#sync-start">sync start</a> knobs) plus an optional fleet-wide <code>restart:</code> policy. Load-time validation refuses a duplicate <code>stream-id</code>, a colliding Postgres slot name, or an unknown/misspelled key (a typo'd knob is a loud failure, never a silent drop).</td></tr>
+  <tr><td><code>--dashboard-listen</code></td><td class="desc">Serve a read-only fleet dashboard — a self-contained HTML page plus a stable <code>GET /api/fleet</code> JSON API — on <code>ADDR</code> (e.g. <code>:9300</code>). Empty = off. It exposes only what <code>sync status --all</code> does (stream-ids, states, errors — no DSNs, no row data) and has <strong>no authentication</strong>: bind to localhost or a trusted network. A bind failure is loud-fatal (the fleet won't start without the dashboard you asked for).</td></tr>
+  <tr><td><code>--dry-run</code>, <code>-n</code></td><td class="desc">Validate the fleet config (required fields, stream-id + slot-name uniqueness, retry bounds) and print the resolved plan — start nothing.</td></tr>
+  </tbody></table>
+  <p>The process blocks until every sync exits; Ctrl-C / SIGTERM stops them all cleanly. <strong>Live reload without a restart:</strong> edit <code>syncs.yaml</code> and send the process <code>SIGHUP</code> — sluice re-reads and re-validates the file, then reconciles the live fleet (starts added syncs, drains removed ones, restarts changed ones, leaves unchanged ones untouched). A reload that fails to parse or validate is refused loudly and the running fleet keeps going on the old config. <code>SIGHUP</code> is POSIX-only; on Windows, restart the process to change the fleet. The full walkthrough is in <a href="/docs/operate-fleet/">Operate a sync fleet</a>.</p>
+  ${pre(`# validate + print the plan, start nothing
+sluice sync run --config syncs.yaml --dry-run
+
+# run the fleet with a read-only dashboard API on :9300
+sluice sync run --config syncs.yaml --dashboard-listen :9300
+
+# reload the running fleet after editing syncs.yaml (POSIX)
+kill -HUP "$(pgrep -f 'sluice sync run')"`)}`
+)}
+${cmd(
+  "sync-tui-c",
+  "sluice sync tui --connect ADDR",
+  "A full-screen terminal dashboard for a running fleet (ADR-0125) — it polls a 'sync run --dashboard-listen' server's /api/fleet endpoint, so it works locally or over an SSH tunnel without disturbing the fleet process.",
+  `<table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
+  <tr><td><code>--connect</code></td><td class="desc"><strong>Required.</strong> <code>host:port</code> or URL of a running <code>sync run --dashboard-listen</code> server — <code>:9300</code>, <code>localhost:9300</code>, <code>http://host:9300</code>, or a full <code>…/api/fleet</code> URL. The TUI polls its <code>/api/fleet</code> endpoint.</td></tr>
+  <tr><td><code>--refresh</code></td><td class="desc">How often to poll <code>/api/fleet</code> for a fresh fleet view (default <code>2s</code>).</td></tr>
+  </tbody></table>
+  <p>The TUI keeps the last-known fleet on screen with an "unreachable" banner if a poll fails, instead of blanking.</p>
+  ${pre(`# terminal 1: run the fleet with the dashboard API exposed
+sluice sync run --config syncs.yaml --dashboard-listen :9300
+
+# terminal 2 (local or over an SSH tunnel): live terminal view
+sluice sync tui --connect :9300 --refresh 2s`)}`
+)}
+
 <h2 id="schema-add-table">schema add-table</h2>
 ${cmd(
   "schema-add-table-c",
@@ -728,6 +768,30 @@ ${cmd(
   </tbody></table>
   ${pre(`sluice trigger teardown --dsn 'postgres://user:pass@host:5432/app' --yes`)}`
 )}
+${cmd(
+  "trigger-prune-c",
+  "sluice trigger prune",
+  "Reap durably-applied rows from a trigger-CDC source's sluice_change_log while a sync is live — the capture path never removes consumed rows, so the change-log grows unbounded for the life of a continuous sync (ADR-0137).",
+  `<table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
+  <tr><td><code>--source-driver</code> / <code>--source</code></td><td class="desc">The trigger-CDC source whose change-log to prune: <code>postgres-trigger</code> (default), <code>sqlite-trigger</code>, or <code>d1-trigger</code>, and the DSN where <code>sluice_change_log</code> lives (a PG DSN, a SQLite file path, or the <code>d1://</code> form; token via <code>CLOUDFLARE_API_TOKEN</code>).</td></tr>
+  <tr><td><code>--target-driver</code> / <code>--target</code></td><td class="desc">The target engine + DSN the sync applies to — <strong>where the durably-applied CDC position lives</strong>. prune reads the target's persisted frontier as the only safe lower bound and <strong>refuses loudly</strong> if it can't read one (it never prunes blind).</td></tr>
+  <tr><td><code>--stream-id</code></td><td class="desc">Required — the same <code>--stream-id</code> the sync uses. Its durable position bounds the prune; prune cross-checks the recorded source fingerprint to refuse a <code>--source</code>/<code>--stream-id</code> mis-pairing.</td></tr>
+  <tr><td><code>--keep</code></td><td class="desc">Safety margin: keep the most-recent <code>N</code> change-log ids below the durable frontier unpruned (default <code>1000</code>). Belt-and-suspenders — the frontier itself is already durably applied, so even <code>0</code> is safe.</td></tr>
+  <tr><td><code>--vacuum</code></td><td class="desc">After pruning, <code>VACUUM</code> to reclaim file space — <strong><code>sqlite-trigger</code> / <code>d1-trigger</code> only</strong> (Postgres relies on autovacuum). Off by default; <code>VACUUM</code> rewrites the whole database.</td></tr>
+  <tr><td><code>--schema</code></td><td class="desc">PG source schema holding <code>sluice_change_log</code> (postgres-trigger only); defaults to the DSN's <code>schema</code> parameter.</td></tr>
+  <tr><td><code>--dry-run</code>, <code>-n</code></td><td class="desc">Compute and print the prune bound without deleting anything.</td></tr>
+  </tbody></table>
+  <p>The correctness crux: a change-log row is pruned only if its id is at or below the watermark the applier has <strong>persisted to the target</strong>. The exactly-once contract advances that watermark only on durable apply, so the target's persisted position is the durably-applied frontier — pruning on the source's <code>MAX(id)</code>, the read cursor, or a TTL would delete not-yet-applied rows and cause silent permanent loss on the next warm-resume. Run it periodically against a live trigger-CDC sync (especially <code>d1-trigger</code>, where change-log growth and per-write billing both matter):</p>
+  ${pre(`# preview the bound, delete nothing
+sluice trigger prune --source-driver sqlite-trigger --source ./app.db \\
+    --target-driver postgres --target 'postgres://user:pass@host:5432/app' \\
+    --stream-id app --dry-run
+
+# reap durably-applied rows, keeping a 1000-id margin, then reclaim space
+sluice trigger prune --source-driver sqlite-trigger --source ./app.db \\
+    --target-driver postgres --target 'postgres://user:pass@host:5432/app' \\
+    --stream-id app --keep 1000 --vacuum`)}`
+)}
 
 <h2 id="schema">schema preview / diff</h2>
 ${cmd(
@@ -807,6 +871,118 @@ sluice metrics-watch --engine planetscale --planetscale-org acme --planetscale-m
 `,
     prev: { href: "/docs/getting-started/", label: "Getting started" },
     next: { href: "/docs/configuration/", label: "Configuration" },
+  })
+);
+
+// ---- Error codes & exit codes -------------------------------------------
+write(
+  "error-codes",
+  page({
+    slug: "error-codes",
+    title: "Error codes & exit codes",
+    subtitle: "The stable SLUICE-E-* error codes and the process exit-code contract — a greppable branching surface for scripts, log pipelines, and agents driving the CLI.",
+    body: `
+<p>sluice's error messages have always named the remedy in prose — "pass <code>--zero-date=null</code>", "use <code>--resume</code>". Prose is a poor branching surface for scripts, log pipelines, and AI agents driving the CLI, so every error class that carries an operator hint also carries a <strong>stable error code</strong>: a frozen <code>SLUICE-E-&lt;DOMAIN&gt;-&lt;SLUG&gt;</code> identifier machines can match exactly. The human-facing message is unchanged; the code and a concise remedy ride along as metadata.</p>
+<p>A <code>SLUICE-E-*</code> code in sluice's output is <strong>stable and greppable</strong> — once shipped, the string is frozen (renaming or removing one is a breaking change), and it maps deterministically to an exit code (<strong>2</strong> for a config error, <strong>3</strong> for a named refusal). The registry in <code>internal/sluicecode</code> is the single source of truth, and a unit test enforces that it matches this table in both directions. Codes are minted only for errors that already carry an operator hint — it is deliberately not a catalogue of every possible error.</p>
+<p>Where the metadata surfaces: under the global <code>--log-format json</code> flag a terminal coded error emits one ERROR record with <code>code</code>, <code>hint</code>, and <code>err</code> attributes (text-format logging shows the same record in slog's text shape); the exit code lets a caller distinguish "sluice refused and named the remedy — retrying won't help" from a generic runtime failure without parsing anything.</p>
+
+<h2 id="exit-codes">Exit codes</h2>
+<p>sluice historically exited <code>0</code> on success and <code>1</code> on everything else. The taxonomy below keeps those two meanings stable and carves two classes out of the generic-failure bucket, so nothing that checks <code>!= 0</code> changes behaviour.</p>
+<table><thead><tr><th>Exit code</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>0</code></td><td class="desc"><strong>Success.</strong> For <code>verify</code>, <code>diff</code>, and <code>sync-health</code>: success <em>and</em> clean.</td></tr>
+<tr><td><code>1</code></td><td class="desc"><strong>Generic runtime failure.</strong> For <code>verify</code>/<code>diff</code>/<code>sync-health</code> this is those commands' long-standing per-command meaning: the check ran and found a mismatch / drift / stale stream.</td></tr>
+<tr><td><code>2</code></td><td class="desc"><strong>Config error:</strong> the <code>--config</code> file could not be loaded or parsed. (The read-side commands <code>verify</code>/<code>diff</code>/<code>sync-health</code>/<code>metrics-watch</code> have always used 2 more broadly for "the check could not run at all".)</td></tr>
+<tr><td><code>3</code></td><td class="desc"><strong>Named refusal:</strong> sluice declined to proceed (or to silently alter a value) and named the remedy — the refusal-class codes below. Retrying without acting on the hint fails identically.</td></tr>
+<tr><td><code>80</code></td><td class="desc"><strong>Usage error:</strong> kong (the CLI parser) exits 80 on unknown flags/commands and missing required arguments, before any sluice code runs. sluice adopts this rather than remapping it.</td></tr>
+</tbody></table>
+<div class="note"><strong>Backward compatibility.</strong> Scripts and unit files that check <code>exit != 0</code> (including a systemd <code>Restart=on-failure</code>) are unaffected — every failure class is still non-zero. Scripts that check <code>exit == 1</code> <em>specifically</em> should be updated: config errors and named refusals that previously exited 1 now exit 2 and 3.</div>
+
+<h2 id="codes">Error codes</h2>
+<p>The <strong>class</strong> drives the exit code: a terminal <code>refusal</code> exits <code>3</code>, a terminal <code>runtime</code> code exits <code>1</code> like any other failure — the code is in the log record either way.</p>
+<table><thead><tr><th>Code</th><th>Class</th><th>Meaning</th><th>Remedy</th></tr></thead><tbody>
+<tr><td><code>SLUICE-E-CONNECT-REFUSED</code></td><td class="desc">runtime</td><td class="desc">The database host/port is unreachable from this machine.</td><td class="desc">Verify the DSN host/port and network reachability.</td></tr>
+<tr><td><code>SLUICE-E-CONNECT-AUTH-FAILED</code></td><td class="desc">runtime</td><td class="desc">The database rejected the DSN credentials.</td><td class="desc">Verify the DSN username and password.</td></tr>
+<tr><td><code>SLUICE-E-CONNECT-DATABASE-MISSING</code></td><td class="desc">runtime</td><td class="desc">The DSN names a database that does not exist on the server.</td><td class="desc">Verify the DSN database name.</td></tr>
+<tr><td><code>SLUICE-E-BULKCOPY-TARGET-TABLE-MISSING</code></td><td class="desc">runtime</td><td class="desc">Bulk-copy hit a missing target table — schema-apply failed or wrote into a different schema.</td><td class="desc">Check the schema-apply phase's output and the target schema/database the DSN points at.</td></tr>
+<tr><td><code>SLUICE-E-BULKCOPY-TABLE-FAILED</code></td><td class="desc">runtime</td><td class="desc">A table failed mid-bulk-copy; earlier tables have data but not their declared secondary indexes yet (the indexes phase runs after all tables finish copying).</td><td class="desc">Fix the offending table and continue with <code>--resume</code>, or skip it with <code>--exclude-table=&lt;name&gt;</code>.</td></tr>
+<tr><td><code>SLUICE-E-SCHEMA-PERMISSION-DENIED</code></td><td class="desc">runtime</td><td class="desc">The target role lacks CREATE on the schema.</td><td class="desc">GRANT the privilege or use a different role.</td></tr>
+<tr><td><code>SLUICE-E-INDEX-STATEMENT-TIME-LIMIT</code></td><td class="desc">runtime</td><td class="desc">A post-copy index build hit PlanetScale's statement-time limit (MySQL errno 3024); the data is already copied.</td><td class="desc"><code>--resume</code> finishes just the indexes with no re-copy (grow the cluster first for a faster build), or start fresh with <code>--upfront-indexes</code>.</td></tr>
+<tr><td><code>SLUICE-E-INDEX-DIRECT-DDL-DISABLED</code></td><td class="desc">runtime</td><td class="desc">PlanetScale safe-migrations is enabled on the target branch and blocks direct DDL (errno 1105).</td><td class="desc">Disable safe-migrations on the branch for the migration; sluice does not yet drive PlanetScale deploy requests.</td></tr>
+<tr><td><code>SLUICE-E-CDC-REPLICATION-PERMISSION</code></td><td class="desc">runtime</td><td class="desc">The connecting role lacks the REPLICATION attribute.</td><td class="desc"><code>ALTER ROLE x REPLICATION</code>; see <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a>.</td></tr>
+<tr><td><code>SLUICE-E-COLDSTART-TARGET-NOT-EMPTY</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">Cold-start refused: a target table already contains data (usually a previous run died mid-copy).</td><td class="desc">Sync: re-run with <code>--reset-target-data --yes</code>. Migrate: use <code>--resume</code>. Either mode: <code>--force-cold-start</code> to copy into the populated table anyway (collides on PRIMARY KEY in most cases).</td></tr>
+<tr><td><code>SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A column's type is owned by a PostgreSQL extension the operator has not opted into.</td><td class="desc">Pass <code>--enable-pg-extension &lt;ext&gt;</code>; see <a href="/docs/type-mapping/">Type mapping</a>.</td></tr>
+<tr><td><code>SLUICE-E-VALUE-ZERO-DATE</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A MySQL zero/partial date (<code>0000-00-00 …</code>) has no valid calendar value the target can hold.</td><td class="desc">Pass <code>--zero-date=null</code> or <code>--zero-date=epoch</code> to carry it.</td></tr>
+<tr><td><code>SLUICE-E-VALUE-NUL-BYTE</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A string value carries a NUL byte (0x00), which PostgreSQL text types cannot store.</td><td class="desc">Clean the source data, or map the column to bytea with <code>--type-override COL=bytea</code>.</td></tr>
+<tr><td><code>SLUICE-E-EXPR-BACKSLASH-LITERAL</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A SQLite expression's string literal contains a backslash (or a double-quoted token), which MySQL would silently reinterpret under its default sql_mode.</td><td class="desc">Rewrite the expression on the SQLite source, or re-create it on the MySQL target post-migration.</td></tr>
+<tr><td><code>SLUICE-E-CONFIRMATION-REQUIRED</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A destructive command was run without <code>--yes</code>. sluice is non-interactive and never prompts, so it refuses loudly instead of blocking (<code>slot drop</code> is the current caller).</td><td class="desc">Re-run with <code>--yes</code> (or <code>-y</code>) to confirm the destructive operation.</td></tr>
+<tr><td><code>SLUICE-E-DRIVER-HOST-MISMATCH</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">The chosen driver cannot drive the DSN's host — today: the vanilla <code>mysql</code> driver pointed at a PlanetScale endpoint (<code>*.connect.psdb.cloud</code>), whose binlog CDC and <code>LOAD DATA</code> cold-copy Vitess blocks. Caught up front, before any connection.</td><td class="desc">Pass <code>--source-driver planetscale</code> / <code>--target-driver planetscale</code> for the PlanetScale endpoint.</td></tr>
+</tbody></table>
+`,
+    prev: { href: "/docs/commands/", label: "Command reference" },
+    next: { href: "/docs/type-mapping/", label: "Type mapping" },
+  })
+);
+
+// ---- Type mapping --------------------------------------------------------
+write(
+  "type-mapping",
+  page({
+    slug: "type-mapping",
+    title: "Type mapping",
+    subtitle: "What your MySQL TINYINT(1) / ENUM / DECIMAL / JSON / temporal types become on Postgres (and vice versa), and on SQLite / D1 — the cross-engine translation policies.",
+    body: `
+<p>sluice never translates one dialect straight to another. Every column type maps <strong>source-dialect → typed IR → target-dialect</strong>: source-specific knowledge lives in readers, target-specific knowledge in writers, and the IR is the only shared contract. That's why the four-direction matrix needs four readers and four writers, not twelve pairwise tables. This page is the operator-facing summary of those policies; the canonical, always-current source is <a href="https://raw.githubusercontent.com/sluicesync/sluice/main/docs/type-mapping.md">docs/type-mapping.md</a> and the runtime value contract in <a href="https://raw.githubusercontent.com/sluicesync/sluice/main/docs/value-types.md">docs/value-types.md</a>.</p>
+
+<h2 id="core-vs-extension">Core vs extension types</h2>
+<p>The IR type system is a two-tier hierarchy, and the tier decides what happens on an engine that lacks a type:</p>
+<ul>
+<li><strong>Core types</strong> — integers, decimal, float, boolean, char/varchar/text, binary/blob, date/time/datetime/timestamp, JSON — are the types every relational engine has in some form. Every engine reads and writes them; they are the lingua franca.</li>
+<li><strong>Extension types</strong> — <code>ENUM</code>, <code>SET</code>, <code>UUID</code>, arrays, PostGIS geometry, and the Postgres network types (<code>inet</code>/<code>cidr</code>/<code>macaddr</code>) — are types only some engines support natively. Each engine declares which it handles; an engine that lacks one either applies a <strong>documented degradation</strong> (e.g. Postgres array → MySQL <code>JSON</code>) or <strong>refuses loudly</strong>. Postgres extension types (<code>hstore</code>, <code>citext</code>, <code>pgvector</code>, PostGIS) are opt-in via <code>--enable-pg-extension EXT</code> and refuse loudly at schema-read if the flag is absent (<a href="/docs/error-codes/"><code>SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED</code></a>) — never silently dropped.</li>
+</ul>
+<p>Adding a new engine never amends the core; it declares which extension types it supports and provides the reader/writer code. The orchestrator never asks "are you MySQL?" — it asks "do you support arrays?"</p>
+
+<h2 id="mysql-pg">MySQL ↔ Postgres</h2>
+<p>The most-travelled direction. Notable rows below; the full table is in the canonical doc.</p>
+<table><thead><tr><th>MySQL</th><th>Postgres</th><th>Notes</th></tr></thead><tbody>
+<tr><td><code>TINYINT(1)</code></td><td class="desc"><code>boolean</code></td><td class="desc">The MySQL boolean convention. A value outside <code>{0,1}</code> collapses to <code>true</code>; sluice WARNs loudly once per column and names the row. Override with <code>--type-override col=smallint</code> to keep the integer (<code>smallint</code> is the safe floor — a <code>tinyint</code> override could round-trip back to a boolean).</td></tr>
+<tr><td><code>TINYINT</code> / <code>SMALLINT</code> / <code>MEDIUMINT</code> / <code>INT</code> / <code>BIGINT</code></td><td class="desc"><code>smallint</code> / <code>smallint</code> / <code>integer</code> / <code>integer</code> / <code>bigint</code></td><td class="desc"><code>MEDIUMINT</code> widens to <code>integer</code> on PG (no 3-byte int). Signed ranks map straight across.</td></tr>
+<tr><td><code>… UNSIGNED</code></td><td class="desc">widens one rank</td><td class="desc"><code>tinyint</code>→<code>smallint</code>, <code>smallint</code>→<code>integer</code>, <code>mediumint</code>/<code>int</code>→<code>bigint</code>. <strong><code>bigint unsigned</code> → <code>bigint</code> (uniform)</strong>: PG has no unsigned 64-bit, so values in <code>(2^63-1, 2^64-1]</code> aren't representable — but this is the only mapping that keeps an <code>AUTO_INCREMENT PK</code> and its FK children type-consistent (the default Rails/Laravel/Django schema). Surfaced by a loud range-narrowing notice at <code>schema preview</code> / <code>migrate</code> preflight; override to <code>numeric</code> to keep the full range (then the column can't be an identity key).</td></tr>
+<tr><td><code>DECIMAL(p,s)</code> / <code>NUMERIC</code></td><td class="desc"><code>numeric(p,s)</code></td><td class="desc">Carried as a string end-to-end; precision is lossless. A bare Postgres <code>numeric</code> (no p/s) is arbitrary-precision — PG→PG round-trips it bare; PG→MySQL widens to <code>DECIMAL(65,30)</code> (MySQL's max) with a loud widening notice.</td></tr>
+<tr><td><code>FLOAT</code> / <code>DOUBLE</code></td><td class="desc"><code>real</code> / <code>double precision</code></td><td class="desc">IEEE special floats (<code>NaN</code>, <code>±Inf</code>) ride through exactly.</td></tr>
+<tr><td><code>CHAR(n)</code> / <code>VARCHAR(n)</code> / <code>TINY..LONGTEXT</code></td><td class="desc"><code>char(n)</code> / <code>varchar(n)</code> / <code>text</code></td><td class="desc">A PG <code>varchar(N)</code> above MySQL's representable cap down-maps to the smallest MySQL <code>TEXT</code>-family type, with a loud advisory. Charset/collation are carried same-engine, dropped-with-WARN cross-engine (collation names aren't portable).</td></tr>
+<tr><td><code>DATE</code> / <code>TIME(p)</code> / <code>DATETIME(p)</code> / <code>TIMESTAMP(p)</code></td><td class="desc"><code>date</code> / <code>time(p)</code> / <code>timestamp(p)</code> / <code>timestamptz(p)</code></td><td class="desc">MySQL <code>TIMESTAMP</code> always stores UTC → PG <code>timestamptz</code>. A bare PG <code>time</code>/<code>timestamp</code> (no precision) round-trips bare PG→PG but materializes <code>(6)</code> on a MySQL target. A PG <code>timetz</code> → MySQL drops the zone (MySQL has no tz-aware time). Zero/partial MySQL dates (<code>0000-00-00</code>) are refused unless <code>--zero-date=null|epoch</code> (<a href="/docs/error-codes/"><code>SLUICE-E-VALUE-ZERO-DATE</code></a>).</td></tr>
+<tr><td><code>ENUM('a','b')</code></td><td class="desc"><code>enum</code> type (default) or <code>text</code> + <code>CHECK</code></td><td class="desc">Default emits a PG <code>CREATE TYPE … AS ENUM</code>; per-column override for <code>text</code> + a <code>CHECK</code> constraint. A PG enum → MySQL becomes a column-level <code>ENUM(...)</code> (no shared type; each column gets its own).</td></tr>
+<tr><td><code>SET('a','b')</code></td><td class="desc"><code>text[]</code> + <code>CHECK</code></td><td class="desc">Membership preserved via a CHECK; override to a comma-delimited <code>text</code>.</td></tr>
+<tr><td><code>JSON</code></td><td class="desc"><code>jsonb</code> (default) / <code>json</code></td><td class="desc">MySQL <code>JSON</code> and PG <code>jsonb</code> both validate + normalise; PG <code>json</code> (no b) preserves whitespace/key order. Carried as raw bytes.</td></tr>
+<tr><td class="desc">(no MySQL type)</td><td class="desc"><code>uuid</code></td><td class="desc">PG <code>uuid</code> → MySQL <code>CHAR(36)</code> / <code>BINARY(16)</code>.</td></tr>
+<tr><td class="desc"><code>JSON</code> (degraded)</td><td class="desc"><code>T[]</code> (array)</td><td class="desc">MySQL has no array type: a PG array → MySQL <code>JSON</code> (empty <code>{}</code>→<code>[]</code>, NULL element→JSON <code>null</code>, nested preserved). Override <code>array_strategy: concat</code> for simple scalar arrays.</td></tr>
+<tr><td class="desc"><code>VARCHAR(45/30)</code></td><td class="desc"><code>inet</code> / <code>cidr</code> / <code>macaddr</code></td><td class="desc">PG network types have no MySQL native form: <code>inet</code>/<code>cidr</code>→<code>VARCHAR(45)</code>, <code>macaddr</code>→<code>VARCHAR(30)</code> (auto-shaped since v0.7.0; overridable).</td></tr>
+<tr><td class="desc">spatial types</td><td class="desc"><code>geometry</code> (PostGIS)</td><td class="desc">Requires PostGIS on the target via <code>--enable-pg-extension</code>; carried as WKB. Every subtype/SRID preserved.</td></tr>
+</tbody></table>
+
+<h2 id="sqlite-d1">SQLite &amp; Cloudflare D1</h2>
+<p>SQLite (and D1, which is SQLite over HTTP) is the one engine whose <em>value</em> storage isn't pinned by its <em>column</em> declaration — a column has a type <strong>affinity</strong>, and each stored value carries its own storage class. sluice resolves an IR type from the <strong>declared type</strong> in a load-bearing order: declared temporal / bool spellings win first, affinity second.</p>
+<table><thead><tr><th>SQLite declared / affinity</th><th>IR &rarr; typical target</th><th>Notes</th></tr></thead><tbody>
+<tr><td class="desc"><code>DATE</code> / <code>DATETIME</code>·<code>TIMESTAMP</code> / <code>TIME</code></td><td class="desc"><code>date</code> / <code>timestamp</code> (no tz) / <code>time</code></td><td class="desc">Declared spelling overrides affinity (they'd otherwise read as NUMERIC decimals). The <em>value</em> encoding is an operator choice — <code>--sqlite-date-encoding</code> (<code>iso</code> default / <code>unixepoch</code> / <code>unixmillis</code> / <code>julian</code>); a storage-class mismatch is refused loudly, naming the row.</td></tr>
+<tr><td class="desc"><code>BOOL</code> / <code>BOOLEAN</code></td><td class="desc"><code>boolean</code></td><td class="desc">Decodes <code>0</code>/<code>1</code> and truthy text; anything else is refused.</td></tr>
+<tr><td class="desc">INTEGER affinity</td><td class="desc"><code>bigint</code></td><td class="desc">SQLite integers are 64-bit signed. Integers above 2<sup>53</sup> round-trip exactly via the <code>(typeof, text/hex)</code> projection (the lossless live-D1 reader path).</td></tr>
+<tr><td class="desc">TEXT affinity</td><td class="desc"><code>text</code></td><td class="desc">Unbounded — declared <code>VARCHAR(n)</code> lengths aren't enforced by SQLite, so no misleading bound is carried.</td></tr>
+<tr><td class="desc">REAL affinity</td><td class="desc"><code>double precision</code></td><td class="desc">8-byte IEEE-754.</td></tr>
+<tr><td class="desc">NUMERIC affinity</td><td class="desc">unconstrained <code>numeric</code></td><td class="desc">Arbitrary precision.</td></tr>
+</tbody></table>
+<p>As a migrate <strong>target</strong>, SQLite emits the declared type its reader reads back to the same IR type. The one load-bearing wrinkle: an <code>ir.Decimal</code> is stored with <strong>TEXT</strong> affinity (the exact decimal string), not NUMERIC — NUMERIC affinity would coerce <code>19.99</code> to the binary float <code>19.989999999999998</code> and silently corrupt money (Bug 162); it reads back as <code>text</code> (a documented downgrade). Anything SQLite has no faithful storage for — geometry, <code>inet</code>/<code>cidr</code>/<code>macaddr</code>, <code>bit</code>, <code>interval</code>, array, domain — is <strong>refused loudly at emit time</strong>, never coerced to a silently-wrong column. D1 is not a write target: emit a SQLite <code>.db</code> (<code>--target-driver sqlite</code>) and <code>wrangler d1 import</code> it.</p>
+
+<h2 id="overrides">Per-column overrides</h2>
+<p>The default policies cover the common case; override per column in YAML (<code>mappings:</code>) or on the CLI. Overrides are typed against the IR, not dialect syntax:</p>
+<ul>
+<li><code>--type-override TABLE.COLUMN=TYPE</code> — force a target column type (repeatable). The override rewrites the IR type the <em>reader</em> decodes with, so e.g. <code>=smallint</code> on a <code>TINYINT(1)</code> reads the cell as an integer end-to-end.</li>
+<li><code>--enable-pg-extension EXT</code> — opt into a Postgres extension type (<code>hstore</code>, <code>citext</code>, <code>vector</code>, PostGIS) so its columns pass through instead of refusing.</li>
+<li>YAML <code>mappings:</code> entries also carry <code>enum_strategy</code>, <code>array_strategy</code>, <code>on_zero_date</code>, and per-column <code>target_type</code> options.</li>
+</ul>
+<p>Run <code>sluice schema preview</code> first to see the exact target DDL sluice would emit, including every widening/narrowing advisory and any untranslatable-expression refusal — before touching the target.</p>
+`,
+    prev: { href: "/docs/error-codes/", label: "Error & exit codes" },
+    next: { href: "/docs/database-objects/", label: "Objects sluice creates" },
   })
 );
 
@@ -1158,6 +1334,16 @@ ${pre(`sluice cutover \\
 ${pre(`sluice verify --source-driver mysql --source "$SLUICE_SOURCE" \\
     --target-driver postgres --target "$SLUICE_TARGET" --depth count`)}
 <p>The full sequence: <strong>start the stream → wait for fresh → freeze source writes → <code>sync stop --wait</code> → <code>cutover</code> → <code>verify</code> → repoint the app</strong>. Only the last three steps fall inside the write-freeze window, so downtime is measured in seconds-to-minutes, not the length of the copy.</p>
+
+<h2 id="rollback">6. Rolling back a cutover</h2>
+<p>The safety net for a cutover is a <strong>reverse sync</strong>. Until you're confident in the new database, <strong>keep the old primary intact</strong> — do not drop or repurpose it. If something goes wrong after you flip traffic and you must fail back, you point the application at the old database again — but any writes the new database took while it was live need to travel <em>back</em> the other direction.</p>
+<p>You can't naively cold-start a reverse sync (new → old) to carry them: the old database still holds all its original rows, so it isn't empty, and a fresh cold-start refuses loudly rather than bulk-copy into a populated target — <a href="/docs/error-codes/"><code>SLUICE-E-COLDSTART-TARGET-NOT-EMPTY</code></a>. That refusal is the guard working as designed; you don't want a full re-copy, you want just the <em>delta</em>. Two ways to be ready for it:</p>
+<ul>
+<li><strong>Run the reverse stream from the start (recommended for true reversibility).</strong> Right after the forward cutover, start a second stream in the opposite direction with its own <code>--stream-id</code>, so the old database keeps tracking the new one continuously. Failing back is then just a traffic flip plus a <code>cutover</code> on the old side to re-prime its sequences — no re-copy, no refusal.</li>
+<li><strong>Reconcile the delta manually.</strong> If you didn't keep a reverse stream running, resync the window of new-database writes back to the old database the other direction and <code>verify</code> before re-flipping traffic — rather than forcing a cold-start into the non-empty old database.</li>
+</ul>
+<div class="note"><strong>Why the old primary must survive the window.</strong> The reverse path only exists while the old database is still there and consistent. Dropping it immediately after cutover throws away your rollback option; keep it until the new database has proven itself, then decommission.</div>
+
 <div class="note"><strong>Schema changes during a long-running sync.</strong> By default a stream forwards unambiguous source DDL (ADD/DROP/ALTER COLUMN, CREATE/DROP INDEX, …) onto the target automatically so it stays online through schema evolution — including a destructive <code>DROP COLUMN</code>. To gate DDL through a separate change process, start with <code>--schema-changes=refuse</code>. See the warning box in the <a href="/docs/commands/#sync-start">sync start reference</a>.</div>
 `,
     prev: { href: "/docs/verify-reconcile/", label: "Verify & reconcile" },
@@ -2737,7 +2923,7 @@ ${pre(`readinessProbe:
 
 <h2 id="dashboards">Live dashboards: web and terminal</h2>
 <p><code>sync run --dashboard-listen ADDR</code> serves a self-contained, auto-refreshing HTML page of the live fleet — per-sync state, restart count, consecutive failures, last error, uptime — backed by a stable <code>GET /api/fleet</code> JSON API (ADR-0124). It is strictly read-only: no stop/restart controls, no data path, and it exposes only what <code>sync status --all</code> already does (stream-ids, states, error strings — no DSNs, no row data). It has <strong>no authentication</strong>, so bind it to localhost or a trusted network.</p>
-<p>For a terminal equivalent, <a href="/docs/commands/#sync-manage">sync tui --connect</a> is a full-screen client that polls that same <code>/api/fleet</code> endpoint — so it works locally or over an SSH tunnel to the dashboard port, without disturbing the fleet process:</p>
+<p>For a terminal equivalent, <a href="/docs/commands/#sync-fleet">sync tui --connect</a> is a full-screen client that polls that same <code>/api/fleet</code> endpoint — so it works locally or over an SSH tunnel to the dashboard port, without disturbing the fleet process:</p>
 ${pre(`# terminal 1: run the fleet with the dashboard API exposed
 sluice sync run --config syncs.yaml --dashboard-listen :9300
 
