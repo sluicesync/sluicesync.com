@@ -50,6 +50,7 @@ const NAV = [
       { slug: "managed-postgres-slotless", label: "Managed Postgres (slot-less)" },
       { slug: "planetscale-vitess", label: "PlanetScale & Vitess" },
       { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
+      { slug: "mysql-to-planetscale", label: "Self-hosted MySQL → PlanetScale" },
       { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
       { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
       { slug: "operate-fleet", label: "Operate a sync fleet" },
@@ -187,6 +188,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "managed-postgres-slotless",
     "planetscale-vitess",
     "planetscale-region-move",
+    "mysql-to-planetscale",
     "planetscale-postgres",
     "planetscale-postgres-upgrade",
     "operate-fleet",
@@ -2697,6 +2699,89 @@ ${pre(`sluice restore \\
 </ul>
 `,
     prev: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
+    next: { href: "/docs/mysql-to-planetscale/", label: "Self-hosted MySQL → PlanetScale" },
+  })
+);
+
+// nav-label: Self-hosted MySQL → PlanetScale
+write(
+  "mysql-to-planetscale",
+  page({
+    slug: "mysql-to-planetscale",
+    title: "Migrate a self-hosted MySQL to PlanetScale",
+    subtitle: "Move an on-prem / self-hosted MySQL onto PlanetScale MySQL — a one-shot bulk migrate plus continuous binlog-CDC sync, so you cold-copy, keep the old primary writable, and cut over in a controlled window.",
+    body: `
+<p>Moving a <strong>self-hosted / on-prem MySQL</strong> onto PlanetScale MySQL: sluice does a one-shot bulk <a href="/docs/commands/#migrate">migrate</a> and a continuous <strong>binlog-CDC</strong> <a href="/docs/commands/#sync-start">sync</a>, so you cold-copy the data, keep the old primary <strong>writable</strong> while PlanetScale catches up, and cut over in a brief, controlled window. This guide is the <strong>self-hosted</strong> path — AWS RDS / Aurora and other managed MySQL are the same flow with a few connection and permission deltas (a follow-up covers those). Both ends are MySQL, so <strong>cross-engine value translation doesn't apply</strong>; the one thing that changes is that the target is <strong>Vitess-flavored</strong> MySQL, which affects two things — <a href="#target">foreign keys</a> and (before v0.99.199) <a href="#migrate">index handling</a> — both covered below. Live-verified on v0.99.199: local MySQL with binlog + GTID into a real PlanetScale database.</p>
+
+<h2 id="source">Prepare the MySQL source</h2>
+<p>For a continuous sync the source has to emit a GTID-tagged row binlog. Set these on the source server (they need a restart if they aren't already on):</p>
+<table><thead><tr><th>Setting</th><th>Value</th><th>Why</th></tr></thead><tbody>
+<tr><td class="desc"><code>log_bin</code></td><td class="desc">on</td><td class="desc">Binary logging must be enabled for any CDC.</td></tr>
+<tr><td class="desc"><code>binlog_format</code></td><td class="desc"><code>ROW</code></td><td class="desc">Row-based events carry the actual before/after values sluice replays.</td></tr>
+<tr><td class="desc"><code>gtid_mode</code></td><td class="desc"><code>ON</code></td><td class="desc">GTID-based positioning for resumable, exactly-tracked replication.</td></tr>
+<tr><td class="desc"><code>enforce_gtid_consistency</code></td><td class="desc"><code>ON</code></td><td class="desc">Required alongside <code>gtid_mode=ON</code>.</td></tr>
+<tr><td class="desc"><code>server_id</code></td><td class="desc">a unique value</td><td class="desc">Each server in a replication topology needs a distinct id.</td></tr>
+</tbody></table>
+<p>The connecting user needs <strong><code>SELECT</code></strong> for the bulk copy plus <strong><code>REPLICATION SLAVE</code></strong> and <strong><code>REPLICATION CLIENT</code></strong> to stream the binlog:</p>
+${pre(`CREATE USER 'sluice'@'%' IDENTIFIED BY '<pw>';
+GRANT SELECT, REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'sluice'@'%';`)}
+<div class="note"><strong>A one-shot <code>migrate</code> needs only <code>SELECT</code>.</strong> The binlog settings and the two <code>REPLICATION</code> grants are only required for a continuing <a href="#sync">sync</a>. If you're taking a point-in-time copy with no live CDC, plain <code>SELECT</code> on the source is enough.</div>
+<div class="note"><strong>No server-id collision.</strong> sluice's binlog reader registers itself with its own random <code>server_id</code>, distinct from the source's, so joining the replication stream won't clash with the source or any existing replica.</div>
+
+<h2 id="target">Create the PlanetScale target</h2>
+<p>Create the destination database in your chosen region:</p>
+${pre(`pscale database create <db> --region <region>`)}
+<p>On PlanetScale a database is a <strong>Vitess keyspace</strong>. The database named in the DSN is that keyspace (its name defaults to the database name), and it must be <strong>pre-provisioned</strong> — sluice will not auto-create a Vitess keyspace. Mint an admin credential (<code>pscale password create &lt;db&gt; &lt;branch&gt; --role admin</code>, or the <code>pscale connect</code> flow) and assemble a standard go-sql-driver DSN against the global connect host:</p>
+${pre(`USER:PASS@tcp(aws.connect.psdb.cloud:3306)/<keyspace>?tls=true`)}
+<p><code>?tls=true</code> is required. Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting the DSN in argv, so credentials don't land in your shell history or process list.</p>
+<div class="note warn"><strong>Foreign keys are off by default on PlanetScale.</strong> Vitess rejects <code>FOREIGN KEY</code> DDL with <code>VT10001</code> unless you turn support on per database. So either pass <strong><code>--skip-foreign-keys</code></strong> (skips the constraints but keeps each referencing column indexed) or enable "Allow foreign key constraints" on an unsharded database first. See <a href="/docs/foreign-keys-vitess/">Foreign keys on a Vitess / PlanetScale target</a> for the full skip-vs-enable decision.</div>
+
+<h2 id="migrate">Migrate</h2>
+<p>Preview the plan with <code>--dry-run</code>, run the copy, then verify:</p>
+${pre(`sluice migrate \\
+    --source-driver mysql       --source 'user:pw@tcp(HOST:3306)/db' \\
+    --target-driver planetscale --target "$SLUICE_TARGET" \\
+    --skip-foreign-keys --dry-run
+
+sluice migrate \\
+    --source-driver mysql       --source 'user:pw@tcp(HOST:3306)/db' \\
+    --target-driver planetscale --target "$SLUICE_TARGET" \\
+    --skip-foreign-keys
+
+sluice verify \\
+    --source-driver mysql       --source 'user:pw@tcp(HOST:3306)/db' \\
+    --target-driver planetscale --target "$SLUICE_TARGET"`)}
+<p>Value fidelity is exact on the MySQL→MySQL path: in testing <code>DECIMAL</code>, <code>ENUM</code>, and <code>DATETIME</code> all round-tripped unchanged onto Vitess MySQL, row counts matched, and <code>verify</code> came back clean. <code>--skip-foreign-keys</code> reports each skipped FK and keeps the referencing columns indexed, so joins through them stay fast.</p>
+<div class="note warn"><strong>Use v0.99.199 or newer — earlier versions silently created only PRIMARY keys on a Vitess target.</strong> Secondary indexes — plain, unique, composite, and FK-backing — land correctly on <strong>v0.99.199+</strong>. On <strong>v0.99.30–v0.99.198</strong> a migrate or sync into a PlanetScale / Vitess target silently created <em>only</em> the PRIMARY keys (a regression, now fixed). If you ran an earlier version, check your target's secondary indexes and rebuild any that are missing. As of v0.99.199 sluice also <strong>loud-fails with <code>SLUICE-E-INDEX-MISSING</code></strong> if any expected index is absent after apply, so a silent recurrence can't happen.</div>
+
+<h2 id="sync">Keep it in sync &amp; cut over</h2>
+<p>A continuous sync cold-copies the source, then tails the binlog — so the source stays <strong>writable the whole time</strong> and you flip traffic in a brief window. Launch the long-lived stream:</p>
+${pre(`sluice sync start --stream-id <id> \\
+    --source-driver mysql       --source "$SLUICE_SOURCE" \\
+    --target-driver planetscale --target "$SLUICE_TARGET" \\
+    --skip-foreign-keys`)}
+<p>Live-verified: after the cold copy, inserts, updates, and deletes on the source replicate to PlanetScale within seconds. Watch it catch up from another shell, and gate cutover on freshness:</p>
+${pre(`sluice sync status --stream-id <id> \\
+    --target-driver planetscale --target "$SLUICE_TARGET"
+
+sluice sync health --stream-id <id> \\
+    --target-driver planetscale --target "$SLUICE_TARGET" --max-stale-seconds 30`)}
+<p>When the stream is fresh, quiesce writes to the source, let it drain the last changes, stop the stream, and repoint the application at PlanetScale:</p>
+${pre(`sluice sync stop --stream-id <id> \\
+    --target-driver planetscale --target "$SLUICE_TARGET" --wait`)}
+<div class="note"><strong><code>sync stop</code> needs the target too.</strong> Pass <code>--target-driver</code> and <code>--target</code> on <code>sync stop</code> (not just <code>--stream-id</code>) — the stop path connects to the target's control tables to drain and record the final position.</div>
+<div class="note"><strong>Scope to a subset of tables.</strong> Both <code>migrate</code> and <code>sync start</code> take <code>--include-table</code> / <code>--exclude-table</code> to move only some tables and keep just those in sync — see <a href="/docs/copy-table-subset/">Copy a subset of tables</a>.</div>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/foreign-keys-vitess/">Foreign keys on a Vitess / PlanetScale target</a> — the full skip-vs-enable decision for FK-bearing sources.</li>
+  <li><a href="/docs/copy-table-subset/">Copy a subset of tables</a> — scope a migrate or sync to just the tables you choose.</li>
+  <li><a href="/docs/planetscale-region-move/">Move PlanetScale regions</a> — the PlanetScale→PlanetScale sibling flow (VStream, sharded keyspaces).</li>
+  <li><a href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a> — the flavor, cold-start throughput knobs, and VStream lag reality in depth.</li>
+  <li><a href="/docs/commands/">Command reference</a> and <a href="/docs/error-codes/">error codes</a> — every flag named here, with defaults.</li>
+</ul>
+`,
+    prev: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
     next: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
   })
 );
@@ -2766,7 +2851,7 @@ sluice verify \\
   <li><a href="/docs/commands/#sync-start">Command reference</a> — every flag named here, with defaults.</li>
 </ul>
 `,
-    prev: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
+    prev: { href: "/docs/mysql-to-planetscale/", label: "Self-hosted MySQL → PlanetScale" },
     next: { href: "/docs/planetscale-postgres-upgrade/", label: "Upgrade PlanetScale Postgres" },
   })
 );
