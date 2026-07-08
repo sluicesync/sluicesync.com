@@ -1446,7 +1446,7 @@ The same table scope carries onto sync start: it cold-copies only the included t
 
     sluice sync start --stream-id sub \
         --source-driver postgres   --source 'postgres://user:pw@src/appdb?sslmode=require&schema=app' \
-        --target-driver planetscale --target 'root:pw@tcp(<keyspace>.<region>.psdb.cloud:3306)/<keyspace>?tls=true' \
+        --target-driver planetscale --target 'USER:PASS@tcp(aws.connect.psdb.cloud:3306)/<keyspace>?tls=true' \
         --include-table users
 
 Watch it, gate cutover on freshness, then drain and stop:
@@ -1468,7 +1468,7 @@ If your subset carries foreign keys and you're targeting PlanetScale/Vitess — 
 
     sluice migrate \
         --source-driver postgres    --source 'postgres://user:pw@src/appdb?sslmode=require&schema=app' \
-        --target-driver planetscale --target 'root:pw@tcp(<keyspace>.<region>.psdb.cloud:3306)/<keyspace>?tls=true' \
+        --target-driver planetscale --target 'USER:PASS@tcp(aws.connect.psdb.cloud:3306)/<keyspace>?tls=true' \
         --include-table users,orders \
         --skip-foreign-keys
 

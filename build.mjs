@@ -1378,7 +1378,7 @@ So an <code>--all-schemas</code> fan-out to PlanetScale requires <strong>every</
 <p>The same table scope carries onto <code>sync start</code>: it cold-copies <strong>only</strong> the included tables, then tails CDC for <strong>only</strong> those. An insert into an excluded table is never created or streamed on the target — the excluded table is outside the stream entirely (live-confirmed):</p>
 ${pre(`sluice sync start --stream-id sub \\
     --source-driver postgres   --source 'postgres://user:pw@src/appdb?sslmode=require&schema=app' \\
-    --target-driver planetscale --target 'root:pw@tcp(<keyspace>.<region>.psdb.cloud:3306)/<keyspace>?tls=true' \\
+    --target-driver planetscale --target 'USER:PASS@tcp(aws.connect.psdb.cloud:3306)/<keyspace>?tls=true' \\
     --include-table users`)}
 <p>Watch it, gate cutover on freshness, then drain and stop:</p>
 ${pre(`sluice sync status --stream-id sub \\
@@ -1395,7 +1395,7 @@ sluice sync stop --stream-id sub \\
 <p>If your subset carries foreign keys and you're targeting PlanetScale/Vitess — where cross-shard FKs don't work and FK support is opt-in per database — <strong><code>--skip-foreign-keys</code> (v0.99.198+)</strong> skips creating the FK constraints on the target while keeping each FK's referencing columns indexed. It synthesizes a backing index only when an existing target index doesn't already cover those columns as a left-prefix, so you transition an FK-bearing source <em>without stripping the FKs from it first</em>, and joins stay fast. Add it to the <code>migrate</code> or <code>sync start</code> command:</p>
 ${pre(`sluice migrate \\
     --source-driver postgres    --source 'postgres://user:pw@src/appdb?sslmode=require&schema=app' \\
-    --target-driver planetscale --target 'root:pw@tcp(<keyspace>.<region>.psdb.cloud:3306)/<keyspace>?tls=true' \\
+    --target-driver planetscale --target 'USER:PASS@tcp(aws.connect.psdb.cloud:3306)/<keyspace>?tls=true' \\
     --include-table users,orders \\
     --skip-foreign-keys`)}
 <p>It is mutually exclusive with <code>--allow-degraded-fks</code> (opposite intents — one skips FK creation, the other creates FKs and tolerates dirty source rows), and it is never silent: each skipped FK is reported on its own log line (the table, the referencing columns, and the synthesized or already-covering index) plus a summary count. Alternatively, <strong>enable FK support on the PlanetScale database</strong> instead of skipping — turn on "Allow foreign key constraints" in the target database's Settings → General tab (unsharded databases only) so sluice's FK DDL is accepted; see the <a href="/docs/planetscale-region-move/#notes">region-move guide's foreign-key note</a>.</p>
