@@ -34,10 +34,10 @@
 
 <h2 id="verify-data">1. Verify the rows landed <a class="hlink" href="#verify-data" aria-label="Permalink to this section">#</a></h2>
 <p><code>verify</code> compares the data itself, on a depth ladder — start cheap, escalate only when you need a stronger guarantee. It never writes to the target.</p>
-<table><thead><tr><th>Depth</th><th>What it does</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Depth</th><th>What it does</th></tr></thead><tbody>
 <tr><td><code>--depth count</code> (default)</td><td class="desc">Per-table row-count comparison. Fast, works across engines, and catches whole-table loss and bulk-row loss.</td></tr>
 <tr><td><code>--depth sample</code></td><td class="desc">Counts <em>plus</em> per-table sampled-row content hashes — ~99% confidence of catching a 5%+ corruption rate at the default 100 rows/table. <strong>Same-engine only</strong> (see below).</td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>For a cross-engine migration (MySQL&nbsp;→&nbsp;Postgres and the like), <code>count</code> is the mode you run. Server-side row hashing renders values in each engine's own text format, so a cross-engine sample would report false mismatches; sluice refuses <code>--depth=sample</code> loudly when the source and target engines differ rather than hand you a misleading result. Sample mode is for same-engine checks (MySQL&nbsp;→&nbsp;MySQL, Postgres&nbsp;→&nbsp;Postgres).</p>
 <pre><code><span class="c"># cross-engine: row-count parity, the everyday post-migrate check</span>
 <span class="k">sluice</span> verify <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
@@ -57,11 +57,11 @@
               <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
               <span class="f">--depth</span> count <span class="f">--format</span> json -o verify.json</code></pre>
 <p>The exit code is the contract for automation:</p>
-<table><thead><tr><th>Exit</th><th>Meaning</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Exit</th><th>Meaning</th></tr></thead><tbody>
 <tr><td><code>0</code></td><td class="desc">Clean — every checked table matched.</td></tr>
 <tr><td><code>1</code></td><td class="desc">Mismatch — at least one table differs (a count delta, or a sampled-row hash mismatch).</td></tr>
 <tr><td><code>2</code></td><td class="desc">Operational error — couldn't connect, unsupported engine, bad flags. Distinct from <code>1</code> so a gate never conflates "the data differs" with "the check couldn't run".</td></tr>
-</tbody></table>
+</tbody></table></div>
 <div class="note"><strong>Redacted migrations.</strong> If you migrated with <code>--redact</code>, the target values differ from the source <em>by design</em> — so a same-engine <code>--depth=sample</code> run will report those rows as content mismatches. Verify redacted migrations with <code>--depth=count</code> (row parity is still meaningful), or scope the sample to unredacted tables with <code>--include-table</code>.</div>
 
 <h2 id="schema-drift">3. Confirm no structural drift <a class="hlink" href="#schema-drift" aria-label="Permalink to this section">#</a></h2>
@@ -80,7 +80,7 @@
 </ul>
 
 <h2 id="decision-table">5. Symptom → first look <a class="hlink" href="#decision-table" aria-label="Permalink to this section">#</a></h2>
-<table><thead><tr><th>Symptom</th><th>First look</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Symptom</th><th>First look</th></tr></thead><tbody>
 <tr><td class="desc"><code>verify --depth=count</code> exits 1, target has fewer rows</td><td class="desc">Re-run <code>migrate</code>; if partially written, <code>migrate --reset-target-data</code>.</td></tr>
 <tr><td class="desc">Target has <em>more</em> rows than source</td><td class="desc">Source took writes after the copy — reconcile the window, or move to continuous sync before cutover.</td></tr>
 <tr><td class="desc"><code>--depth=sample</code> exits 1 on a redacted migration</td><td class="desc">Expected — redacted target content differs. Use <code>--depth=count</code>.</td></tr>
@@ -88,7 +88,7 @@
 <tr><td class="desc"><code>schema diff</code> exits 1, missing index/constraint</td><td class="desc">Apply the suggested DDL from the diff output.</td></tr>
 <tr><td class="desc"><code>schema diff</code> flags a wrong column type</td><td class="desc">Re-migrate the table with a <code>--type-override</code>; don't hand-patch.</td></tr>
 <tr><td class="desc"><code>--depth=sample</code> refused for a cross-engine pair</td><td class="desc">By design — use <code>--depth=count</code> across engines.</td></tr>
-</tbody></table>
+</tbody></table></div>
 
 <h2 id="next-steps">Next steps <a class="hlink" href="#next-steps" aria-label="Permalink to this section">#</a></h2>
 <ul>

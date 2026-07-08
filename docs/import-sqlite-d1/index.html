@@ -58,12 +58,12 @@ export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN
 
 <h2 id="dates">Dates, times, and booleans <a class="hlink" href="#dates" aria-label="Permalink to this section">#</a></h2>
 <p>SQLite and D1 have no native temporal or boolean storage. sluice maps a column whose <em>declared</em> type names one (<code>DATE</code> / <code>DATETIME</code> / <code>TIMESTAMP</code> / <code>TIME</code>, <code>BOOL</code> / <code>BOOLEAN</code>) to the right target type, and you tell it how the <em>values</em> are encoded with <code>--sqlite-date-encoding</code>:</p>
-<table><thead><tr><th>Encoding</th><th>Temporal values stored as</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Encoding</th><th>Temporal values stored as</th></tr></thead><tbody>
 <tr><td><code>iso</code> (default)</td><td class="desc">ISO-8601 <strong>TEXT</strong>, e.g. <code>'2024-01-02 03:04:05'</code></td></tr>
 <tr><td><code>unixepoch</code></td><td class="desc">INTEGER unix <strong>seconds</strong></td></tr>
 <tr><td><code>unixmillis</code></td><td class="desc">INTEGER/REAL unix <strong>milliseconds</strong></td></tr>
 <tr><td><code>julian</code></td><td class="desc">REAL/INTEGER <strong>Julian day</strong></td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>A value whose storage class doesn't match the chosen encoding — or ISO text matching no layout, or a non-truthy boolean — is <strong>refused loudly, naming the row</strong>, never a silently-wrong date. Carry a genuine outlier raw with <code>--type-override &lt;col&gt;=text</code>. Preview the resolved types first with <a href="/docs/preview-and-validate/">schema preview</a>.</p>
 <p>Column <strong>DEFAULT</strong> expressions are carried too: a SQLite <code>datetime('now')</code> / <code>CURRENT_TIMESTAMP</code> default becomes the target's <code>CURRENT_TIMESTAMP</code> (<code>date('now')</code>→<code>CURRENT_DATE</code>, <code>time('now')</code>→<code>CURRENT_TIME</code>). A non-portable default expression is dropped with a loud WARN rather than emitted as an expression the target can't evaluate — the column keeps its type, just without the default.</p>
 

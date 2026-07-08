@@ -44,7 +44,7 @@
 
 <h2 id="where-it-applies">Where redaction applies <a class="hlink" href="#where-it-applies" aria-label="Permalink to this section">#</a></h2>
 <p>The same rule set is honoured uniformly across every path that moves rows, so a column can't leak through a surface you forgot about:</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Command</th><th>Behaviour</th></tr></thead>
 <tbody>
 <tr><td><code>sluice migrate</code></td><td class="desc">One-shot bulk copy — every row passes through the redactor.</td></tr>
@@ -52,13 +52,13 @@
 <tr><td><code>sluice backup full</code> / <code>incremental</code></td><td class="desc">Backup chunks are PII-clean on disk; a later restore copies them through unchanged.</td></tr>
 <tr><td><code>sluice schema preview</code></td><td class="desc">No data moves — it annotates the generated <code>CREATE TABLE</code> DDL with which columns are redacted (see below).</td></tr>
 </tbody>
-</table>
+</table></div>
 
 <h2 id="strategies">The strategy families <a class="hlink" href="#strategies" aria-label="Permalink to this section">#</a></h2>
 <p>sluice ships 26 strategies across five families. Pick the one that matches the column's shape.</p>
 
 <h3 id="constant-foundational">Constant &amp; foundational <a class="hlink" href="#constant-foundational" aria-label="Permalink to this section">#</a></h3>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Strategy</th><th>Behaviour</th></tr></thead>
 <tbody>
 <tr><td><code>null</code></td><td class="desc">Replace with <code>NULL</code>. Refuses on <code>NOT NULL</code> columns — use <code>static:</code> there instead.</td></tr>
@@ -67,19 +67,19 @@
 <tr><td><code>hash:sha256</code></td><td class="desc">SHA-256 hex digest — deterministic, no key required.</td></tr>
 <tr><td><code>hash:hmac-sha256</code></td><td class="desc">Keyed HMAC-SHA256 hex digest — requires <code>--keyset-source</code> (see below).</td></tr>
 </tbody>
-</table>
+</table></div>
 
 <h3 id="format-preserving-masks">Format-preserving masks <a class="hlink" href="#format-preserving-masks" aria-label="Permalink to this section">#</a></h3>
 <p>Generic masks keep some characters and blank the rest (default mask char <code>X</code>):</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Strategy</th><th>Behaviour</th></tr></thead>
 <tbody>
 <tr><td><code>mask:inner:&lt;m1&gt;,&lt;m2&gt;[,&lt;char&gt;]</code></td><td class="desc">Keep first M1 + last M2 runes; mask the middle. <code>mask:inner:4,4</code> on <code>4111111111111111</code> → <code>4111XXXXXXXX1111</code>.</td></tr>
 <tr><td><code>mask:outer:&lt;m1&gt;,&lt;m2&gt;[,&lt;char&gt;]</code></td><td class="desc">Mask the first M1 + last M2; keep the middle.</td></tr>
 </tbody>
-</table>
+</table></div>
 <p>Country- and format-specific presets validate the input shape and preserve just the non-identifying part:</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Preset</th><th>Behaviour</th></tr></thead>
 <tbody>
 <tr><td><code>mask:ssn</code></td><td class="desc">US SSN — preserve last 4 (<code>XXX-XX-NNNN</code>).</td></tr>
@@ -90,12 +90,12 @@
 <tr><td><code>mask:iban</code></td><td class="desc">IBAN — preserve country code, check digits, 2 BBAN, and last 4.</td></tr>
 <tr><td><code>mask:uuid</code></td><td class="desc">UUID — preserve hyphens + first 4 + last 4 hex. See the caveat below.</td></tr>
 </tbody>
-</table>
+</table></div>
 <div class="note"><strong><code>mask:uuid</code> on a native <code>uuid</code> column.</strong> The masked output contains <code>X</code> characters that aren't valid hex, so a target column typed <code>uuid</code> (Postgres) refuses at preflight — before any data moves — unless you also map that column to text with <code>--type-override=table.col=text</code>.</div>
 
 <h3 id="realistic-synthetic-values-randomize">Realistic synthetic values (randomize) <a class="hlink" href="#realistic-synthetic-values-randomize" aria-label="Permalink to this section">#</a></h3>
 <p>The <code>randomize:*</code> generators produce fresh, valid-shape fake values — ideal when staging needs data that <em>looks</em> real. Output is <strong>replay-stable per source row</strong>: the same source primary key always regenerates the same target value across CDC resume, cold-start re-apply, and backup → restore (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0039-randomize-strategy-determinism.md">ADR-0039</a>).</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Strategy</th><th>Output</th></tr></thead>
 <tbody>
 <tr><td><code>randomize:int:&lt;min&gt;,&lt;max&gt;</code></td><td class="desc">Integer in <code>[min, max]</code> inclusive.</td></tr>
@@ -108,23 +108,23 @@
 <tr><td><code>randomize:uk-nin</code></td><td class="desc">UK NIN matching the HMRC prefix alphabet.</td></tr>
 <tr><td><code>randomize:iban[:&lt;country&gt;]</code></td><td class="desc">IBAN with mod-97 check digits; optional <code>DE</code> / <code>GB</code> / <code>FR</code>.</td></tr>
 </tbody>
-</table>
+</table></div>
 <div class="note"><strong>Every <code>randomize:*</code> rule needs a primary key</strong> on the source table — the replay seed is derived from the row's PK. The pipeline refuses loudly at startup if a <code>randomize:*</code> rule targets a heap (no-PK) table; add a PK on the source, or pick a non-random strategy.</div>
 
 <h3 id="dictionary-strategies">Dictionary strategies <a class="hlink" href="#dictionary-strategies" aria-label="Permalink to this section">#</a></h3>
 <p>Dictionary strategies map source values into a named lookup table declared in YAML (<a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0040-dictionary-strategy-determinism.md">ADR-0040</a>):</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Strategy</th><th>Keyed by</th><th>Use case</th></tr></thead>
 <tbody>
 <tr><td><code>randomize:dict:&lt;name&gt;</code></td><td class="desc">Source PK (replay-stable)</td><td class="desc">Per-row random pick with controlled cardinality.</td></tr>
 <tr><td><code>tokenize:dict:&lt;name&gt;</code></td><td class="desc">Source value (HMAC)</td><td class="desc">Stable per-value surrogates — the <em>same</em> input value maps to the same dict entry in every table and column.</td></tr>
 </tbody>
-</table>
+</table></div>
 <p>The distinction is the point: <code>randomize:dict</code> can send two rows with the same value but different PKs to different entries, whereas <code>tokenize:dict</code> guarantees every occurrence of a value (anywhere) maps to the same surrogate — so analytics joins on the redacted column stay coherent. Dictionaries must be declared in YAML; a CLI reference to an undeclared dict name refuses at parse time.</p>
 
 <h2 id="determinism">Determinism <a class="hlink" href="#determinism" aria-label="Permalink to this section">#</a></h2>
 <p>Redaction output is deterministic, which is what makes it safe to re-run — CDC resume and backup → restore reproduce identical surrogates on the same data. There are four contracts:</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Semantics</th><th>Strategies</th><th>Guarantee</th></tr></thead>
 <tbody>
 <tr><td class="desc">Stateless</td><td class="desc"><code>null</code>, <code>static:</code>, <code>truncate:</code>, <code>hash:sha256</code>, all <code>mask:*</code></td><td class="desc">Same input → same output on any sluice run, anywhere.</td></tr>
@@ -132,7 +132,7 @@
 <tr><td class="desc">PK-keyed replay-stable</td><td class="desc"><code>randomize:*</code> (incl. <code>randomize:dict</code>)</td><td class="desc">Same source row (table + column + PK) → same output across re-runs.</td></tr>
 <tr><td class="desc">Input-keyed cross-stream</td><td class="desc"><code>tokenize:dict</code></td><td class="desc">Same input value + same key → same output across tables, columns, and streams.</td></tr>
 </tbody>
-</table>
+</table></div>
 <p>To correlate a redacted column <em>across</em> tables (a join key), use <code>tokenize:dict</code> or <code>hash:hmac-sha256</code>; the other strategies don't carry cross-table consistency on the same source value.</p>
 
 <h2 id="keyset">The operator keyset (--keyset-source) <a class="hlink" href="#keyset" aria-label="Permalink to this section">#</a></h2>

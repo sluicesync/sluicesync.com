@@ -74,12 +74,12 @@
 <div class="note warn"><strong>Gotcha: a fanned-out schema with no matching table fails the whole run.</strong> If any selected schema has no table matching <code>--include-table</code> (a stray empty <code>public</code> is the classic case), the run ends in a loud non-zero error even though every <em>other</em> schema copied fine. Pair <code>--all-schemas --include-table …</code> with <code>--exclude-schema public</code> (or list exactly the schemas you mean with <code>--include-schema</code>) so no empty namespace is in scope.</div>
 
 <h3 id="mapping-summary">Summary <a class="hlink" href="#mapping-summary" aria-label="Permalink to this section">#</a></h3>
-<table><thead><tr><th>Scenario</th><th>Target namespaces</th><th>Auto-create target DB?</th><th>Same-named tables</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Scenario</th><th>Target namespaces</th><th>Auto-create target DB?</th><th>Same-named tables</th></tr></thead><tbody>
 <tr><td class="desc">Single schema (default)</td><td class="desc">The one schema in the DSN → one database</td><td class="desc">No — database must pre-exist on plain MySQL</td><td class="desc">n/a (one namespace)</td></tr>
 <tr><td class="desc">Fan-out (<code>--all-schemas</code> / <code>--include-schema</code>)</td><td class="desc">Each schema → its own same-named database</td><td class="desc">Yes on plain MySQL (keyspace must pre-exist on PlanetScale)</td><td class="desc">Stay separate — never merged</td></tr>
 <tr><td class="desc">Flatten (<code>--map-schema a=x --map-schema b=x</code>)</td><td class="desc">Refused</td><td class="desc">—</td><td class="desc">—</td></tr>
 <tr><td class="desc"><code>--include-table</code> under fan-out</td><td class="desc">Filter applied per-schema</td><td class="desc">Per the fan-out row above</td><td class="desc">One copy per schema that has the table</td></tr>
-</tbody></table>
+</tbody></table></div>
 
 <h2 id="planetscale">PlanetScale / Vitess keyspaces <a class="hlink" href="#planetscale" aria-label="Permalink to this section">#</a></h2>
 <div class="note warn"><strong>On a PlanetScale/Vitess target, the DSN's database is the <em>keyspace</em>, and sluice does NOT auto-create it.</strong> Unlike plain MySQL — where a fan-out target database is created for you — a PlanetScale/Vitess keyspace must be <strong>pre-provisioned</strong>. <code>pscale database create app</code> gives you the default keyspace (named after the database); create more with <code>pscale keyspace create … --wait</code>. A missing keyspace fails loudly <em>before any data moves</em>:

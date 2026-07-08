@@ -34,10 +34,10 @@
 
 <h2 id="select">Selecting the flavor <a class="hlink" href="#select" aria-label="Permalink to this section">#</a></h2>
 <p>Two driver names register the VStream-backed flavor; pick by deployment shape:</p>
-<table><thead><tr><th>Driver</th><th class="desc">Use for</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Driver</th><th class="desc">Use for</th></tr></thead><tbody>
 <tr><td><code>planetscale</code></td><td class="desc">PlanetScale's hosted MySQL. TLS by default; auth is HTTP Basic where the username/password are your service-token <em>name</em> and <em>value</em>; the default shard convention is <code>-</code>.</td></tr>
 <tr><td><code>vitess</code></td><td class="desc">A Vitess cluster you run yourself (etcd + vtctld + vtgate + vttablets). Shares PlanetScale's VStream engine code; point it at your vtgate.</td></tr>
-</tbody></table>
+</tbody></table></div>
 <pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres    <span class="f">--target</span> "$SLUICE_TARGET"</code></pre>
@@ -54,21 +54,21 @@
 
 <h2 id="sharding">Sharded keyspaces <a class="hlink" href="#sharding" aria-label="Permalink to this section">#</a></h2>
 <p>All optional; ride on the standard MySQL DSN as extra <code>?key=value</code> parameters:</p>
-<table><thead><tr><th>DSN param</th><th class="desc">Purpose</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>DSN param</th><th class="desc">Purpose</th></tr></thead><tbody>
 <tr><td><code>vstream_shards</code></td><td class="desc">Comma-separated shard list (default <code>-</code>; e.g. <code>vstream_shards=-80,80-</code>). vttestserver dev clusters typically use <code>0</code>.</td></tr>
 <tr><td><code>vstream_auto_discover_shards=true</code></td><td class="desc">Discover the layout at Open time via <code>SHOW VITESS_SHARDS LIKE '&lt;keyspace&gt;/%'</code>. Mutually exclusive with <code>vstream_shards</code>; recommended when the layout isn't known statically.</td></tr>
 <tr><td><code>vstream_endpoint</code></td><td class="desc">Override the vtgate gRPC endpoint. Default <code>&lt;sql-host&gt;:443</code>, matching PlanetScale's convention.</td></tr>
 <tr><td><code>vstream_transport</code></td><td class="desc"><code>tls</code> (default) or <code>plaintext</code> (localhost vttestserver / dev only).</td></tr>
 <tr><td><code>vstream_auth</code></td><td class="desc"><code>basic</code> (default) or <code>none</code> (vanilla Vitess with no VStream auth).</td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>A mid-stream reshard surfaces as a typed <code>ShardLayoutChangedError</code>; the continuous-sync streamer's outer loop reopens the reader on the new layout automatically.</p>
 
 <h2 id="cold-start">VStream cold-start throughput <a class="hlink" href="#cold-start" aria-label="Permalink to this section">#</a></h2>
 <p>The snapshot copy is bounded differently from a native-MySQL copy because vtgate forces a single cross-region-RTT-bound INSERT connection (it blocks <code>LOAD DATA</code>). Two axes widen it:</p>
-<table><thead><tr><th>Flag</th><th class="desc">Axis</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Flag</th><th class="desc">Axis</th></tr></thead><tbody>
 <tr><td><code>--copy-fanout-degree</code></td><td class="desc"><strong>Write</strong> fan-out (ADR-0097, PlanetScale-MySQL <em>target</em>): PK-hash-partition the incoming snapshot row stream out to N concurrent batched-INSERT writers, each on its own connection. <code>0</code> = auto (4); <code>1</code> = serial. Bounded by the target connection budget.</td></tr>
 <tr><td><code>--vstream-copy-table-parallelism</code></td><td class="desc"><strong>Read</strong> axis (ADR-0099, Vitess/PlanetScale source): the number of concurrent single-table COPY streams the auto-shard cold-copy runs. <code>0</code> = fall back to the DSN <code>vstream_copy_table_parallelism</code> param, then the engine default (1 = serial). An explicit flag wins over the DSN param.</td></tr>
-</tbody></table>
+</tbody></table></div>
 <div class="note">The generic <code>--table-parallelism</code> / <code>--bulk-parallelism</code> cold-start knobs are <strong>inert on a VStream source</strong> (setting one emits a one-time WARN). Use the two flags above instead. <code>--copy-table-parallelism</code> is for self-managed non-Vitess MySQL, not PlanetScale.</div>
 
 <h2 id="warm-resume">Warm-resume &amp; auto-resnapshot <a class="hlink" href="#warm-resume" aria-label="Permalink to this section">#</a></h2>

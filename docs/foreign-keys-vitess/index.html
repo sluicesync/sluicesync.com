@@ -55,11 +55,11 @@
 <p>Once it's on, no special sluice flag is needed: sluice's normal foreign-key DDL is accepted and the constraints are created as usual (leave <code>--skip-foreign-keys</code> off). Enable it <em>before</em> you migrate, with no open deploy requests. See the region-move guide's <a href="/docs/planetscale-region-move/#notes">foreign-key note</a> for the full PlanetScale-side caveats (cyclic <code>CASCADE</code> FKs are unsupported; deploy requests don't validate pre-existing rows).</p>
 
 <h2 id="choosing">Which to use <a class="hlink" href="#choosing" aria-label="Permalink to this section">#</a></h2>
-<table><thead><tr><th>Target</th><th>Foreign keys?</th><th>Strategy</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Target</th><th>Foreign keys?</th><th>Strategy</th></tr></thead><tbody>
 <tr><td class="desc">Sharded</td><td class="desc">Can't be enforced cross-shard</td><td class="desc"><strong>Skip</strong> — <code>--skip-foreign-keys</code> (columns stay indexed)</td></tr>
 <tr><td class="desc">Unsharded</td><td class="desc">Wanted</td><td class="desc"><strong>Enable FK support</strong> in Settings → General, then migrate normally</td></tr>
 <tr><td class="desc">Unsharded</td><td class="desc">Not wanted / managed elsewhere</td><td class="desc"><strong>Skip</strong> — <code>--skip-foreign-keys</code></td></tr>
-</tbody></table>
+</tbody></table></div>
 <div class="note">The two strategies are not combined. <code>--skip-foreign-keys</code> means <strong>no FK DDL at all</strong> — it doesn't emit constraints for an FK-enabled database to accept. Enable FK support <em>or</em> skip; pick one per target.</div>
 
 <h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>

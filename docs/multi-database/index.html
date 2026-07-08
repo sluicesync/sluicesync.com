@@ -32,11 +32,11 @@
     
 <p>By default <code>migrate</code> and <code>sync start</code> move the one database (MySQL) or schema (Postgres) named in the source DSN. The multi-namespace flags move <strong>all</strong> of a server's databases, or all of a Postgres source's schemas, in a single run — snapshot and CDC both — fanning each source namespace out to a <strong>same-named</strong> target namespace. Reach for this with a multi-tenant MySQL server (one database per tenant), a Postgres database holding several application schemas, or any "migrate the whole server" job.</p>
 <p>The unifying idea is that <em>a MySQL database is the rough equivalent of a Postgres schema</em>. So there's one internal routing with two spellings: use the <code>--*-database</code> form on a <strong>MySQL source</strong> and the <code>--*-schema</code> form on a <strong>Postgres source</strong>. They're synonyms — mixing both spellings in one invocation is a loud error.</p>
-<table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody>
 <tr><td><code>--all-databases</code> / <code>--all-schemas</code></td><td class="desc">Every non-system namespace on the source.</td></tr>
 <tr><td><code>--include-database</code> / <code>--include-schema</code></td><td class="desc">Only these (comma-separated, repeatable; glob patterns allowed, e.g. <code>app_*</code>).</td></tr>
 <tr><td><code>--exclude-database</code> / <code>--exclude-schema</code></td><td class="desc">Every non-system namespace except these.</td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>Within a form, include / exclude / all are mutually exclusive. System namespaces are always excluded (<code>information_schema</code>, <code>performance_schema</code>, <code>mysql</code>, <code>sys</code> on MySQL; <code>pg_catalog</code>, <code>information_schema</code>, <code>pg_toast</code>, <code>pg_temp*</code> on Postgres). When any namespace-scope flag is set, the source DSN's database/schema is <strong>optional</strong> — sluice connects to the server (or, on PG, to the database) rather than a single namespace.</p>
 
 <h2 id="pg-schemas">Postgres source: every schema in one run <a class="hlink" href="#pg-schemas" aria-label="Permalink to this section">#</a></h2>

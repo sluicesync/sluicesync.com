@@ -93,7 +93,7 @@ Postgres Essential, Render Basic, Supabase free), use <span class="f">--source-d
 
 <h2 id="slot-health">Slot health and telemetry <a class="hlink" href="#slot-health" aria-label="Permalink to this section">#</a></h2>
 <p>A logical slot moves through these states, visible in <code>pg_replication_slots.wal_status</code>:</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>wal_status</th><th>Meaning</th></tr></thead>
 <tbody>
 <tr><td><code>reserved</code></td><td class="desc">Healthy — all required WAL is on disk.</td></tr>
@@ -101,7 +101,7 @@ Postgres Essential, Render Basic, Supabase free), use <span class="f">--source-d
 <tr><td><code>unreserved</code></td><td class="desc">Required WAL has left <code>pg_wal</code> but is still recoverable.</td></tr>
 <tr><td><code>lost</code></td><td class="desc">Required WAL is gone. The slot exists but cannot be used — silent-loss-class for CDC.</td></tr>
 </tbody>
-</table>
+</table></div>
 <p>When sluice sees a slot in <code>unreserved</code> or <code>lost</code> state it refuses to start replication and points at the recovery path — <code>sluice slot drop</code> on the source, then restart with an empty position to force a fresh snapshot, and raise <code>max_slot_wal_keep_size</code> to prevent recurrence. After dropping the slot, get past the cold-start refusal on the (partially-streamed) target with <code>sync start --reset-target-data --yes</code> (clears sluice's state and drops the source-schema tables it manages, then re-snapshots; see <a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0023-reset-target-data.md">ADR-0023</a>).</p>
 <p>For proactive monitoring, sluice surfaces PG 14+ per-slot decode-spill counters (large transactions spilling the ReorderBuffer to disk — sustained spill is what can fill <code>pg_replslot/</code> and invalidate a slot) in two places:</p>
 <pre><code><span class="c"># sync health prints them when the source is PG 14+ and the slot has decoded</span>

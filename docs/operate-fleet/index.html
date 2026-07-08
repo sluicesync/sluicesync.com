@@ -81,13 +81,13 @@ restart:
 
 <h2 id="metrics">Observe it: Prometheus metrics and readiness <a class="hlink" href="#metrics" aria-label="Permalink to this section">#</a></h2>
 <p>Give each sync a <code>metrics-listen</code> address in the config (as above) and it binds a Prometheus-format <code>/metrics</code> endpoint plus <code>/healthz</code> (liveness) and <code>/readyz</code> (flips to 200 once the sync has finished its snapshot/warm-resume preamble and entered the apply loop). The exported <code>sluice_*</code> gauge families include:</p>
-<table><thead><tr><th>Gauge</th><th>What it tells you</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Gauge</th><th>What it tells you</th></tr></thead><tbody>
 <tr><td><code>sluice_sync_lag_seconds</code></td><td class="desc">Seconds the target trails the source's latest applied commit (engine-neutral apply lag; 0 when caught up).</td></tr>
 <tr><td><code>sluice_seconds_since_last_apply</code></td><td class="desc">Wall-clock seconds since this stream's most recent applier commit — the staleness signal.</td></tr>
 <tr><td><code>sluice_stream_known</code></td><td class="desc">Constant 1 per tracked stream; <code>count(sluice_stream_known)</code> gives a stream-count alert.</td></tr>
 <tr><td><code>sluice_apply_batch_size_current</code> / <code>_p95_seconds</code></td><td class="desc">The AIMD apply-batch controller's current target size and rolling p95 latency.</td></tr>
 <tr><td><code>sluice_target_*</code></td><td class="desc">Target CPU / memory / storage utilisation and replica lag — present only when <a href="/docs/planetscale-vitess/">PlanetScale telemetry</a> is configured.</td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>Because <code>/readyz</code> is a real readiness signal, it wires straight into a Kubernetes probe on the sync's metrics port:</p>
 <pre><code>readinessProbe:
   httpGet:
@@ -110,12 +110,12 @@ restart:
 
 <h2 id="alerts">Threshold alerts (advisory) <a class="hlink" href="#alerts" aria-label="Permalink to this section">#</a></h2>
 <p>The fleet can push threshold alerts to a webhook or Slack. Set the sink URL via its env var (<code>SLUICE_NOTIFY_WEBHOOK</code> / <code>SLUICE_NOTIFY_SLACK</code>), then arm one or more thresholds. Alerts are edge-triggered, cooldown'd (<code>--notify-cooldown</code>, default 15m), and <strong>advisory + failure-isolated</strong> — a dead sink is logged and swallowed, never affecting the sync:</p>
-<table><thead><tr><th>Threshold</th><th>Fires when…</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Threshold</th><th>Fires when…</th></tr></thead><tbody>
 <tr><td><code>--notify-sync-lag-seconds</code></td><td class="desc">sluice's own apply lag (<code>sluice_sync_lag_seconds</code>) is at or above N. <strong>Ungated</strong> — works on MySQL and Postgres alike, needing only a sink.</td></tr>
 <tr><td><code>--notify-lag-seconds</code></td><td class="desc">The target's control-plane replica lag is at or above N. Requires PlanetScale telemetry.</td></tr>
 <tr><td><code>--notify-storage-util</code> / <code>--notify-cpu-util</code> / <code>--notify-mem-util</code></td><td class="desc">Target utilisation (0–1 fraction) is at or above the given level. Requires PlanetScale telemetry.</td></tr>
 <tr><td><code>--notify-storage-growth-per-min</code></td><td class="desc">Storage is climbing at or above N fraction-of-capacity per minute — a pre-grow early warning. Requires telemetry.</td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>All the util / control-plane-lag / growth rules need a <a href="/docs/planetscale-vitess/">PlanetScale telemetry</a> provider (<code>--planetscale-org</code> plus the metrics-token flags); only <code>--notify-sync-lag-seconds</code> works without it. The same alerter set is also available on the standalone <a href="/docs/commands/#metrics-watch">metrics-watch</a> probe.</p>
 
 <h2 id="next-steps">Next steps <a class="hlink" href="#next-steps" aria-label="Permalink to this section">#</a></h2>

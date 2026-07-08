@@ -32,7 +32,7 @@
     
 <h2 id="connection-strings">Connection strings <a class="hlink" href="#connection-strings" aria-label="Permalink to this section">#</a></h2>
 <p>Every data-moving command takes a source and target driver + DSN:</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Engine</th><th>Driver name</th><th>DSN format</th></tr></thead>
 <tbody>
 <tr><td>MySQL</td><td><code>mysql</code></td><td><code>user:pass@tcp(host:3306)/dbname</code></td></tr>
@@ -44,17 +44,17 @@
 <tr><td>Postgres (slot-less)</td><td><code>postgres-trigger</code></td><td>Same as <code>postgres</code>; pairs with <a href="/docs/commands/#trigger">trigger setup</a>.</td></tr>
 <tr><td>SQLite / D1 (CDC)</td><td><code>sqlite-trigger</code> / <code>d1-trigger</code></td><td>Trigger-based continuous CDC over a SQLite file / live D1; pair with <a href="/docs/commands/#trigger">trigger setup --source-driver</a>.</td></tr>
 </tbody>
-</table>
+</table></div>
 
 <h2 id="env-vars">Environment variables <a class="hlink" href="#env-vars" aria-label="Permalink to this section">#</a></h2>
 <p>Keep credentials out of your shell history by passing DSNs via the environment:</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Variable</th><th>Equivalent flag</th></tr></thead>
 <tbody>
 <tr><td><code>SLUICE_SOURCE</code></td><td><code>--source</code></td></tr>
 <tr><td><code>SLUICE_TARGET</code></td><td><code>--target</code></td></tr>
 </tbody>
-</table>
+</table></div>
 
 <h2 id="config-file">YAML config file <a class="hlink" href="#config-file" aria-label="Permalink to this section">#</a></h2>
 <p>For anything beyond a handful of flags, pass a YAML file with <code>--config</code> / <code>-c</code>. CLI flags take
@@ -88,7 +88,7 @@ dictionaries:
 
 <h2 id="global-flags">Global flags <a class="hlink" href="#global-flags" aria-label="Permalink to this section">#</a></h2>
 <p>These apply to every command:</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Flag</th><th>Default</th><th>Purpose</th></tr></thead>
 <tbody>
 <tr><td><code>--config</code>, <code>-c</code></td><td>—</td><td class="desc">Path to a YAML config file.</td></tr>
@@ -101,13 +101,13 @@ dictionaries:
 <tr><td><code>--max-memory</code></td><td>off</td><td class="desc">Soft ceiling on the Go heap (e.g. <code>2GiB</code>, <code>512MiB</code>), applied via <code>SetMemoryLimit</code> at startup to bound RSS. Unlike <code>--max-buffer-bytes</code> (raw buffered bytes only), this bounds the whole heap. Honors the <code>GOMEMLIMIT</code> env var when unset. (v0.99.10)</td></tr>
 <tr><td><code>--version</code>, <code>-V</code></td><td>—</td><td class="desc">Print version and exit.</td></tr>
 </tbody>
-</table>
+</table></div>
 
 <div class="note warn"><strong>Migrating legacy MySQL data?</strong> sluice forces a strict <code>sql_mode</code> on every MySQL connection to close the silent-clamp / silent-zero-date class. Data that was only accepted under a relaxed mode (pre-5.7 zero-dates, silently-truncated values) will refuse loudly — pass <code>--mysql-sql-mode=''</code> to fall through to the server default. Zero / partial dates specifically are governed by <code>--zero-date</code> (default <code>error</code>): use <code>--zero-date=null</code> to carry them as NULL or <code>--zero-date=epoch</code> to substitute <code>1970-01-01</code> rather than refusing.</div>
 
 <h2 id="dsn-tuning">Source-DSN tuning parameters <a class="hlink" href="#dsn-tuning" aria-label="Permalink to this section">#</a></h2>
 <p>A handful of throughput / observability knobs are passed as query parameters on the <strong>source DSN</strong> rather than as CLI flags — they are engine-specific and parsed inside the engine, so they're stripped before reaching the database session. Append them to the source connection string (e.g. <code>...&amp;vstream_copy_table_parallelism=4</code>).</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Parameter</th><th>Applies to</th><th>Purpose</th></tr></thead>
 <tbody>
 <tr><td><code>copy_table_parallelism=N</code></td><td>native MySQL source</td><td class="desc">ADR-0101/0102 (v0.99.70–71): cold-copy <code>N</code> tables concurrently under one FTWRL window, each a consistent-snapshot reader. Composes with <code>--copy-fanout-degree</code> for W&times;D total write concurrency. Absent / <code>0</code> / <code>1</code> = the serial single-snapshot path. Falls back to serial (loud WARN) without the <code>RELOAD</code> privilege.</td></tr>
@@ -115,7 +115,7 @@ dictionaries:
 <tr><td><code>vstream_copy_single_stream=true</code></td><td>VStream source</td><td class="desc">ADR-0095 (v0.99.63): opt out of the auto-shard VStream COPY and restore the legacy single interleaved stream (and its ADR-0071 memory-refusal floor). Auto-shard is <strong>on by default</strong> for a fresh cold-start of more than one table.</td></tr>
 <tr><td><code>vstream_idle_warn_timeout=DUR</code></td><td>VStream source</td><td class="desc">v0.99.43: tune the idle-stall WARN that fires when the source is alive (heartbeats flowing) but sending no change events — the throttled-or-idle signal. Default <code>30s</code>; <code>0</code> disables the WARN only (the hard liveness/progress guards are unaffected).</td></tr>
 </tbody>
-</table>
+</table></div>
 
 <h2 id="metrics">Prometheus <code>/metrics</code> export <a class="hlink" href="#metrics" aria-label="Permalink to this section">#</a></h2>
 <p>Pass <code>--metrics-listen ADDR</code> to <a href="/docs/commands/#sync-start">sync start</a> (or <a href="/docs/commands/#metrics-watch">metrics-watch</a>) to bind a Prometheus-format <code>/metrics</code> endpoint (plus <code>/readyz</code> on <code>sync start</code>) for the life of the process. Beyond the stream's apply/throughput counters it exports:</p>

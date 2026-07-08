@@ -64,10 +64,10 @@
 
 <h2 id="verify">4. Verify the data landed <a class="hlink" href="#verify" aria-label="Permalink to this section">#</a></h2>
 <p>After a migration (or once a <a href="/docs/zero-downtime-cutover/">sync</a> has caught up), <code>verify</code> compares the data itself. It has a depth ladder — start cheap, escalate only if you need stronger guarantees:</p>
-<table><thead><tr><th>Depth</th><th>What it does</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Depth</th><th>What it does</th></tr></thead><tbody>
 <tr><td><code>--depth count</code> (default)</td><td class="desc">Per-table row-count comparison. Fast, catches whole-table and bulk-row loss.</td></tr>
 <tr><td><code>--depth sample</code></td><td class="desc">Counts <em>plus</em> per-table sampled-row content hashes — ~99% confidence of catching a 5%+ corruption rate at the default 100 rows/table. Raise <code>--sample-rows-per-table</code> for rarer anomalies; <code>--strict-hash</code> switches the row hash from MD5 to SHA-256.</td></tr>
-</tbody></table>
+</tbody></table></div>
 <pre><code><span class="c"># fast count check, CI-gated (non-zero exit on mismatch)</span>
 <span class="k">sluice</span> verify <span class="f">--source-driver</span> mysql <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" <span class="f">--depth</span> count

@@ -34,18 +34,18 @@
 
 <h2 id="the-flag">The control: --schema-changes <a class="hlink" href="#the-flag" aria-label="Permalink to this section">#</a></h2>
 <p>A single tristate flag on <code>sync start</code> (and per-sync in a <code>sync run</code> fleet spec) governs the behavior, introduced in <a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0091-default-on-schema-change-forwarding.md">ADR-0091</a>:</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Mode</th><th>Behavior</th></tr></thead>
 <tbody>
 <tr><td><code>--schema-changes=forward</code> <em>(default)</em></td><td class="desc">Apply every unambiguous source schema change on the target automatically, logging each applied DDL at INFO. The sync stays online through routine schema evolution.</td></tr>
 <tr><td><code>--schema-changes=refuse</code></td><td class="desc">The conservative pre-v0.92 behavior: any source DDL surfaces loudly with a structured drift diff and the drained-model recovery hint. For operators who gate DDL through a separate change-management process.</td></tr>
 </tbody>
-</table>
+</table></div>
 <div class="note"><strong>This is a behavior change on upgrade.</strong> A stream that previously refused on source DDL now forwards it. Set <code>--schema-changes=refuse</code> to keep the old drained-model default. Note also that <code>--schema-changes</code> is a no-op under Shape A (<code>--inject-shard-column</code>): the multi-shard boundary router already forwards every shape via its lease. The older <code>--forward-schema-add-column</code> boolean is deprecated — forwarding is on by default and covers every shape, so the flag is subsumed; setting it logs a deprecation warning and forwards.</div>
 
 <h2 id="what-forwards">What forwards, by source engine <a class="hlink" href="#what-forwards" aria-label="Permalink to this section">#</a></h2>
 <p>Under <code>forward</code>, the intercept can emit any shape's DDL, but a change only reaches the target if the source's CDC stream actually carries its detail on the wire. Postgres logical replication (pgoutput) carries less than MySQL's <code>information_schema</code> re-read, so the honest matrix differs by <em>source</em> engine. This is the ground-truth table from ADR-0091 §1d — do not assume a shape forwards without checking it:</p>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Shape</th><th>MySQL source</th><th>Postgres source</th></tr></thead>
 <tbody>
 <tr><td>ADD COLUMN</td><td class="desc">forwards</td><td class="desc">forwards</td></tr>
@@ -58,7 +58,7 @@
 <tr><td>RENAME COLUMN</td><td class="desc">refuses (§rename)</td><td class="desc">forwards via attnum<sup>4</sup></td></tr>
 <tr><td>RENAME TABLE / multi-shape combo</td><td class="desc">refuses</td><td class="desc">refuses</td></tr>
 </tbody>
-</table>
+</table></div>
 <p style="font-size:0.9em">
 <sup>1</sup> pgoutput's relation message carries only column name + type + the replica-identity key flag — no nullability flag, no secondary-index or CHECK metadata. The wire never signals these on a Postgres source, so they produce no boundary to forward. A resulting incompatibility surfaces as a loud apply error on the next affected row, not silent corruption.<br>
 <sup>2</sup> sluice decodes rows by column name, never by position, so a pure reorder needs no DDL — it is a safe no-op.<br>

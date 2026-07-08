@@ -130,7 +130,7 @@ function slugify(s) {
 function processHeadings(body) {
   const toc = [];
   const seen = new Set();
-  const html = body.replace(/<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/g, (_m, tag, attrs, inner) => {
+  const withHeadings = body.replace(/<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/g, (_m, tag, attrs, inner) => {
     const text = inner.replace(/<[^>]+>/g, "").trim();
     let id = (attrs.match(/id="([^"]+)"/) || [])[1];
     if (!id) {
@@ -143,6 +143,15 @@ function processHeadings(body) {
     if (tag === "h2") toc.push({ id, text });
     return `<${tag}${attrs}>${inner} <a class="hlink" href="#${id}" aria-label="Permalink to this section">#</a></${tag}>`;
   });
+  // Wrap every table in a horizontal-scroll container so a wide table scrolls
+  // WITHIN its box instead of widening the whole page (the mobile-overflow /
+  // zoom-out-blank-space bug). The table keeps normal table layout; the wrapper
+  // div is the scroll container. Idempotent enough for our authored bodies
+  // (no nested tables, no pre-wrapped tables).
+  const html = withHeadings.replace(
+    /<table(\s[^>]*)?>([\s\S]*?)<\/table>/g,
+    '<div class="table-scroll"><table$1>$2</table></div>',
+  );
   return { html, toc };
 }
 

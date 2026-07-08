@@ -58,20 +58,20 @@
 <span class="k">sluice</span> backup full <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...' \
     <span class="f">--output-dir</span> /var/backups/app <span class="f">--chain-slot</span> \
     <span class="f">--encrypt</span> <span class="f">--encryption-passphrase-env</span> SLUICE_BACKUP_PASS</code></pre>
-<table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
 <tr><td><code>--encryption-passphrase-env</code></td><td class="desc">Read the passphrase from the named environment variable. Recommended for production.</td></tr>
 <tr><td><code>--encryption-passphrase-file</code></td><td class="desc">Read the passphrase from a file path (a trailing newline is trimmed). Best for secrets-manager integrations — 1Password CLI, AWS Secrets Manager, etc.</td></tr>
 <tr><td><code>--encryption-passphrase</code></td><td class="desc">Inline passphrase. <strong>Deprecated for production</strong> — it shows up in shell history. Use one of the two above.</td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>sluice derives the KEK from the passphrase with <strong>Argon2id</strong> and records the salt + cost parameters in the chain-root manifest. Incrementals and restores re-derive the same KEK from those recorded params — so an operator only ever has to remember the passphrase, and every link in the chain unwraps consistently.</p>
 
 <h3 id="cloud-kms-mode">Cloud KMS mode <a class="hlink" href="#cloud-kms-mode" aria-label="Permalink to this section">#</a></h3>
 <p>Instead of a passphrase, wrap the CEK through a cloud KMS. The KMS <em>root</em> key never leaves the provider — sluice routes only wrap/unwrap calls:</p>
-<table><thead><tr><th>Flag</th><th>Provider</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Flag</th><th>Provider</th></tr></thead><tbody>
 <tr><td><code>--kms-key-arn</code></td><td class="desc">AWS KMS key ARN, alias ARN, or <code>alias/name</code>. Pair with <code>--kms-region</code> to override region resolution. Auth follows the AWS SDK (env / profile / instance role).</td></tr>
 <tr><td><code>--gcp-kms-key-resource</code></td><td class="desc">GCP Cloud KMS crypto-key resource (<code>projects/.../cryptoKeys/KEY</code>). Auth via Application Default Credentials.</td></tr>
 <tr><td><code>--azure-key-vault-id</code></td><td class="desc">Azure Key Vault key identifier URL. Override the wrap algorithm with <code>--azure-wrap-algorithm</code> (default <code>RSA-OAEP-256</code>; HSM-backed AES keys need <code>A256KW</code>). Auth via <code>DefaultAzureCredential</code>.</td></tr>
-</tbody></table>
+</tbody></table></div>
 <pre><code><span class="c"># full backup to R2, envelope-encrypted under an AWS KMS key</span>
 <span class="k">sluice</span> backup full <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...' \
     <span class="f">--target</span> s3://my-bucket/app-chain \
@@ -98,12 +98,12 @@
 
 <h2 id="object-stores">Object stores <a class="hlink" href="#object-stores" aria-label="Permalink to this section">#</a></h2>
 <p>Swap <code>--output-dir</code> for <code>--target &lt;url&gt;</code> to write to an object store. Four schemes are supported:</p>
-<table><thead><tr><th>Scheme</th><th>Destination</th></tr></thead><tbody>
+<div class="table-scroll"><table><thead><tr><th>Scheme</th><th>Destination</th></tr></thead><tbody>
 <tr><td><code>s3://bucket/prefix</code></td><td class="desc">Amazon S3 or any S3-compatible provider.</td></tr>
 <tr><td><code>gs://bucket/prefix</code></td><td class="desc">Google Cloud Storage.</td></tr>
 <tr><td><code>azblob://container/prefix</code></td><td class="desc">Azure Blob Storage.</td></tr>
 <tr><td><code>file:///path</code></td><td class="desc">Local filesystem (the URL form of <code>--output-dir</code>).</td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>For <strong>S3-compatible</strong> providers — Cloudflare R2, Backblaze B2, MinIO, Wasabi, Tigris — an <code>s3://</code> URL takes three extra knobs: <code>--backup-endpoint</code> (the provider's endpoint URL), <code>--backup-region</code>, and <code>--backup-path-style</code> (bucket-in-path addressing, which most non-AWS providers require). Credentials follow the cloud SDK's normal resolution (<code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code> for any S3-compatible endpoint). These knobs apply verbatim to <code>backup incremental</code>, <code>stream</code>, <code>verify</code>, <code>prune</code>, <code>compact</code>, and <code>restore</code> too.</p>
 <pre><code><span class="c"># full backup to Cloudflare R2 (an S3-compatible store)</span>
 <span class="k">sluice</span> backup full <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...' \
