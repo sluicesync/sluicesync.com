@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foreign keys on a Vitess / PlanetScale target — sluice docs</title>
+<meta name="description" content="Migrating or syncing a foreign-key-bearing source into Vitess or PlanetScale MySQL — the two strategies (skip-and-index, or enable FK support) and how to choose.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/foreign-keys-vitess/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk active" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Reference</div><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Foreign keys on a Vitess / PlanetScale target</h1>
+    <p class="subtitle">Migrating or syncing a foreign-key-bearing source into Vitess or PlanetScale MySQL — the two strategies (skip-and-index, or enable FK support) and how to choose.</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#why">Why Vitess is different</a></li><li><a href="#skip">Strategy 1 — skip the constraints, keep the columns indexed</a></li><li><a href="#enable">Strategy 2 — enable FK support on an unsharded PlanetScale database</a></li><li><a href="#choosing">Which to use</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>When the target is <strong>Vitess</strong> — or <strong>PlanetScale MySQL</strong>, which is managed Vitess — foreign keys need a decision that a plain MySQL or Postgres target doesn't force on you. This guide covers why, the two strategies sluice supports, and which one to pick. It applies to both the one-shot <a href="/docs/commands/#migrate">migrate</a> and the <a href="/docs/commands/#sync-start">sync start</a> cold-start.</p>
+
+<h2 id="why">Why Vitess is different <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
+<p>Vitess treats foreign keys specially, for two reasons:</p>
+<ul>
+  <li><strong>Cross-shard FKs don't work.</strong> A sharded keyspace can't enforce a constraint whose parent and child rows live on different shards — there's no shard-spanning transaction to check referential integrity against.</li>
+  <li><strong>On PlanetScale, FK support is opt-in per database, and only on <em>unsharded</em> databases.</strong> By default PlanetScale rejects <code>FOREIGN KEY</code> DDL outright (Vitess answers with <code>VT10001</code>); you turn support on per database, and even then only when the database is unsharded.</li>
+</ul>
+<p>So migrating an FK-bearing source — a Postgres or MySQL database that <em>has</em> foreign keys — into Vitess/PlanetScale needs a call: skip the FKs, or turn FK support on. sluice supports both, and <strong>never silently drops a constraint</strong> — whichever path you take is explicit and logged.</p>
+
+<h2 id="skip">Strategy 1 — skip the constraints, keep the columns indexed <a class="hlink" href="#skip" aria-label="Permalink to this section">#</a></h2>
+<p><strong><code>--skip-foreign-keys</code></strong> (v0.99.198+, on <code>migrate</code> and <code>sync start</code>) skips creating the FK constraints on the target, but ensures each skipped FK's <strong>referencing column tuple is still indexed</strong>. It synthesizes a plain backing index <em>only</em> when no existing target index already covers those columns as a left-prefix — never a redundant one.</p>
+<div class="note"><strong>Why the index matters.</strong> On a MySQL/Vitess target, MySQL auto-creates an FK's backing index only when the FK <em>itself</em> is created. A naive skip would therefore leave the referencing column unindexed and slow every join through it. sluice keeps the column indexed so joins stay fast — you get the transition without the performance cliff.</div>
+<p>This lets an existing FK-bearing database transition <strong>without stripping the FKs from the source first</strong>. It's the right choice for a <strong>sharded</strong> target (where FKs can't be enforced anyway) or any target where FKs are managed out-of-band.</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres    <span class="f">--source</span> 'postgres://user:pw@src/appdb?sslmode=require&amp;schema=app' \
+    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> 'USER:PASS@tcp(aws.connect.psdb.cloud:3306)/&lt;keyspace&gt;?tls=true' \
+    <span class="f">--skip-foreign-keys</span></code></pre>
+<p>The same flag is available on <code>sync start</code>, where it applies to the cold-start schema-apply — steady-state CDC apply never creates FKs, so nothing else changes. It is <strong>mutually exclusive with <code>--allow-degraded-fks</code></strong> (opposite intents — one skips FK creation, the other creates FKs and tolerates dirty source rows) and sluice refuses loudly if both are set. And it is <strong>never silent</strong>: each skipped FK is logged on its own line — the table, the referencing columns, and the synthesized or already-covering index — plus a summary count at the end of the run.</p>
+
+<h2 id="enable">Strategy 2 — enable FK support on an unsharded PlanetScale database <a class="hlink" href="#enable" aria-label="Permalink to this section">#</a></h2>
+<p>If the target is an <strong>unsharded</strong> PlanetScale database and you <em>want</em> the foreign keys, turn on <strong>"Allow foreign key constraints"</strong> in the database's <strong>Settings → General</strong> tab in the PlanetScale UI. This is a toggle, not a <code>pscale</code> flag — the operator sets it after creating the database, and it applies to unsharded databases only.</p>
+<p>Once it's on, no special sluice flag is needed: sluice's normal foreign-key DDL is accepted and the constraints are created as usual (leave <code>--skip-foreign-keys</code> off). Enable it <em>before</em> you migrate, with no open deploy requests. See the region-move guide's <a href="/docs/planetscale-region-move/#notes">foreign-key note</a> for the full PlanetScale-side caveats (cyclic <code>CASCADE</code> FKs are unsupported; deploy requests don't validate pre-existing rows).</p>
+
+<h2 id="choosing">Which to use <a class="hlink" href="#choosing" aria-label="Permalink to this section">#</a></h2>
+<table><thead><tr><th>Target</th><th>Foreign keys?</th><th>Strategy</th></tr></thead><tbody>
+<tr><td class="desc">Sharded</td><td class="desc">Can't be enforced cross-shard</td><td class="desc"><strong>Skip</strong> — <code>--skip-foreign-keys</code> (columns stay indexed)</td></tr>
+<tr><td class="desc">Unsharded</td><td class="desc">Wanted</td><td class="desc"><strong>Enable FK support</strong> in Settings → General, then migrate normally</td></tr>
+<tr><td class="desc">Unsharded</td><td class="desc">Not wanted / managed elsewhere</td><td class="desc"><strong>Skip</strong> — <code>--skip-foreign-keys</code></td></tr>
+</tbody></table>
+<div class="note">The two strategies are not combined. <code>--skip-foreign-keys</code> means <strong>no FK DDL at all</strong> — it doesn't emit constraints for an FK-enabled database to accept. Enable FK support <em>or</em> skip; pick one per target.</div>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/copy-table-subset/">Copy a subset of tables</a> — scope a migrate or sync to just the tables you choose; FK handling in context.</li>
+  <li><a href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a> — the full target-side setup for a Vitess/PlanetScale-MySQL destination.</li>
+  <li><a href="/docs/planetscale-region-move/">Move PlanetScale regions</a> — the FK-enablement note lives in its "Before you start" section.</li>
+  <li><a href="/docs/planetscale-postgres/">PlanetScale Postgres</a> — the other PlanetScale flavor, where FKs behave like normal Postgres.</li>
+  <li><a href="/docs/commands/#migrate">Command reference</a> — <code>--skip-foreign-keys</code>, <code>--allow-degraded-fks</code>, and every other flag, with defaults.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/copy-table-subset/">← Copy a subset of tables</a><a class="next" href="/docs/postgres-source-prep/">Prepare a Postgres source →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/foreign-keys-vitess/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

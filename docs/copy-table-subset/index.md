@@ -103,6 +103,8 @@ Two operational callouts. First, sync stop requires --target-driver and --target
 
 ## Foreign keys on a Vitess target
 
+See the full guide: Foreign keys on a Vitess / PlanetScale target — the two strategies (skip-and-index vs enable-FK-support) and how to choose. The short version:
+
 If your subset carries foreign keys and you're targeting PlanetScale/Vitess — where cross-shard FKs don't work and FK support is opt-in per database — --skip-foreign-keys (v0.99.198+) skips creating the FK constraints on the target while keeping each FK's referencing columns indexed. It synthesizes a backing index only when an existing target index doesn't already cover those columns as a left-prefix, so you transition an FK-bearing source without stripping the FKs from it first, and joins stay fast. Add it to the migrate or sync start command:
 
     sluice migrate \
