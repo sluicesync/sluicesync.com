@@ -44,6 +44,7 @@ const NAV = [
       { slug: "redact-pii", label: "Redact PII" },
       { slug: "import-sqlite-d1", label: "Import SQLite or Cloudflare D1" },
       { slug: "multi-database", label: "Migrate many databases or schemas" },
+      { slug: "copy-table-subset", label: "Copy a subset of tables" },
       { slug: "postgres-source-prep", label: "Prepare a Postgres source" },
       { slug: "managed-postgres-slotless", label: "Managed Postgres (slot-less)" },
       { slug: "planetscale-vitess", label: "PlanetScale & Vitess" },
@@ -162,6 +163,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "zero-downtime-cutover",
     "import-sqlite-d1",
     "multi-database",
+    "copy-table-subset",
     "how-sluice-copies",
     "verify-reconcile",
     "schema-changes",
@@ -1304,6 +1306,109 @@ sluice migrate \\
 </ul>
 `,
     prev: { href: "/docs/import-sqlite-d1/", label: "Import SQLite or Cloudflare D1" },
+    next: { href: "/docs/copy-table-subset/", label: "Copy a subset of tables" },
+  })
+);
+
+// ---- Guide: copy a subset of tables (cross-engine, with continuous sync) --
+write(
+  "copy-table-subset",
+  page({
+    slug: "copy-table-subset",
+    title: "Copy a subset of tables (cross-engine, with continuous sync)",
+    subtitle: "Copy one-to-several tables from an existing Postgres database to a PlanetScale MySQL/Vitess (or plain MySQL) target and keep just those continuously in sync.",
+    body: `
+<p>You don't have to move a whole database. <code>--include-table</code> / <code>--exclude-table</code> scope a <a href="/docs/commands/#migrate">migrate</a> or a <a href="/docs/commands/#sync-start">sync start</a> to just the tables you choose — for both the bulk copy <strong>and</strong> the CDC stream — so you can copy one-to-several tables from an existing Postgres database into a PlanetScale MySQL/Vitess (or plain MySQL) target and keep only those continuously in sync. This guide covers selecting the tables, how Postgres schemas map onto MySQL databases/keyspaces (the part people get surprised by), the PlanetScale keyspace prerequisite, and foreign-key handling for Vitess targets.</p>
+
+<h2 id="select">Select the tables</h2>
+<p>Two mutually-exclusive flags scope any run. Use one or the other, never both:</p>
+<ul>
+  <li><code>--include-table t1,t2</code> — copy <em>only</em> these (comma-separated, repeatable, and glob-aware, e.g. <code>app_*</code>).</li>
+  <li><code>--exclude-table t1,t2</code> — copy everything <em>except</em> these (same syntax).</li>
+</ul>
+<p>The scope is honored end to end: it filters the bulk copy, the VStream / logical-replication cold-start snapshot, <em>and</em> the live CDC apply. An excluded table in a large source is <strong>never even read</strong> — not merely "not written" — so scoping down a big source is cheap, not just tidy.</p>
+${pre(`sluice migrate \\
+    --source-driver postgres --source 'postgres://user:pw@src/appdb?sslmode=require&schema=app' \\
+    --target-driver mysql    --target 'root:pw@tcp(dst:3306)/app' \\
+    --include-table users,orders`)}
+
+<h2 id="schema-mapping">How Postgres schemas map to MySQL</h2>
+<p>This is the crux, and it surprises people: <strong>a Postgres <em>schema</em> and a MySQL <em>database</em> are the same namespace tier</strong>. So when the target is MySQL, a PG schema maps to a MySQL <strong>database</strong> — not to a table prefix, and never flattened silently into one place.</p>
+
+<h3 id="single-schema">Default — one schema in, one database out</h3>
+<p>By default the source DSN's <code>?schema=app</code> (or <code>public</code>) names the single namespace copied; every other schema on the source is ignored — there is <strong>no flattening</strong>. On a plain MySQL target the <strong>target database must already exist</strong>: sluice does not create it, and a missing one fails loudly rather than guessing:</p>
+${pre(`# target database 'app' must already exist on plain MySQL, or:
+#   Error 1049 (42000): Unknown database 'app'
+sluice migrate \\
+    --source-driver postgres --source 'postgres://user:pw@src/appdb?sslmode=require&schema=app' \\
+    --target-driver mysql    --target 'root:pw@tcp(dst:3306)/app' \\
+    --include-table users,orders`)}
+
+<h3 id="fan-out">Copy more exactly — each schema to its own database</h3>
+<p>If you want to bring several schemas across faithfully, fan them out: <code>--all-schemas</code> (every non-system schema) or <code>--include-schema app,reporting</code> (glob-aware). Each PG schema becomes an <strong>auto-created same-named MySQL database</strong>, and same-named tables in different schemas stay <strong>separate</strong> — <code>app.users</code> and <code>reporting.users</code> are two distinct target tables in two distinct databases, never merged. Use a target DSN with a trailing <code>/</code> and no database, so the run connects to the server rather than one database:</p>
+${pre(`sluice migrate \\
+    --source-driver postgres --source 'postgres://user:pw@src/appdb?sslmode=require' \\
+    --target-driver mysql    --target 'root:pw@tcp(dst:3306)/' \\
+    --include-schema app,reporting`)}
+<p>This is the "copy more of the database, exactly" answer: multiple target databases, one per schema. On PlanetScale each of those target databases is a <strong>keyspace</strong> — see <a href="#planetscale">the keyspace note below</a>, which changes the pre-creation rule.</p>
+
+<h3 id="no-flatten">Flattening many schemas into one database is refused</h3>
+<p>Merging two source schemas into a single target database is <strong>deliberately refused</strong>, because it would collide same-named tables and silently lose one. <code>--map-schema app=x --map-schema reporting=x</code> errors:</p>
+${pre(`many-to-one is refused; sluice never merges two source namespaces into one target`)}
+<p><code>--map-schema old=new</code> is a <strong>1:1 rename only</strong> — e.g. <code>--map-schema app=app_prod</code> routes one schema to one differently-named database. It is not a merge tool.</p>
+
+<h3 id="include-under-fanout"><code>--include-table</code> under fan-out is per-schema</h3>
+<p>When you combine table scoping with a fan-out, the table filter applies <strong>per schema, not globally</strong>. So <code>--all-schemas --include-table users</code> copies <em>both</em> <code>app.users</code> and <code>reporting.users</code> — the name is matched inside each schema independently.</p>
+<div class="note warn"><strong>Gotcha: a fanned-out schema with no matching table fails the whole run.</strong> If any selected schema has no table matching <code>--include-table</code> (a stray empty <code>public</code> is the classic case), the run ends in a loud non-zero error even though every <em>other</em> schema copied fine. Pair <code>--all-schemas --include-table …</code> with <code>--exclude-schema public</code> (or list exactly the schemas you mean with <code>--include-schema</code>) so no empty namespace is in scope.</div>
+
+<h3 id="mapping-summary">Summary</h3>
+<table><thead><tr><th>Scenario</th><th>Target namespaces</th><th>Auto-create target DB?</th><th>Same-named tables</th></tr></thead><tbody>
+<tr><td class="desc">Single schema (default)</td><td class="desc">The one schema in the DSN → one database</td><td class="desc">No — database must pre-exist on plain MySQL</td><td class="desc">n/a (one namespace)</td></tr>
+<tr><td class="desc">Fan-out (<code>--all-schemas</code> / <code>--include-schema</code>)</td><td class="desc">Each schema → its own same-named database</td><td class="desc">Yes on plain MySQL (keyspace must pre-exist on PlanetScale)</td><td class="desc">Stay separate — never merged</td></tr>
+<tr><td class="desc">Flatten (<code>--map-schema a=x --map-schema b=x</code>)</td><td class="desc">Refused</td><td class="desc">—</td><td class="desc">—</td></tr>
+<tr><td class="desc"><code>--include-table</code> under fan-out</td><td class="desc">Filter applied per-schema</td><td class="desc">Per the fan-out row above</td><td class="desc">One copy per schema that has the table</td></tr>
+</tbody></table>
+
+<h2 id="planetscale">PlanetScale / Vitess keyspaces</h2>
+<div class="note warn"><strong>On a PlanetScale/Vitess target, the DSN's database is the <em>keyspace</em>, and sluice does NOT auto-create it.</strong> Unlike plain MySQL — where a fan-out target database is created for you — a PlanetScale/Vitess keyspace must be <strong>pre-provisioned</strong>. <code>pscale database create app</code> gives you the default keyspace (named after the database); create more with <code>pscale keyspace create … --wait</code>. A missing keyspace fails loudly <em>before any data moves</em>:
+${pre(`Error 1105 (HY000): VT05003: unknown database 'app' in vschema`)}
+So an <code>--all-schemas</code> fan-out to PlanetScale requires <strong>every</strong> target keyspace to exist first — create them all before the run. Use <code>--target-driver planetscale</code> and a DSN of the form <code>…/&lt;keyspace&gt;?tls=true</code> (the PlanetScale MySQL DSN uses <code>?tls=true</code>, not the Postgres <code>sslmode=…</code>).</div>
+
+<h2 id="sync">Keep only the subset in sync</h2>
+<p>The same table scope carries onto <code>sync start</code>: it cold-copies <strong>only</strong> the included tables, then tails CDC for <strong>only</strong> those. An insert into an excluded table is never created or streamed on the target — the excluded table is outside the stream entirely (live-confirmed):</p>
+${pre(`sluice sync start --stream-id sub \\
+    --source-driver postgres   --source 'postgres://user:pw@src/appdb?sslmode=require&schema=app' \\
+    --target-driver planetscale --target 'root:pw@tcp(<keyspace>.<region>.psdb.cloud:3306)/<keyspace>?tls=true' \\
+    --include-table users`)}
+<p>Watch it, gate cutover on freshness, then drain and stop:</p>
+${pre(`sluice sync status --stream-id sub \\
+    --target-driver planetscale --target "$SLUICE_TARGET"
+
+sluice sync health --stream-id sub \\
+    --target-driver planetscale --target "$SLUICE_TARGET" --max-stale-seconds 30
+
+sluice sync stop --stream-id sub \\
+    --target-driver planetscale --target "$SLUICE_TARGET" --wait`)}
+<div class="note"><strong>Two operational callouts.</strong> First, <code>sync stop</code> requires <code>--target-driver</code> and <code>--target</code> — it reads the stream's state from the target, so it errors with a "missing flags" message without them. Second, a stopped <strong>Postgres</strong> stream leaves its replication slot behind on the source; drop it before starting a fresh stream (<code>SELECT pg_drop_replication_slot('sluice_slot');</code>) or sluice refuses loudly with <em>"replication slot already exists; drop it before starting"</em>. The Postgres source also needs <code>wal_level=logical</code> — see <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a>.</div>
+
+<h2 id="foreign-keys">Foreign keys on a Vitess target</h2>
+<p>If your subset carries foreign keys and you're targeting PlanetScale/Vitess — where cross-shard FKs don't work and FK support is opt-in per database — <strong><code>--skip-foreign-keys</code> (v0.99.198+)</strong> skips creating the FK constraints on the target while keeping each FK's referencing columns indexed. It synthesizes a backing index only when an existing target index doesn't already cover those columns as a left-prefix, so you transition an FK-bearing source <em>without stripping the FKs from it first</em>, and joins stay fast. Add it to the <code>migrate</code> or <code>sync start</code> command:</p>
+${pre(`sluice migrate \\
+    --source-driver postgres    --source 'postgres://user:pw@src/appdb?sslmode=require&schema=app' \\
+    --target-driver planetscale --target 'root:pw@tcp(<keyspace>.<region>.psdb.cloud:3306)/<keyspace>?tls=true' \\
+    --include-table users,orders \\
+    --skip-foreign-keys`)}
+<p>It is mutually exclusive with <code>--allow-degraded-fks</code> (opposite intents — one skips FK creation, the other creates FKs and tolerates dirty source rows), and it is never silent: each skipped FK is reported on its own log line (the table, the referencing columns, and the synthesized or already-covering index) plus a summary count. Alternatively, <strong>enable FK support on the PlanetScale database</strong> instead of skipping — turn on "Allow foreign key constraints" in the target database's Settings → General tab (unsharded databases only) so sluice's FK DDL is accepted; see the <a href="/docs/planetscale-region-move/#notes">region-move guide's foreign-key note</a>.</p>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/multi-database/">Migrate many databases or schemas</a> — the full fan-out story across every schema or database at once.</li>
+  <li><a href="/docs/planetscale-postgres/">PlanetScale Postgres</a>, <a href="/docs/planetscale-region-move/">Move PlanetScale regions</a>, and <a href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a> — the target-side setup for each PlanetScale flavor.</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — confirm only the tables you scoped landed, with matching <code>--include-table</code>.</li>
+  <li><a href="/docs/commands/#migrate">Command reference</a> — every flag named here, with defaults.</li>
+</ul>
+`,
+    prev: { href: "/docs/multi-database/", label: "Migrate many databases or schemas" },
     next: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
   })
 );
@@ -2007,7 +2112,7 @@ ${pre(`sluice trigger teardown \\
   <li><a href="/docs/getting-started/#trigger-cdc">Getting started: trigger-based CDC</a> — a worked slot-less walkthrough.</li>
 </ul>
 `,
-    prev: { href: "/docs/multi-database/", label: "Migrate many databases or schemas" },
+    prev: { href: "/docs/copy-table-subset/", label: "Copy a subset of tables" },
     next: { href: "/docs/managed-postgres-slotless/", label: "Managed Postgres (slot-less)" },
   })
 );
