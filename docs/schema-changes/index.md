@@ -32,9 +32,9 @@ ALTER NULLABILITY · forwards · refuses1 ·
 
 Column REORDER · no-op2 · no-op2 ·
 
-CREATE / DROP INDEX · refuses3 · refuses1 ·
+CREATE / DROP INDEX · refuses3 · never signaled on the wire — cannot forward; mirror manually1 ·
 
-ADD / DROP / MODIFY CHECK · refuses3 · refuses1 ·
+ADD / DROP / MODIFY CHECK · refuses3 · never signaled on the wire — cannot forward; mirror manually1 ·
 
 RENAME COLUMN · refuses (§rename) · forwards via attnum4 ·
 

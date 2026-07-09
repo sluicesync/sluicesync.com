@@ -60,6 +60,7 @@ const NAV = [
       { slug: "foreign-keys-vitess", label: "Foreign keys on Vitess" },
       { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
       { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
+      { slug: "planetscale-postgres-analytics-replica", label: "PlanetScale Postgres analytics replica" },
       { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
     ],
   },
@@ -196,6 +197,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "mysql-to-planetscale",
     "planetscale-postgres",
     "planetscale-postgres-upgrade",
+    "planetscale-postgres-analytics-replica",
     "operate-fleet",
     "encrypted-backups",
     "agent-skills",
@@ -536,7 +538,7 @@ ${cmd(
   <tr><td><code>--apply-batch-size</code></td><td class="desc">CDC changes per target tx, or <code>auto</code>. Default <code>auto</code> (v0.99.44, ADR-0089): the AIMD latency controller adapts the batch size within <code>[1, ceiling]</code> to a p95 target for >10× throughput over single-row apply. Ceilings: 1000 mysql/postgres, 100 planetscale. Pass <code>=1</code> for the conservative one-change-per-tx behavior. Tables with no usable identity key (no PK, no unique index) are never batched — each such change commits alone.</td></tr>
   <tr><td><code>--no-auto-tune</code></td><td class="desc">Disable the AIMD controller. <code>--apply-batch-size=N</code> then becomes a strictly static row cap (floor stays 1) instead of an adaptive ceiling. For workloads where you've hand-tuned the batch size and want no auto-adaptation.</td></tr>
   <tr><td><code>--apply-concurrency</code></td><td class="desc">CDC apply lane count <code>W</code> (ADR-0104/0105/0106; engine-general — MySQL <em>and</em> Postgres). The merged change stream is fanned across <code>W</code> in-order lanes by primary-key hash (same key → same lane → applied in source order, so dependent INSERT→UPDATE→DELETE never reorder), each lane committing concurrently on its own connection with its own AIMD batch controller. <code>0</code> (default, unset) = <code>auto:N</code> — the new fast-by-default adaptive concurrent path: Postgres <code>min(4, slot-budget)</code>, MySQL/PlanetScale a fixed 4. <code>1</code> = explicit serial opt-out (byte-identical to the pre-fast-by-default behaviour). <code>W&gt;1</code> honored verbatim. Exactly-once for keyed tables (the position advances only to a boundary durable across <em>all</em> lanes). An in-lane PlanetScale tx-killer (MySQL) or serialization/deadlock (Postgres) is recovered <em>in-lane</em> — split-and-retried idempotently, no stream restart.</td></tr>
-  <tr><td><code>--schema-changes</code></td><td class="desc"><code>forward</code> (default, ADR-0091) auto-applies unambiguous source DDL — ADD/DROP/ALTER COLUMN, CREATE/DROP INDEX, ADD/DROP/MODIFY CHECK — on the target so the sync stays online through schema evolution. <code>refuse</code> restores the conservative pre-v0.92 behavior: any source DDL surfaces loudly with the drained-model recovery hint. RENAME COLUMN and a computed/volatile DEFAULT on ADD COLUMN always refuse loudly. See the warn box below.</td></tr>
+  <tr><td><code>--schema-changes</code></td><td class="desc"><code>forward</code> (default, ADR-0091) auto-applies unambiguous source DDL — ADD/DROP/ALTER COLUMN, CREATE/DROP INDEX, ADD/DROP/MODIFY CHECK — on the target so the sync stays online through schema evolution (shape support; whether a given shape actually arrives depends on the source engine&#39;s CDC surface — see the per-source matrix in the schema-changes guide). <code>refuse</code> restores the conservative pre-v0.92 behavior: any source DDL surfaces loudly with the drained-model recovery hint. RENAME COLUMN and a computed/volatile DEFAULT on ADD COLUMN always refuse loudly. See the warn box below.</td></tr>
   <tr><td><code>--copy-fanout-degree</code></td><td class="desc">VStream/CDC snapshot cold-start (PlanetScale-MySQL target) only, ADR-0097: WRITE-side fan-out — the incoming snapshot row stream is PK-hash-partitioned out to N concurrent batched-INSERT writers, each on its own connection, to beat the single round-trip-bound INSERT connection vtgate forces. 0 = auto: 4; 1 = serial. Bounded by the target connection budget.</td></tr>
   <tr><td><code>--no-auto-resnapshot</code></td><td class="desc">Opt out of the automatic re-snapshot when a resume hits a purged/invalid source position (v0.99.51, ADR-0093). By default a resume from a position older than the source's retained binlogs — routine on PlanetScale's retention window — auto-recovers with a fresh cold-start re-snapshot; with this flag set, sluice instead fails loudly with the recovery commands named, so a full re-snapshot of very large tables is a deliberate choice.</td></tr>
   <tr><td><code>--inject-shard-column</code></td><td class="desc"><code>NAME=VALUE</code> — ADR-0048 Shape A discriminator column for consolidating a multi-shard Vitess source onto one target (per-shard streams pass distinct VALUEs). See the <a href="/docs/commands/#migrate">migrate</a> row.</td></tr>
@@ -547,9 +549,10 @@ ${cmd(
   <tr><td><code>--planetscale-metrics-token-id</code> / <code>--planetscale-metrics-token</code></td><td class="desc">PlanetScale service-token (granted <code>read_metrics_endpoints</code>) ID + secret for <code>--planetscale-org</code> telemetry. Set via the env vars <code>PLANETSCALE_METRICS_TOKEN_ID</code> / <code>PLANETSCALE_METRICS_TOKEN</code> — never on the command line; masked in all logging.</td></tr>
   <tr><td><code>--planetscale-metrics-db</code> / <code>--planetscale-metrics-branch</code></td><td class="desc">Database (defaults to the <code>--target</code> DSN's database) and branch (default <code>main</code>) the telemetry series is filtered to. Only consulted when <code>--planetscale-org</code> is set.</td></tr>
   <tr><td><code>--suppress-target-metrics-history</code></td><td class="desc">Disable persisting polled target-health metrics to the <code>sluice_target_metrics_history</code> table (7-day retention, pruned). History is <strong>on by default</strong> when telemetry is configured; it lets <code>sluice diagnose</code> show the recent CPU/mem/storage/lag trend without scripting the metrics API. Advisory + failure-isolated — never affects the sync.</td></tr>
-  <tr><td><code>--notify-webhook</code> / <code>--notify-slack</code></td><td class="desc">Threshold-alert sinks (also accepted by <a href="/docs/commands/#metrics-watch">metrics-watch</a>): a generic webhook (JSON POST) and/or a Slack incoming-webhook. Set the URLs via the env vars <code>SLUICE_NOTIFY_WEBHOOK</code> / <code>SLUICE_NOTIFY_SLACK</code>. Advisory + failure-isolated (a dead sink is logged-and-swallowed); require <code>--planetscale-org</code> telemetry plus at least one threshold below.</td></tr>
-  <tr><td><code>--notify-storage-util</code> / <code>--notify-cpu-util</code> / <code>--notify-mem-util</code></td><td class="desc">Alert when the target's storage / CPU / memory utilisation (a fraction <code>0–1</code>, <em>used/capacity</em>) is at or above the threshold. Edge-triggered + cooldown'd. <code>0</code> disables a rule.</td></tr>
-  <tr><td><code>--notify-lag-seconds</code> / <code>--notify-storage-growth-per-min</code></td><td class="desc">Alert when replica lag (seconds) is at or above the value, or when storage utilisation is <em>climbing</em> at or above this fraction-of-capacity per minute (a pre-grow early warning, e.g. <code>0.02</code> = +2%/min). <code>0</code> disables.</td></tr>
+  <tr><td><code>--notify-webhook</code> / <code>--notify-slack</code></td><td class="desc">Threshold-alert sinks (also accepted by <a href="/docs/commands/#metrics-watch">metrics-watch</a>): a generic webhook (JSON POST) and/or a Slack incoming-webhook. Set the URLs via the env vars <code>SLUICE_NOTIFY_WEBHOOK</code> / <code>SLUICE_NOTIFY_SLACK</code>. Advisory + failure-isolated (a dead sink is logged-and-swallowed). The sinks themselves are ungated — pair one with a threshold below; only the util / control-plane-lag / growth thresholds additionally need <code>--planetscale-org</code> telemetry.</td></tr>
+  <tr><td><code>--notify-sync-lag-seconds</code></td><td class="desc">Alert when sluice's own apply lag (<code>sluice_sync_lag_seconds</code>) is at or above N seconds. <strong>Ungated</strong> — works on MySQL and Postgres alike, needing only a sink; no PlanetScale telemetry. <code>0</code> disables.</td></tr>
+  <tr><td><code>--notify-storage-util</code> / <code>--notify-cpu-util</code> / <code>--notify-mem-util</code></td><td class="desc">Alert when the target's storage / CPU / memory utilisation (a fraction <code>0–1</code>, <em>used/capacity</em>) is at or above the threshold. Edge-triggered + cooldown'd. <code>0</code> disables a rule. Requires <code>--planetscale-org</code> telemetry.</td></tr>
+  <tr><td><code>--notify-lag-seconds</code> / <code>--notify-storage-growth-per-min</code></td><td class="desc">Alert when the target's control-plane replica lag (seconds) is at or above the value, or when storage utilisation is <em>climbing</em> at or above this fraction-of-capacity per minute (a pre-grow early warning, e.g. <code>0.02</code> = +2%/min). <code>0</code> disables. Requires <code>--planetscale-org</code> telemetry.</td></tr>
   <tr><td><code>--notify-cooldown</code></td><td class="desc">Minimum interval between re-fires of a still-breached alert (default <code>15m</code>) — a sustained breach reminds at most once per interval, not every poll.</td></tr>
   <tr><td><code>--apply-retry-attempts</code></td><td class="desc">Max consecutive retriable apply failures absorbed before exiting (ADR-0038, default <code>8</code> — tuned for managed-Vitess tx-killer transients). <code>1</code> = no retry. The counter resets whenever the persisted CDC position advances.</td></tr>
   <tr><td><code>--apply-retry-backoff-base</code> / <code>--apply-retry-backoff-cap</code></td><td class="desc">Exponential backoff between retriable apply failures: base <code>100ms</code> (doubling), capped at <code>30s</code>. Only consulted when <code>--apply-retry-attempts &gt; 1</code>.</td></tr>
@@ -2033,8 +2036,8 @@ write(
 <tr><td>ALTER COLUMN TYPE (same- or cross-engine)</td><td class="desc">forwards</td><td class="desc">forwards</td></tr>
 <tr><td>ALTER NULLABILITY</td><td class="desc">forwards</td><td class="desc">refuses<sup>1</sup></td></tr>
 <tr><td>Column REORDER</td><td class="desc">no-op<sup>2</sup></td><td class="desc">no-op<sup>2</sup></td></tr>
-<tr><td>CREATE / DROP INDEX</td><td class="desc">refuses<sup>3</sup></td><td class="desc">refuses<sup>1</sup></td></tr>
-<tr><td>ADD / DROP / MODIFY CHECK</td><td class="desc">refuses<sup>3</sup></td><td class="desc">refuses<sup>1</sup></td></tr>
+<tr><td>CREATE / DROP INDEX</td><td class="desc">refuses<sup>3</sup></td><td class="desc">never signaled on the wire — cannot forward; mirror manually<sup>1</sup></td></tr>
+<tr><td>ADD / DROP / MODIFY CHECK</td><td class="desc">refuses<sup>3</sup></td><td class="desc">never signaled on the wire — cannot forward; mirror manually<sup>1</sup></td></tr>
 <tr><td>RENAME COLUMN</td><td class="desc">refuses (§rename)</td><td class="desc">forwards via attnum<sup>4</sup></td></tr>
 <tr><td>RENAME TABLE / multi-shape combo</td><td class="desc">refuses</td><td class="desc">refuses</td></tr>
 </tbody>
@@ -2768,7 +2771,7 @@ ${pre(`sluice restore \\
   <li><a href="/docs/commands/#sync-start">sync start reference</a> — every flag named here, with defaults.</li>
 </ul>
 `,
-    prev: { href: "/docs/planetscale-postgres-upgrade/", label: "Upgrade PlanetScale Postgres" },
+    prev: { href: "/docs/planetscale-postgres-analytics-replica/", label: "PlanetScale Postgres analytics replica" },
     next: { href: "/docs/commands/", label: "Command reference" },
   })
 );
@@ -2996,6 +2999,226 @@ ${pre(`sluice sync stop --stream-id pg-upgrade \\
 </ul>
 `,
     prev: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
+    next: { href: "/docs/planetscale-postgres-analytics-replica/", label: "PlanetScale Postgres analytics replica" },
+  })
+);
+
+// nav-label: PlanetScale Postgres analytics replica
+write(
+  "planetscale-postgres-analytics-replica",
+  page({
+    slug: "planetscale-postgres-analytics-replica",
+    title: "A live analytics replica on PlanetScale Postgres",
+    subtitle: "Analytics queries on a streaming replica get canceled after ~30 seconds of recovery conflict. Stand up a second PlanetScale Postgres database and let sluice keep it continuously synced — its primary never cancels a query for recovery, so analytics can run for minutes or hours.",
+    body: `
+<p>If you run long analytical queries against a PlanetScale Postgres <strong>replica</strong> while the primary is busy, you will eventually meet this:</p>
+${pre(`ERROR:  canceling statement due to conflict with recovery
+DETAIL:  User query might have needed to see row versions that must be removed.`)}
+<p>That is not a bug and not load — it is how a streaming replica works, bounded by a setting PlanetScale <strong>currently pins at 30 seconds</strong> and operators cannot raise. This guide covers the pattern that sidesteps it entirely: a <strong>second PlanetScale Postgres database that sluice maintains as a continuously-synced live copy</strong>, where analytics run against a <em>primary</em> — and a primary never cancels a query for recovery conflicts, because there is no recovery. It's a standing <a href="/docs/commands/#sync-start">sync</a> with no cutover, built on the same connection recipe as the <a href="/docs/planetscale-postgres/">PlanetScale Postgres guide</a>.</p>
+
+<h2 id="problem">Why the replica cancels your query</h2>
+<p>A streaming replica has one non-negotiable job: keep applying the primary's WAL. A long-running query on the replica holds a snapshot; when incoming WAL needs to invalidate something that snapshot still depends on — most commonly vacuum cleanup of row versions your query can still see, sometimes a conflicting lock — the replica has two choices: pause replay (and fall behind) or kill your query. <code>max_standby_streaming_delay</code> is the bounded grace period between those choices: replay waits at most that long behind a conflicting query, then cancels it.</p>
+<p>On self-managed Postgres you'd raise that setting (accepting replica lag) or turn on <code>hot_standby_feedback</code> (accepting primary-side bloat). On PlanetScale Postgres these are managed — <code>max_standby_streaming_delay</code> is pinned at 30 seconds:</p>
+${pre(`-- on a connection to one of the SOURCE database's replicas
+SHOW max_standby_streaming_delay;
+ max_standby_streaming_delay
+-----------------------------
+ 30s
+(1 row)
+
+SHOW hot_standby_feedback;
+ hot_standby_feedback
+----------------------
+ off
+(1 row)
+
+SET max_standby_streaming_delay = '10min';
+ERROR:  parameter "max_standby_streaming_delay" cannot be changed now`)}
+<p>Pinned at exactly <code>30s</code>, not session-settable (it's a server-level parameter PlanetScale doesn't expose), and with <code>hot_standby_feedback</code> off, vacuum-cleanup conflicts are live. The practical consequence: the cancellation is not a flat 30-second query timeout — it fires once a conflict has been <em>pending</em> for 30 seconds — but under steady write churn on the primary, conflicts arise continuously, so <strong>any analytics query that needs longer than roughly the grace window is effectively un-runnable on the replica</strong>. The reproduction in <a href="#act1">Act 1 below</a> shows exactly this.</p>
+
+<h2 id="pattern">The pattern: a second database, synced by sluice</h2>
+<p>Provision a second PlanetScale Postgres database and run a standing <code>sluice sync</code> from the production database into it. Point every dashboard, BI tool, and ad-hoc analyst at the second database's <strong>primary</strong>:</p>
+<ul>
+  <li><strong>No recovery, no cancellation.</strong> sluice applies changes as <em>ordinary transactions</em> — the analytics database is a normal primary doing normal MVCC. A query can run for minutes or hours; concurrent applies just create row versions the query's snapshot ignores, exactly as on any busy primary. The only interplay is ordinary lock/IO contention (see the <a href="#caveats">caveats</a> for the one real case, forwarded DDL).</li>
+  <li><strong>Hard resource isolation.</strong> Heavy analytics burn the second database's CPU, memory, and IO — the production primary and its replicas never feel them.</li>
+  <li><strong>Your own index set.</strong> The target is real writable Postgres, so analytics-only indexes (or materialized views) can live there without existing on — or ever being pushed to — production. This dovetails with an honest limitation of schema forwarding noted in the <a href="#caveats">caveats</a>: source <code>CREATE INDEX</code> doesn't propagate from a Postgres source anyway, so the target's index set is yours to design either way.</li>
+</ul>
+<p>The honest tradeoffs — seconds-level logical lag instead of a physical replica's sub-second, and a second database on the bill — are covered in <a href="#caveats">caveats</a>, with the lag measured, not hand-waved.</p>
+
+<h2 id="provision">Provision &amp; connect</h2>
+<p>Create the analytics database with the Postgres engine, same as the <a href="/docs/planetscale-postgres/#connect">main guide</a>. It serves reads only, so <code>--replicas 0</code> (a single node) is a reasonable start — you're building this pattern precisely because <em>this</em> database's queries don't need a replica:</p>
+${pre(`pscale database create app-analytics --engine postgresql --region <region> --replicas 0 --wait`)}
+<p>Connections use Postgres <em>roles</em> — take each side's DSN from the Default <code>postgres</code> role's <code>database_url</code> and keep its <code>sslmode=verify-full</code> (PlanetScale Postgres presents a public Let's Encrypt certificate that sluice's driver validates against your system trust store; full detail in the <a href="/docs/planetscale-postgres/#connect">connection recipe</a>):</p>
+${pre(`pscale role reset-default app main --force --format json            # -> database_url  (source)
+pscale role reset-default app-analytics main --force --format json  # -> database_url  (target)
+
+export SLUICE_SOURCE='postgresql://<user>:<pass>@<region>.pg.psdb.cloud:5432/postgres?sslmode=verify-full'
+export SLUICE_TARGET='postgresql://<user>:<pass>@<region>.pg.psdb.cloud:5432/postgres?sslmode=verify-full'`)}
+<p><code>--force</code> is required with <code>--format json</code> — <code>reset-default</code> rotates the role's password, and without the flag it refuses (<code>cannot delete password with the output format "json"</code>).</p>
+<div class="note"><strong>psql needs one DSN addition; sluice needs none.</strong> sluice's driver (pgx) validates the <code>verify-full</code> certificate against your system trust store out of the box — use the <code>database_url</code> exactly as PlanetScale emits it. libpq-based tools like <code>psql</code> don't read the system store by default and fail with <code>root certificate file "/root/.postgresql/root.crt" does not exist</code>; for psql, append <code>&amp;sslrootcert=system</code> to the DSN (and make sure CA certificates are installed — the stock <code>postgres</code> Docker image lacks them).</div>
+<div class="note warn"><strong>Both ends connect as the Default <code>postgres</code> role.</strong> The <em>source</em> needs the <code>REPLICATION</code> attribute to create the logical-replication slot — the custom <code>pscale_api_*</code> roles lack it, and sluice refuses loudly up front if you try — and publication management needs the connecting role to <em>own</em> the source tables. The <em>target</em> wants a durable table owner. Same requirements, same <code>SLUICE-E</code> refusal shapes, as the <a href="/docs/planetscale-postgres/#sync">PlanetScale Postgres sync guide</a>.</div>
+
+<h2 id="sync">Start the standing sync</h2>
+<p>One <code>sync start</code>, both ends the plain <code>postgres</code> driver. This is a <strong>standing</strong> sync — there is no cutover section in this guide, because nothing ever cuts over; the stream simply runs:</p>
+${pre(`export SLUICE_NOTIFY_WEBHOOK='https://<your-alert-sink>'   # or SLUICE_NOTIFY_SLACK
+
+sluice sync start --stream-id analytics \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --schema-changes forward \\
+    --notify-sync-lag-seconds 60 \\
+    --metrics-listen :9101`)}
+<ul>
+  <li><strong><code>--schema-changes forward</code></strong> (the default since v0.99.45, shown explicitly here because it's load-bearing): unambiguous source DDL — column adds, drops, type changes — is applied on the analytics copy automatically, so the replica tracks schema evolution without operator intervention. The conservative alternative is <code>--schema-changes refuse</code>: any source DDL then surfaces loudly and you apply it to the target through your own change process. See <a href="/docs/schema-changes/">Schema changes during a sync</a> — including its honest per-shape matrix, which matters here (<a href="#caveats">caveats</a>).</li>
+  <li><strong><code>--notify-sync-lag-seconds 60</code></strong> alerts your webhook/Slack sink when sluice's own apply lag (<code>sluice_sync_lag_seconds</code>) reaches a minute. This threshold is <em>ungated</em> — it needs only a sink, no PlanetScale telemetry credentials.</li>
+  <li><strong><code>--metrics-listen :9101</code></strong> exposes Prometheus gauges (<code>sluice_sync_lag_seconds</code>, <code>sluice_seconds_since_last_apply</code>) plus <code>/readyz</code>, so the replica's freshness lives on your existing dashboards.</li>
+</ul>
+<p>Health, from any shell — <code>sync status</code> for the position and phase, <code>sync health</code> as a cron-friendly freshness gate:</p>
+${pre(`sluice sync status --stream-id analytics \\
+    --target-driver postgres --target "$SLUICE_TARGET"
+
+sluice sync health --stream-id analytics \\
+    --target-driver postgres --target "$SLUICE_TARGET" --max-stale-seconds 60`)}
+
+<h3 id="readonly">Give analysts a read-only role</h3>
+<p>The analytics database is writable — it's a primary — so make read-only-ness a matter of <em>roles</em>, not hope. On the target, as the Default <code>postgres</code> role:</p>
+${pre(`CREATE ROLE analyst LOGIN PASSWORD '<generated>';
+GRANT CONNECT ON DATABASE postgres TO analyst;
+GRANT USAGE ON SCHEMA public TO analyst;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO analyst;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO analyst;`)}
+<p>The <code>ALTER DEFAULT PRIVILEGES</code> line covers tables sluice creates <em>later</em> (a forwarded <code>CREATE</code>-path or <a href="/docs/commands/#schema-add-table">schema add-table</a>): sluice connects as <code>postgres</code>, which is the role the default-privilege rule is attached to, so new tables arrive analyst-readable. Point BI tools at a DSN built from <code>analyst</code>, never at the <code>postgres</code>-role DSN sluice uses.</p>
+<p>The pscale-native alternative also works — a custom PlanetScale role can inherit <code>pg_read_all_data</code> directly:</p>
+${pre(`pscale role create app-analytics main analyst --inherited-roles pg_read_all_data --format json
+# -> returns id, name, username (a pscale_api_* name), password, database_url`)}
+<p>Verified live with the returned credential — reads work, writes are refused:</p>
+${pre(`== SELECT as the read-only role ==
+  count
+---------
+ 3000000
+(1 row)
+
+== INSERT as the read-only role (expect refusal) ==
+ERROR:  permission denied for table events`)}
+<p>Two differences from the SQL recipe: <code>pg_read_all_data</code> grants read on <em>all</em> schemas and covers future tables automatically (broader than the per-schema grants, and no <code>ALTER DEFAULT PRIVILEGES</code> line needed), and the pscale-created role's username is a <code>pscale_api_*</code> name whose password lives in PlanetScale's console. Keep the SQL recipe when you want a role whose credentials PlanetScale never stores.</p>
+
+<h2 id="validation">Validation: three acts from a live run</h2>
+<p>Everything below is from a real run (sluice 0.99.203) against two PlanetScale Postgres databases: the conflict reproduced on the source's replica, sluice syncing through the same churn, and the same query finishing on the analytics primary. The demo table is <code>events(id bigserial PRIMARY KEY, user_id bigint, kind text, amount numeric, at timestamptz)</code>, seeded with 3,000,000 rows across ~30,000 <code>user_id</code>s; the analytics query is a self-join aggregate (~300M join pairs) that takes ~52 seconds on an idle primary — comfortably past the 30-second grace window.</p>
+
+<h3 id="act1">Act 1 — the conflict, reproduced on the source replica</h3>
+<p>The source database needs replicas for this act — on PlanetScale Postgres that means an HA cluster: <code>--replicas 2</code> (the allowed shapes are <code>0</code> for a single node or <code>2</code>–<code>8</code> for HA; asking for 1 is refused with <code>Error: PostgreSQL databases must have 0 replicas for non-HA or between 2 to 8 replicas for HA.</code>). That's the deployment this guide's problem statement assumes — if you had no replica, your analytics were hitting the production primary itself. Terminal one: steady write churn on the source <strong>primary</strong> — an ordinary UPDATE loop is enough, because it's the resulting vacuum cleanup that conflicts with a standby snapshot:</p>
+${pre(`-- terminal 1, connected to the source PRIMARY: ~30,000 rows updated every ~2s,
+-- with a VACUUM events; every 10th iteration (n cycling 0-99)
+UPDATE events SET amount = amount + 0.01 WHERE id % 100 = <n>;`)}
+<p>Terminal two connects to a source <strong>replica</strong>. Reaching the replica is a credential detail, not a separate endpoint: <strong>append <code>|replica</code> to the credential username</strong> — same host, same port 5432; in URI-form DSNs the pipe must be URL-encoded as <code>%7C</code> (<code>postgresql://&lt;user&gt;%7Creplica:&lt;pass&gt;@...</code>). The dashboard also offers a "Connect → Replica" credential type; the username suffix on the existing default-role credential is the scriptable path. Proof the suffix lands on a standby:</p>
+${pre(`== PRIMARY (plain username) ==
+ pg_is_in_recovery
+-------------------
+ f
+(1 row)
+
+== REPLICA (|replica suffix) ==
+ pg_is_in_recovery
+-------------------
+ t
+(1 row)`)}
+<p>Now the >30-second analytics query on that replica, with <code>\\timing</code> on:</p>
+${pre(`-- terminal 2, connected to a source REPLICA (|replica credential)
+\\timing on
+SELECT a.kind, count(*) AS pairs, sum(a.amount) AS amount_sum
+FROM events a JOIN events b ON a.user_id = b.user_id
+GROUP BY 1 ORDER BY 1;`)}
+<p>First attempt, no retries, no tuning:</p>
+${pre(`Timing is on.
+ERROR:  canceling statement due to conflict with recovery
+DETAIL:  User query might have needed to see row versions that must be removed.
+Time: 30269.430 ms (00:30.269)`)}
+<p>Killed at 30.269 seconds — the 30-second <code>max_standby_streaming_delay</code> almost to the millisecond, because under this churn a conflicting vacuum-cleanup record arrives essentially immediately, so the grace clock starts at query start. The DETAIL line names the mechanism: vacuum cleanup of row versions the query's snapshot still needed.</p>
+
+<h3 id="act2">Act 2 — sluice syncing continuously through the churn</h3>
+<p>The same churn is running; the standing sync just applies it. The sync was started <em>while</em> the UPDATE loop hammered the source — the 3,000,000-row snapshot copied in ~19 seconds, then handed off to CDC (the log had zero WARN/ERROR lines end to end):</p>
+${pre(`time=2026-07-09T00:23:01.855-07:00 level=INFO msg="cold start; snapshot captured"
+time=2026-07-09T00:23:07.786-07:00 level=INFO msg="sync cold-start: fast parallel copy engaged (ADR-0079)" table_parallelism=1 within_table_parallelism=8 index_build_budget=0 raw_copy_eligible=true raw_copy_reason=""
+time=2026-07-09T00:23:07.929-07:00 level=INFO msg="migration: phase complete" phase=tables
+time=2026-07-09T00:23:26.269-07:00 level=INFO msg="migration: phase complete" phase=bulk_copy
+time=2026-07-09T00:23:26.269-07:00 level=INFO msg="migration: phase complete" phase=indexes
+time=2026-07-09T00:23:26.622-07:00 level=INFO msg="migration: phase complete" phase=constraints
+time=2026-07-09T00:23:26.692-07:00 level=INFO msg="bulk-copy complete; entering CDC mode"
+time=2026-07-09T00:23:28.991-07:00 level=INFO msg="laneapply: concurrent key-hash CDC apply engaged — routing row changes to W in-order lanes by primary-key hash, committing each lane concurrently on a dedicated pool; the resume position advances only to a source-tx boundary durable across all lanes (ADR-0104)" lanes_W=4 dedicated_backends=4`)}
+<p><code>sync status</code>, two samples ~20 seconds apart while the churn ran — the LSN advancing, updated seconds ago:</p>
+${pre(`STREAM     UPDATED               AGE     POSITION
+analytics  2026-07-09T07:23:52Z  4s ago  {"slot":"sluice_slot","lsn":"0/45A35E68","systemid":"766042…
+
+STREAM     UPDATED               AGE     POSITION
+analytics  2026-07-09T07:24:10Z  1s ago  {"slot":"sluice_slot","lsn":"0/46EDEE38","systemid":"766042…`)}
+<p>And the lag evidence from the same window — a <code>:9101/metrics</code> sample ~45 seconds after CDC entry, plus <code>sync health</code> exiting 0:</p>
+${pre(`sluice_seconds_since_last_apply{stream_id="analytics"} 2
+sluice_sync_lag_seconds{stream_id="analytics"} 48.6099`)}
+${pre(`$ sluice sync health --stream-id analytics --target-driver postgres --target "$SLUICE_TARGET" --max-stale-seconds 60
+stream: analytics
+found: true
+state: healthy
+position: {"slot":"sluice_slot","lsn":"0/46EDEE38","systemid":"766042…
+updated_at: 2026-07-09T07:24:10Z
+seconds_since_last_apply: 3
+health-exit:0`)}
+<p>The 48.6-second <code>sluice_sync_lag_seconds</code> right after CDC entry is the initial catch-up: the churn generated WAL throughout the snapshot copy, and CDC starts from the pre-copy slot position, so the first apply batches carry old commit timestamps. <code>seconds_since_last_apply</code> at 2–3 seconds shows apply actively flowing. Under this run's deliberately <em>saturating</em> churn (~15k row-changes/s, above the target's apply throughput), lag kept growing while the storm ran and drained to zero once it stopped — the honest numbers are in the <a href="#caveats">caveats</a>.</p>
+
+<h3 id="act3">Act 3 — the same query, on the analytics primary</h3>
+<p>Same query text, same concurrent churn (still flowing into the target via sluice), but run on the analytics database's primary. It runs to completion — there is no recovery to conflict with:</p>
+${pre(`Timing is on.
+   kind   |   pairs   |  amount_sum
+----------+-----------+---------------
+ click    | 101003844 | 5046964144.54
+ purchase | 101044120 | 5053641381.01
+ refund   |  50467932 | 2524808050.13
+ view     |  50435816 | 2523459562.89
+(4 rows)
+
+Time: 54789.578 ms (00:54.790)`)}
+<p>54.8 seconds — comfortably past the 30-second guillotine that killed the identical query on the replica. The pair counts match the source exactly; the <code>amount_sum</code> values are <em>higher</em> than a pre-churn baseline because the churn's <code>amount = amount + 0.01</code> increments had already been applied to the target — the copy is genuinely live, not a stale snapshot.</p>
+<p>And the freshness claim, proven rather than asserted — a marker row inserted on the source <em>while that query was running</em> (07:26:06Z, churn still active) arrived on the target intact, with its source-assigned id and timestamp, without disturbing the running query:</p>
+${pre(`-- on the SOURCE primary, mid-query (07:26:06Z)
+   id    |          kind           |              at
+---------+-------------------------+-------------------------------
+ 3000001 | marker-20260709T072606Z | 2026-07-09 07:26:07.623209+00
+(1 row)
+INSERT 0 1
+
+-- poll loop on the TARGET
+arrived 07:33:09Z: 3000001|marker-20260709T072606Z|2026-07-09 07:26:07.623209+00`)}
+<p>An honest number: the marker took ~7 minutes to land — not seconds — because it was queued, in commit order, behind the write-storm backlog (the churn's ~15k row-changes/s kept saturating the apply path until it was stopped; see the <a href="#caveats">caveats</a>). Nothing was lost and nothing reordered; once the storm stopped, the backlog drained, <code>sluice_sync_lag_seconds</code> collapsed to <code>0.0000</code>, and row counts matched exactly (source <code>3000001</code>, target <code>3000001</code>). Final health from that window:</p>
+${pre(`$ sluice sync health --stream-id analytics --target-driver postgres --target "$SLUICE_TARGET" --max-stale-seconds 120
+stream: analytics
+found: true
+state: healthy
+position: {"slot":"sluice_slot","lsn":"0/8C039040","systemid":"766042…
+updated_at: 2026-07-09T07:39:58Z
+seconds_since_last_apply: 49
+health-exit:0`)}
+<p>(<code>--max-stale-seconds 120</code> on the final check because the source was by then idle apart from sluice's 1-minute stream heartbeats.)</p>
+
+<h2 id="caveats">Caveats, honestly</h2>
+<ul>
+  <li><strong>Lag is logical and seconds-level, not sub-second — and a sustained write storm can outrun it.</strong> A physical streaming replica applies WAL microseconds-to-milliseconds behind the primary; sluice is logical replication — decode, translate, apply as transactions — and its steady-state lag under ordinary write rates is measured in seconds. The honest boundary, measured in the live run: a write rate <em>sustained</em> above the target's apply throughput grows lag for as long as it's sustained — the run's synthetic churn generated ~15k row-changes/s against ~4–5k/s of apply into a default-size PlanetScale target, and lag climbed 48.6&nbsp;→&nbsp;208 seconds over ~3 minutes — in order, nothing lost, zero errors, and the backlog drained to zero once the burst ended. Size the target for the write workload (or accept lag during sustained-heavy periods); the seconds-level claim holds for ordinary rates. Don't guess: watch <code>sluice_sync_lag_seconds</code> on <code>--metrics-listen</code>, gate on <code>sync health --max-stale-seconds</code>, and alert with <code>--notify-sync-lag-seconds</code>. For dashboards and ad-hoc analytics, data-as-of-a-few-seconds-ago is almost always fine; this pattern is <em>not</em> a read-your-writes replica.</li>
+  <li><strong>It's a second database, and it costs second-database money.</strong> You're trading a bill line for query survivability and resource isolation. Size it primarily for the analytics workload — the apply stream is usually far lighter than the queries will be — but a source that <em>sustains</em> heavy write rates needs apply-throughput headroom on the target too (the lag caveat above).</li>
+  <li><strong>The target is writable — enforce read-only by role, not convention.</strong> Use the <a href="#readonly">analyst role</a> above and never hand out the <code>postgres</code>-role DSN. A stray write to a synced table can collide with sluice's apply (a loud apply error, not silent corruption — but an operational headache). Analytics-only <em>additions</em> — extra indexes, materialized views, scratch schemas — are fine, but they live outside sluice's contract: a destructive recovery (<code>--reset-target-data</code>) drops the synced tables, and re-creating anything you hung off them is on you.</li>
+  <li><strong>Very long analytics transactions can delay sluice's apply — gently.</strong> Plain row apply (INSERT/UPDATE/DELETE) is ordinary MVCC: readers don't block writers in Postgres, so your six-hour query and the apply stream coexist. The one real interaction is a <em>forwarded DDL</em>: an <code>ALTER TABLE</code> needs an exclusive lock, queues behind your long query, and briefly queues new queries behind itself — apply lag rises, your lag alert fires, and everything resumes when the query finishes. Apply waits; queries don't die. That's the whole point of the pattern — compare it with the replica's 30-second guillotine. (A days-long idle-in-transaction session also holds back vacuum on the analytics database itself; don't park transactions open there any more than you would on any primary.)</li>
+  <li><strong>Sequences and identity counters are not continuously synced.</strong> CDC replicates row changes, not catalog-level sequence positions — irrelevant for a read-only analytics copy, since queries read rows, not <code>nextval()</code>. It only matters if you ever promote this copy to take writes; that's what <a href="/docs/commands/#cutover"><code>sluice cutover</code></a>'s sequence priming (<code>--sequence-margin</code>) is for.</li>
+  <li><strong>Schema forwarding from a Postgres source has an honest per-shape matrix.</strong> Column adds, drops, and type changes forward; <code>CREATE INDEX</code>, <code>CHECK</code>, and nullability changes never signal on pgoutput's wire from a Postgres source, so they <em>cannot</em> forward — see the <a href="/docs/schema-changes/#the-flag">ground-truth table</a>. For this pattern that's mostly a feature (the target's index set is yours to design for analytics), but if you want a source index mirrored, create it on the target yourself.</li>
+  <li><strong>The standing sync holds a replication slot on your production source — forever.</strong> That's the deal with logical replication: if the sync stops for a long time, the slot pins WAL on the <em>source</em> and its storage grows. sluice emits severity-graded slot-retention warnings ahead of trouble, but decommissioning this pattern means <code>sync stop --wait</code> <em>plus</em> <a href="/docs/commands/#slot"><code>sluice slot drop</code></a> — a slot is never auto-dropped. See <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> for the slot-lifecycle story.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/planetscale-postgres/">Migrate &amp; sync PlanetScale Postgres</a> — the connection recipe (roles, <code>sslmode</code>, ownership) this guide builds on.</li>
+  <li><a href="/docs/schema-changes/">Schema changes during a sync</a> — the full <code>forward</code> / <code>refuse</code> semantics and the per-shape forwarding matrix.</li>
+  <li><a href="/docs/operate-fleet/">Operate a sync fleet</a> — run this stream (and its siblings) under one supervised process, with the dashboard and the full alert-threshold set.</li>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — replication-slot lifecycle, retention warnings, and failover for the native CDC engine.</li>
+  <li><a href="/docs/commands/#sync-start">sync start reference</a> — every flag named here, with defaults.</li>
+</ul>
+`,
+    prev: { href: "/docs/planetscale-postgres-upgrade/", label: "Upgrade PlanetScale Postgres" },
     next: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
   })
 );

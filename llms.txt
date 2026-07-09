@@ -35,6 +35,7 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 - [Foreign keys on Vitess](https://sluicesync.com/docs/foreign-keys-vitess/): Migrating or syncing a foreign-key-bearing source into Vitess or PlanetScale MySQL — the two strategies (skip-and-index, or enable FK support) and how to choose.
 - [PlanetScale Postgres](https://sluicesync.com/docs/planetscale-postgres/): PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.
 - [Upgrade PlanetScale Postgres](https://sluicesync.com/docs/planetscale-postgres-upgrade/): PlanetScale Postgres has no in-place major-version upgrade or CPU-architecture swap — provision a new instance on the target, let sluice sync across, then cut over.
+- [PlanetScale Postgres analytics replica](https://sluicesync.com/docs/planetscale-postgres-analytics-replica/): Analytics queries on a streaming replica get canceled after ~30 seconds of recovery conflict. Stand up a second PlanetScale Postgres database and let sluice keep it continuously synced — its primary never cancels a query for recovery, so analytics can run for minutes or hours.
 - [Move PlanetScale regions](https://sluicesync.com/docs/planetscale-region-move/): PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.
 
 ## Reference
