@@ -26,7 +26,7 @@ The export rounds big integers. Both of D1's default extraction paths — the wr
 
 ## A live Cloudflare D1 (lossless)
 
---source-driver d1 reads a live D1 over its HTTP query API and is the lossless import. It projects every column through typeof() + CAST(… AS TEXT) / hex(), so integers above 253 round-trip exactly, INTEGER is distinguished from REAL, and BLOBs decode from hex. Reads don't take D1 offline. The API token is read from the environment only — never a flag, never logged:
+--source-driver d1 reads a live D1 over its HTTP query API and is the lossless import. It projects every column through typeof() + CAST(… AS TEXT) / hex(), so integers above 253 round-trip exactly, INTEGER is distinguished from REAL, and BLOBs decode from hex. Reads don't take D1 offline. (Why the text projection instead of the obvious JSON number? See the field note on 253 as a database boundary — wrangler d1 export rounds big integers through float64 before any database sees them.) The API token is read from the environment only — never a flag, never logged:
 
     export CLOUDFLARE_API_TOKEN=...        # required
     export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN

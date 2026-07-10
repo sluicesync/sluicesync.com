@@ -42,7 +42,7 @@ JSON · jsonb (default) / json · MySQL JSON and PG jsonb both validate + normal
 
 (no MySQL type) · uuid · PG uuid → MySQL CHAR(36) / BINARY(16). ·
 
-JSON (degraded) · T[] (array) · MySQL has no array type: a PG array → MySQL JSON (empty {}→[], NULL element→JSON null, nested preserved). Override array_strategy: concat for simple scalar arrays. ·
+JSON (degraded) · T[] (array) · MySQL has no array type: a PG array → MySQL JSON (empty {}→[], NULL element→JSON null, nested preserved). Override array_strategy: concat for simple scalar arrays. Multi-dimensional arrays are pinned per element family — see the field note on the pgx codec that silently flattened numeric[][]. ·
 
 VARCHAR(45/30) · inet / cidr / macaddr · PG network types have no MySQL native form: inet/cidr→VARCHAR(45), macaddr→VARCHAR(30) (auto-shaped since v0.7.0; overridable). ·
 

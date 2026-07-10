@@ -38,6 +38,16 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 - [PlanetScale Postgres analytics replica](https://sluicesync.com/docs/planetscale-postgres-analytics-replica/): Analytics queries on a streaming replica get canceled after ~30 seconds of recovery conflict. Stand up a second PlanetScale Postgres database and let sluice keep it continuously synced — its primary never cancels a query for recovery, so analytics can run for minutes or hours.
 - [Move PlanetScale regions](https://sluicesync.com/docs/planetscale-region-move/): PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.
 
+## Field Notes
+
+- [About these notes](https://sluicesync.com/docs/field-notes/): War stories from building a correctness-first migration tool — the engine behaviors, wire-protocol edges, and silent-corruption classes we hit, and what we changed because of them.
+- [The pgx codec that flattened numeric[][]](https://sluicesync.com/docs/field-notes/numeric-array-flatten/): We pinned multi-dimensional array support green on int[][] and text[][] and shipped. numeric[][] — running through byte-identical code — flattened a 2×2 matrix into a 1-D four-element array. Exit 0, no warning.
+- [When PlanetScale un-acked our rows](https://sluicesync.com/docs/field-notes/planetscale-grow-reparent/): A 5.5M-row migrate into PlanetScale MySQL returned exit 0 and “migration complete” — and landed 5,496,003 rows. About four thousand, gone in scattered whole-batch units, no error anywhere.
+- [Vitess copy phase rounds your FLOATs](https://sluicesync.com/docs/field-notes/vstream-float-precision/): MySQL renders FLOAT to 6 significant digits over the text protocol, so a stored, exact 8388608 comes back as 8388610. Vitess's VStream copy phase inherits it; its binlog phase doesn't — the same column, same row, arrives exact or rounded depending on which phase delivered it.
+- [vtgate erases the throttle signal](https://sluicesync.com/docs/field-notes/vstream-throttle-blind/): Our stream went silent under a write burst, a progress watchdog called it a failover hang, the process restarted, resumed at the same stuck position, and stalled again — indefinitely. The one in-band signal that would have said “this is a throttle, wait” is deleted before any client can see it.
+- [A comment hid a TRUNCATE from CDC](https://sluicesync.com/docs/field-notes/binlog-comment-truncate/): A leading -- comment on a TRUNCATE made our CDC reader miss the statement entirely. The source emptied; the target kept every row, forever, with no error and no lag.
+- [2^53 is a database boundary now](https://sluicesync.com/docs/field-notes/int64-json-boundary/): JSON has one number type, and it's a double. That single fact produced two independent silent-corruption incidents in one week — one in third-party tooling, one in our own decoder.
+
 ## Reference
 
 - [Supported directions](https://sluicesync.com/docs/supported-directions/): Every source → target pair sluice can move, for one-shot migrate and for continuous sync — and which pairs each surface does not cover.

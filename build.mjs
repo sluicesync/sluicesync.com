@@ -65,6 +65,18 @@ const NAV = [
     ],
   },
   {
+    group: "Field Notes",
+    items: [
+      { slug: "field-notes", label: "About these notes" },
+      { slug: "field-notes/numeric-array-flatten", label: "The pgx codec that flattened numeric[][]" },
+      { slug: "field-notes/planetscale-grow-reparent", label: "When PlanetScale un-acked our rows" },
+      { slug: "field-notes/vstream-float-precision", label: "Vitess copy phase rounds your FLOATs" },
+      { slug: "field-notes/vstream-throttle-blind", label: "vtgate erases the throttle signal" },
+      { slug: "field-notes/binlog-comment-truncate", label: "A comment hid a TRUNCATE from CDC" },
+      { slug: "field-notes/int64-json-boundary", label: "2^53 is a database boundary now" },
+    ],
+  },
+  {
     group: "Reference",
     items: [
       { slug: "supported-directions", label: "Supported directions" },
@@ -201,6 +213,13 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "operate-fleet",
     "encrypted-backups",
     "agent-skills",
+    "field-notes",
+    "field-notes/numeric-array-flatten",
+    "field-notes/planetscale-grow-reparent",
+    "field-notes/vstream-float-precision",
+    "field-notes/vstream-throttle-blind",
+    "field-notes/binlog-comment-truncate",
+    "field-notes/int64-json-boundary",
   ];
   const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "supported-directions" || slug === "how-sluice-copies" || slug === "error-codes" || slug === "type-mapping" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
   const top = '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>';
@@ -965,7 +984,7 @@ write(
 <tr><td><code>SET('a','b')</code></td><td class="desc"><code>text[]</code> + <code>CHECK</code></td><td class="desc">Membership preserved via a CHECK; override to a comma-delimited <code>text</code>.</td></tr>
 <tr><td><code>JSON</code></td><td class="desc"><code>jsonb</code> (default) / <code>json</code></td><td class="desc">MySQL <code>JSON</code> and PG <code>jsonb</code> both validate + normalise; PG <code>json</code> (no b) preserves whitespace/key order. Carried as raw bytes.</td></tr>
 <tr><td class="desc">(no MySQL type)</td><td class="desc"><code>uuid</code></td><td class="desc">PG <code>uuid</code> → MySQL <code>CHAR(36)</code> / <code>BINARY(16)</code>.</td></tr>
-<tr><td class="desc"><code>JSON</code> (degraded)</td><td class="desc"><code>T[]</code> (array)</td><td class="desc">MySQL has no array type: a PG array → MySQL <code>JSON</code> (empty <code>{}</code>→<code>[]</code>, NULL element→JSON <code>null</code>, nested preserved). Override <code>array_strategy: concat</code> for simple scalar arrays.</td></tr>
+<tr><td class="desc"><code>JSON</code> (degraded)</td><td class="desc"><code>T[]</code> (array)</td><td class="desc">MySQL has no array type: a PG array → MySQL <code>JSON</code> (empty <code>{}</code>→<code>[]</code>, NULL element→JSON <code>null</code>, nested preserved). Override <code>array_strategy: concat</code> for simple scalar arrays. Multi-dimensional arrays are pinned per element family — see the field note on <a href="/docs/field-notes/numeric-array-flatten/">the pgx codec that silently flattened <code>numeric[][]</code></a>.</td></tr>
 <tr><td class="desc"><code>VARCHAR(45/30)</code></td><td class="desc"><code>inet</code> / <code>cidr</code> / <code>macaddr</code></td><td class="desc">PG network types have no MySQL native form: <code>inet</code>/<code>cidr</code>→<code>VARCHAR(45)</code>, <code>macaddr</code>→<code>VARCHAR(30)</code> (auto-shaped since v0.7.0; overridable).</td></tr>
 <tr><td class="desc">spatial types</td><td class="desc"><code>geometry</code> (PostGIS)</td><td class="desc">Requires PostGIS on the target via <code>--enable-pg-extension</code>; carried as WKB. Every subtype/SRID preserved.</td></tr>
 </tbody></table>
@@ -1386,7 +1405,7 @@ sluice migrate --source-driver sqlite --source dump.sql \\
 <div class="note warn"><strong>The export rounds big integers.</strong> Both of D1's <em>default</em> extraction paths — the <code>wrangler d1 export</code> dump and the bare query API — silently lose integers larger than 2<sup>53</sup> (≈ 9 ×10<sup>15</sup>): D1 serializes them through a JavaScript double before sluice ever sees them. For Snowflake-style IDs (Discord/Twitter 64-bit IDs), nanosecond timestamps, or large counters, use the live query-API reader below — it's the only lossless path. For a D1 database <em>without</em> integers that large (the common case), the export path is exact and simple.</div>
 
 <h2 id="live">A live Cloudflare D1 (lossless)</h2>
-<p><code>--source-driver d1</code> reads a live D1 over its HTTP query API and is the <strong>lossless</strong> import. It projects every column through <code>typeof()</code> + <code>CAST(… AS TEXT)</code> / <code>hex()</code>, so integers above 2<sup>53</sup> round-trip exactly, INTEGER is distinguished from REAL, and BLOBs decode from hex. Reads don't take D1 offline. The API token is read from the environment only — never a flag, never logged:</p>
+<p><code>--source-driver d1</code> reads a live D1 over its HTTP query API and is the <strong>lossless</strong> import. It projects every column through <code>typeof()</code> + <code>CAST(… AS TEXT)</code> / <code>hex()</code>, so integers above 2<sup>53</sup> round-trip exactly, INTEGER is distinguished from REAL, and BLOBs decode from hex. Reads don't take D1 offline. (Why the text projection instead of the obvious JSON number? See the field note on <a href="/docs/field-notes/int64-json-boundary/">2<sup>53</sup> as a database boundary</a> — <code>wrangler d1 export</code> rounds big integers through float64 before any database sees them.) The API token is read from the environment only — never a flag, never logged:</p>
 ${pre(`export CLOUDFLARE_API_TOKEN=...        # required
 export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN
 
@@ -3462,6 +3481,343 @@ sluice backup verify --from-dir /var/backups/app \\
 `,
     prev: { href: "/docs/operate-fleet/", label: "Operate a sync fleet" },
     next: { href: "/docs/from-backup-sync/", label: "Sync from a backup chain" },
+  })
+);
+
+// =========================================================================
+//  FIELD NOTES
+// =========================================================================
+
+// ---- Field Notes: index --------------------------------------------------
+write(
+  "field-notes",
+  page({
+    slug: "field-notes",
+    title: "Field Notes",
+    subtitle: "War stories from building a correctness-first migration tool — the engine behaviors, wire-protocol edges, and silent-corruption classes we hit, and what we changed because of them.",
+    body: `
+<p>sluice's first tenet is that a migration must never <em>silently</em> corrupt or lose data — a loud failure you can act on beats an exit 0 that quietly dropped four thousand rows. Living up to that means chasing down a lot of surprising database behavior: drivers that pick a different binary codec per column type, managed services with hidden query limits, replication phases that disagree with each other, precision edges that only bite above a specific integer. This section is where we write those up.</p>
+<p>Field notes are <strong>evergreen engine-behavior documentation</strong>, not release announcements. Each one is a real thing we hit — most of them silent-corruption classes caught by fuzzing, battle-testing, or differential runs — with the mechanism explained, a repro you can run yourself, what sluice does about it, and the transferable lesson for anyone building on the same engines. Where the root cause is upstream (an open MySQL bug, a Vitess design choice), we say so and cite the public source; where it was our bug, we name it and link the fix.</p>
+<p>None of these require sluice to reproduce — they are properties of Postgres, MySQL, Vitess, SQLite, and the wire protocols and drivers around them. If you move data between databases for a living, several of them will eventually be your problem too.</p>
+
+<h2 id="postgres">Postgres</h2>
+<ul>
+  <li><a href="/docs/field-notes/numeric-array-flatten/">The same bytes, a different codec: how <code>numeric[][]</code> silently flattened</a> — a driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped <code>int[][]</code> perfectly.</li>
+</ul>
+
+<h2 id="mysql-vitess">MySQL &amp; Vitess</h2>
+<ul>
+  <li><a href="/docs/field-notes/planetscale-grow-reparent/">PlanetScale acked our rows, then a storage-grow reparent un-acked them</a> — committed, client-acknowledged rows that simply weren't on the new primary after a volume-grow reparent. Exit 0, ~4,000 rows short.</li>
+  <li><a href="/docs/field-notes/vstream-float-precision/">Vitess's copy phase rounds your FLOATs; its binlog phase doesn't</a> — a 17-year-old MySQL display-rounding bug with a fresh consequence: the same <code>FLOAT</code> arrives exact or rounded depending on which VStream phase delivered it.</li>
+  <li><a href="/docs/field-notes/vstream-throttle-blind/">vtgate erases the throttle signal: every VStream consumer is throttle-blind</a> — the one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one.</li>
+  <li><a href="/docs/field-notes/binlog-comment-truncate/">The binlog keeps your SQL comments — and our TRUNCATE parser didn't know</a> — a leading <code>-- comment</code> on a <code>TRUNCATE</code> made a CDC reader miss it entirely; the source emptied, the target kept every row, forever.</li>
+</ul>
+
+<h2 id="cross-cutting">Cross-cutting</h2>
+<ul>
+  <li><a href="/docs/field-notes/int64-json-boundary/">2<sup>53</sup> is a database boundary now</a> — JSON has one number type and it's a double, so every JSON hop in a pipeline is a potential rounding event for Snowflake IDs and any integer past 9,007,199,254,740,992.</li>
+</ul>
+
+<div class="note">These notes are also swept into <a href="/llms.txt"><code>llms.txt</code></a> / <a href="/llms-full.txt"><code>llms-full.txt</code></a>, so an AI assistant pointed at sluice's docs inherits this engine lore too.</div>
+`,
+    next: { href: "/docs/field-notes/numeric-array-flatten/", label: "The pgx codec that flattened numeric[][]" },
+  })
+);
+
+// ---- Field Notes: numeric[][] flatten ------------------------------------
+write(
+  "field-notes/numeric-array-flatten",
+  page({
+    slug: "field-notes/numeric-array-flatten",
+    title: "The same bytes, a different codec: how numeric[][] silently flattened",
+    subtitle: "We pinned multi-dimensional array support green on int[][] and text[][] and shipped. numeric[][] — running through byte-identical code — flattened a 2×2 matrix into a 1-D four-element array. Exit 0, no warning.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — Postgres target via the <code>pgx</code> driver. Regression introduced in sluice v0.69.3, fixed in v0.69.4 (internally, Bug 74).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>We fixed multi-dimensional array support in our Postgres <code>COPY</code> writer. We pinned it green on <code>int[][]</code> and <code>text[][]</code>, it passed independent review, and it shipped. Three days later a battle-test found that <code>numeric[][]</code> — running through <em>byte-identical sluice code</em> — was silently flattening a 2&times;2 matrix into a 1-D four-element array on the target. Exit 0, no warning, <code>array_dims</code> quietly wrong. A migration that reported complete had reshaped the data.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The bug wasn't in our code path at all. sluice built the same nested <code>[][]</code> value for every element type and handed it to pgx to encode. But <strong>pgx selects its binary codec per target OID</strong>: the codec for a <code>numeric</code> array element is a different object from the codec for an <code>int4</code> or <code>text</code> element. The int and text codecs recursed into the nested slice and preserved the dimensions; the numeric-element codec consumed the nested slice as a <em>flat</em> element list. Same input value, same sluice code, different driver branch underneath — chosen by the very dimension our tests didn't vary.</p>
+<p>This is the general hazard of any encoder that dispatches on a type <em>family</em>: a green test on one representative type proves nothing about its siblings, because the layer beneath you may branch on the type you held constant.</p>
+
+<h2 id="repro">The repro</h2>
+<p>One row, no scale needed. Copy a source 2&times;2 <code>numeric</code> matrix into a Postgres <code>numeric[][]</code> column and ask the server for its dimensions:</p>
+<pre><code>${esc(`CREATE TABLE m (id int PRIMARY KEY, grid numeric[][]);
+-- the value sluice encodes for a source 2x2 matrix:
+INSERT INTO m VALUES (1, '{{1.1,2.2},{3.3,4.4}}');
+
+SELECT array_dims(grid) FROM m WHERE id = 1;
+-- correct:                 [1:2][1:2]
+-- before the fix (numeric codec): [1:4]   <- silently flattened to 1-D
+
+-- int[][] and text[][], identical sluice code, were always correct:
+--   [1:2][1:2]`)}</code></pre>
+<p>Ground-truth the shape on the real server (<code>array_dims</code> plus each element's <code>::text</code>), not in a unit test that asserts against sluice's own in-memory value — the flattening happens in the driver's wire encoding, which an in-memory assertion never exercises.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The fix corrected the numeric-element encoding path, but the durable change was to the test doctrine. sluice now pins array support across the full matrix: <strong>every element family</strong> — native (int/float/bool), string-leaf (text/varchar/char/uuid/inet/cidr/macaddr/decimal), temporal (time/timestamp/timestamptz/date) — <strong>&times; {scalar/1-D, multi-dim ≥2-D, NULL-element}</strong>, with <code>src == dst</code> ground-truthed on the real target via <code>array_dims</code> and element <code>::text</code>. A representative type is no longer allowed to stand in for its family.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When a change touches an encoder, decoder, or codec that <strong>dispatches on a type family</strong>, the test pin must exercise <em>every family and every shape variant</em>, not one representative. The driver or wire path beneath you can differ by the target type even when your own code is byte-identical, so &ldquo;the integration test is green&rdquo; is insufficient if the test exercises one family of a family-dispatched path. Pin the class, not the representative — and if you are reviewing such a change, re-derive the family matrix yourself rather than trusting the one green case.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice type-mapping — <a href="/docs/type-mapping/#mysql-pg">array handling and the degradation policy</a>.</li>
+  <li>The value contract sluice pins against: <a href="https://raw.githubusercontent.com/sluicesync/sluice/main/docs/value-types.md">docs/value-types.md</a>.</li>
+  <li>pgx's per-OID codec registry (the underlying behavior): <a href="https://github.com/jackc/pgx">github.com/jackc/pgx</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/", label: "About these notes" },
+    next: { href: "/docs/field-notes/planetscale-grow-reparent/", label: "When PlanetScale un-acked our rows" },
+  })
+);
+
+// ---- Field Notes: PlanetScale grow/reparent ------------------------------
+write(
+  "field-notes/planetscale-grow-reparent",
+  page({
+    slug: "field-notes/planetscale-grow-reparent",
+    title: "PlanetScale acked our rows, then a storage-grow reparent un-acked them",
+    subtitle: "A 5.5M-row migrate into PlanetScale MySQL returned exit 0 and “migration complete” — and landed 5,496,003 rows. About four thousand, gone in scattered whole-batch units, no error anywhere.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — bulk migrate into non-Metal PlanetScale (Vitess) MySQL, source row count 5,500,000. Internally Bug 175; the loss mechanism ties to ADR-0113, the coordinated fix to ADR-0110 / ADR-0141 (fixed v0.99.161).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A migrate of 5,500,000 rows into a PlanetScale MySQL database reported success — exit 0, &ldquo;migration complete&rdquo; — and left <strong>5,496,003 rows</strong> on the target. Roughly four thousand rows were missing, in scattered whole-batch units, with no error logged on either side. The client had seen every batch commit and acknowledge. The rows the client believed were durable were simply not there.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>This is a genuine distributed-systems edge, not a sluice batching bug. On non-Metal PlanetScale, when the underlying volume fills during a bulk load:</p>
+<ul>
+  <li>the primary hits <code>Error 1114 (HY000): The table is full</code>;</li>
+  <li>under storage pressure, semi-synchronous replication falls back to <strong>asynchronous</strong>;</li>
+  <li>the storage-grow event triggers a <strong>reparent</strong> — a new primary is promoted;</li>
+  <li>the new primary is promoted from <em>behind</em> the async-acked window, so rows the client saw committed and acknowledged on the old primary were never durably replicated, and are absent on the new one.</li>
+</ul>
+<p>A bulk load is exactly the workload that crosses grow thresholds — it's the one operation most likely to fill a volume fast enough to trigger the grow. So the loss lands precisely where you'd least want it: a large first import.</p>
+
+<h2 id="repro">The repro</h2>
+<p>This one reproduces operationally, not with a single statement. Instrument a live PlanetScale database near its volume floor (the cheapest repro tier starts at a ~12 GB floor) and bulk-load past the grow threshold. In our diagnostic, three runs froze at ~10.34 GB — about 86% of the 12 GB volume — right at the grow trigger, and a single-lane load stalled identically to a 16-lane one, ruling out write concurrency as the cause. Watch for the <code>Error 1114</code> transient and the primary changing underneath the stream; the missing rows cluster around that reparent instant, in whole batches, because the async gap is measured in transactions, not rows.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The fix needed two layers, because reactive retry alone can't recover an already-lost acked window:</p>
+<ul>
+  <li>A coordinated <strong>grow gate</strong>: the moment any write lane sees a grow-transient, all lanes quiesce and wait out the grow/reparent window together. Reactive per-lane retry alone bred a thundering herd — on the order of hundreds of simultaneous retries per grow window — so the gate coordinates instead of each lane fighting independently.</li>
+  <li>A post-copy <strong>reconciliation</strong> phase that re-derives every reparent-touched table from the replayable source. The gate prevents new loss; reconciliation recovers the window that was already un-acked before the gate engaged. Reactive handling can never do the latter, because the lost rows were never on the new primary to retry against.</li>
+</ul>
+<p>A war-story footnote worth its own lesson: the first version of this fix shipped <em>inert</em> — a dead branch that never fired — and was caught only by live A/B revalidation (81 grow windows observed, 0 reconcile rounds triggered, when there should have been many). A fix for a silent-loss class has to be validated against the live behavior it targets, not just unit-tested; a green test on an unreachable branch is exactly as silent as the bug.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>&ldquo;The client received an ack&rdquo; is not the same as &ldquo;the row survived a failover.&rdquo; On any system where a storage event can trigger a reparent and replication can silently degrade from sync to async under pressure, acknowledged writes in the async window are lost across the promotion — and bulk loads are the workload most likely to cross that threshold. If you can replay the source, a post-load reconciliation of failover-touched tables is the only thing that closes the gap; retry logic alone treats a wound it can't reach.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice PlanetScale guides — <a href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a> and <a href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a>.</li>
+  <li>MySQL <code>Error 1114</code> reference — <a href="https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html">MySQL server error reference</a>.</li>
+  <li>Vitess reparenting (the promotion mechanism) — <a href="https://vitess.io/docs/reference/features/reparenting/">vitess.io reparenting docs</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/numeric-array-flatten/", label: "The pgx codec that flattened numeric[][]" },
+    next: { href: "/docs/field-notes/vstream-float-precision/", label: "Vitess copy phase rounds your FLOATs" },
+  })
+);
+
+// ---- Field Notes: VStream FLOAT precision --------------------------------
+write(
+  "field-notes/vstream-float-precision",
+  page({
+    slug: "field-notes/vstream-float-precision",
+    title: "Vitess's copy phase rounds your FLOATs; its binlog phase doesn't",
+    subtitle: "MySQL renders FLOAT to 6 significant digits over the text protocol, so a stored, exact 8388608 comes back as 8388610. Vitess's VStream copy phase inherits it; its binlog phase doesn't — the same column, same row, arrives exact or rounded depending on which phase delivered it.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL 8.0.46 (also via <code>vttestserver</code> mysql80), Vitess/VStream copy phase. The root cause is <a href="https://bugs.mysql.com/bug.php?id=43262">MySQL Bug #43262</a>, open since 2009.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Reading a Vitess/PlanetScale source over VStream, a single-precision <code>FLOAT</code> column that stored an exact value came back rounded — <code>8388608</code> arrived as <code>8388610</code>, <code>123456.789</code> as <code>123457</code> — but only for rows delivered by the <strong>copy</strong> phase. The very same column, for a row modified after copy and delivered by the <strong>binlog</strong> phase, was exact. A row that exists at copy time and is never touched again keeps the rounded value forever. Resharding or moving a table can therefore permanently alter its <code>FLOAT</code> data in the 7th significant digit.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>MySQL formats <code>FLOAT</code> over the text protocol at <code>FLT_DIG = 6</code> significant digits — the number MySQL <em>guarantees</em> round-trips for any input. But a <code>binary32</code> carries about 7.2 decimal digits, and round-tripping an arbitrary one needs up to <code>FLT_DECIMAL_DIG = 9</code>. Six digits is lossy whenever the 7th significant digit is meaningful. This is <a href="https://bugs.mysql.com/bug.php?id=43262">MySQL Bug #43262</a>, documented in the manual under <a href="https://dev.mysql.com/doc/refman/8.0/en/problems-with-float.html">B.3.4.8, &ldquo;Problems with Floating-Point Values.&rdquo;</a></p>
+<p>Vitess inherits it in the one place it hurts most. The rowstreamer <strong>copy</strong> phase reads rows with a text-protocol <code>SELECT &lt;columns&gt; ... ORDER BY &lt;pk&gt;</code>, so a <code>FLOAT</code> column arrives already rounded to the 6-digit text form — the exact bits are gone before Vitess's Go layer ever sees them. The <strong>binlog</strong> phase, by contrast, re-encodes the raw <code>binary32</code> bits with Go's shortest-round-trip formatter (<code>strconv.AppendFloat(float64(f32), 'E', -1, 32)</code>, in <code>go/mysql/binlog/rbr.go</code>) and is exact. So Vitess produces the exact form on one of its two paths and the rounded form on the other, for the same value. <code>DOUBLE</code> is unaffected (MySQL renders it at full <code>dtoa</code> precision); this is single-precision <code>FLOAT</code>/<code>REAL</code> only.</p>
+
+<h2 id="repro">The repro</h2>
+<p>Server-level and tool-independent — no Vitess required to see the rounding, since it's MySQL's text rendering:</p>
+<pre><code>${esc(`CREATE TABLE f (id INT PRIMARY KEY, v FLOAT, d DOUBLE);
+INSERT INTO f VALUES (1, 8388608, 8388608),
+                     (3, 123456.789, 123456.789),
+                     (4, 16777217, 16777217);
+
+-- Text protocol (what the copy-phase SELECT returns):
+SELECT id, v AS float_text, d AS double_text FROM f;
+--  1   8388610    8388608       <- FLOAT rounded, DOUBLE exact
+--  3   123457     123456.789
+--  4   16777200   16777217
+
+-- The stored FLOAT is exact; only the text rendering is lossy:
+SELECT v = CAST(8388608 AS FLOAT) AS stored_is_exact FROM f WHERE id = 1;  -- 1 (true)
+
+-- And the rounding isn't idempotent — restoring the rounded text
+-- yields a DIFFERENT binary32:
+SELECT CAST(8388610 AS FLOAT) = CAST(8388608 AS FLOAT) AS same;            -- 0 (false)`)}</code></pre>
+<p>The stored value is a perfect <code>binary32</code>; the copy-phase text rendering is what loses it, and the loss can't be undone by re-parsing — the rounded decimal maps to a different <code>binary32</code>.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>A VStream consumer can't fix this client-side: the copy <code>SELECT</code> is built inside vttablet's rowstreamer and doesn't honor a client-supplied projection expression — <code>analyzeExpr</code> in <code>go/vt/vttablet/tabletserver/vstreamer/planbuilder.go</code> rejects arithmetic like <code>col * 1E0</code> in a stream filter. So sluice works around it with a <strong>post-copy exact re-read</strong>: after the copy phase, it re-reads <code>FLOAT</code> columns with an out-of-band <code>SELECT (col * 1E0) ...</code> through vtgate, which forces MySQL to render at full precision, and patches the rounded copy values. That's only possible for a consumer that also has a direct SQL path to the source and can absorb a second read — which is exactly why the right home for the fix is upstream in rowstreamer.</p>
+<p>We've <strong>written up an upstream issue</strong> for vitessio/vitess describing the copy-vs-replication inconsistency and proposing two server-side fixes — widen the copy <code>SELECT</code> to project the column as a double (<code>CAST(col AS DOUBLE)</code>, so MySQL renders round-trippable precision and the target narrows back to the exact <code>binary32</code>), or read the copy via the binary protocol and reuse the same shortest-round-trip formatter the binlog path already uses in <code>rbr.go</code>. The argument is deliberately narrow: <code>FLOAT</code> is an approximate type, granted, but a row's value shouldn't depend on <em>which</em> Vitess phase delivered it, and Vitess already produces the exact form on one of its two paths. (The write-up references <a href="https://bugs.mysql.com/bug.php?id=43262">MySQL Bug #43262</a>, the manual's <a href="https://dev.mysql.com/doc/refman/8.0/en/problems-with-float.html">B.3.4.8</a>, and the public Vitess source paths above; it is drafted, not yet filed.)</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When a system has two independent paths to deliver the same data — a bulk copy and a change stream, a dump and a replica — check that they agree on precision, not just on content. A 17-year-old upstream display-rounding bug is harmless in a <code>mysqldump</code> you reload once, but it becomes a silent, permanent data alteration when it rides one of two phases in a resharding pipeline and the other phase is exact. The corruption hides in static rows precisely because the rows that <em>are</em> modified later get corrected by the exact path.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://bugs.mysql.com/bug.php?id=43262">MySQL Bug #43262</a> — the canonical <code>FLT_DIG</code> display-rounding bug (open since 2009).</li>
+  <li><a href="https://dev.mysql.com/doc/refman/8.0/en/problems-with-float.html">MySQL 8.0 Reference Manual B.3.4.8</a> — &ldquo;Problems with Floating-Point Values.&rdquo;</li>
+  <li><a href="https://vitess.io/docs/reference/vreplication/internal/life-of-a-stream/">Vitess VReplication &mdash; &ldquo;Life of a Stream&rdquo;</a> — documents the copy-phase <code>SELECT ... ORDER BY &lt;pk&gt;</code>.</li>
+  <li>Vitess's exact binlog formatter: <code>go/mysql/binlog/rbr.go</code>; the projection-expression restriction: <code>go/vt/vttablet/tabletserver/vstreamer/planbuilder.go</code> (<a href="https://github.com/vitessio/vitess">github.com/vitessio/vitess</a>).</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/planetscale-grow-reparent/", label: "When PlanetScale un-acked our rows" },
+    next: { href: "/docs/field-notes/vstream-throttle-blind/", label: "vtgate erases the throttle signal" },
+  })
+);
+
+// ---- Field Notes: VStream throttle-blind ---------------------------------
+write(
+  "field-notes/vstream-throttle-blind",
+  page({
+    slug: "field-notes/vstream-throttle-blind",
+    title: "vtgate erases the throttle signal: every VStream consumer is throttle-blind",
+    subtitle: "Our stream went silent under a write burst, a progress watchdog called it a failover hang, the process restarted, resumed at the same stuck position, and stalled again — indefinitely. The one in-band signal that would have said “this is a throttle, wait” is deleted before any client can see it.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — PlanetScale/Vitess source over VStream, and confirmed against a self-hosted Vitess-24 cluster. Internally Bug 141.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A continuous sync from PlanetScale wedged into a crash-loop during a write burst. The stream went silent; our 45-second progress watchdog interpreted the silence as a failover hang and restarted the process; it resumed at the same stuck position and stalled again — indefinitely. From the outside, a throttled-but-healthy stream looked identical to a broken one, so the watchdog did exactly the wrong thing.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>Finding this took a self-hosted Vitess cluster and per-event instrumentation, and the cause is in Vitess itself. The tablet sets <code>VEvent.Throttled</code> only on <strong>heartbeat</strong> events. But vtgate then <em>drops every tablet heartbeat</em> — the source comment reads literally &ldquo;Remove all heartbeat events for now.&rdquo; — and synthesizes its own, flag-less heartbeats in their place. The single in-band signal that distinguishes &ldquo;this stream is throttled, wait&rdquo; from &ldquo;this stream is hung&rdquo; is erased before any external gRPC client can observe it. So <strong>no VStream consumer can tell a throttled stream from a hung one</strong>. Worse, under heavy throttle vtgate goes fully silent — no events, no heartbeats — for up to ten minutes before dropping the stream, which is precisely the shape that trips a naive progress watchdog.</p>
+<p>Two corollaries we confirmed while chasing it: upsizing the cluster does <em>not</em> clear a replica-lag throttle (the throttler gates on lag, not CPU), and the throttle is shard-scoped, so routing to the primary doesn't escape it.</p>
+
+<h2 id="repro">The repro</h2>
+<p>There's no one-line repro — surfacing it took a self-hosted Vitess-24 cluster plus per-event VStream instrumentation to see the <code>Throttled</code> flag get set on the tablet and then vanish at vtgate. The behavior is legible directly in the public source, though: the tablet-side flag on heartbeats in <code>go/vt/vttablet/tabletserver/vstreamer/vstreamer.go</code>, and vtgate's heartbeat-dropping plus flag-less synthesis in <code>go/vt/vtgate/vstream_manager.go</code> (the &ldquo;Remove all heartbeat events for now&rdquo; comment and the surrounding synthesis). Reading those two files side by side shows the signal being created and then deleted before it can leave the gateway.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Since the in-band throttle flag can't reach us, sluice can't treat silence alone as a failure. The watchdog was made throttle-aware: a silent stream is no longer sufficient evidence of a hang, and the resume/restart logic no longer fights a throttle by restarting into the same stuck position (which never helps — the throttle is shard-scoped and lag-driven, so a fresh connection lands in the same wait). The operator-facing guidance is documented so a throttled stream reads as &ldquo;waiting on the source,&rdquo; not &ldquo;broken.&rdquo;</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>&ldquo;No data for a while&rdquo; is ambiguous, and if the protocol's disambiguating signal is stripped in transit, a watchdog built on silence-means-dead will amplify a backpressure event into an outage. When you consume a stream you don't control, find out whether &ldquo;throttled&rdquo; and &ldquo;hung&rdquo; are actually distinguishable on the wire before you build automatic recovery on the distinction — and if they aren't, make silence a non-fatal state rather than a restart trigger.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Vitess source (public): tablet-side <code>Throttled</code> flag in <code>go/vt/vttablet/tabletserver/vstreamer/vstreamer.go</code>; vtgate heartbeat handling in <code>go/vt/vtgate/vstream_manager.go</code> (<a href="https://github.com/vitessio/vitess">github.com/vitessio/vitess</a>).</li>
+  <li>Vitess tablet throttler (gates on replica lag) — <a href="https://vitess.io/docs/reference/features/tablet-throttler/">vitess.io tablet-throttler docs</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/vstream-float-precision/", label: "Vitess copy phase rounds your FLOATs" },
+    next: { href: "/docs/field-notes/binlog-comment-truncate/", label: "A comment hid a TRUNCATE from CDC" },
+  })
+);
+
+// ---- Field Notes: binlog comment TRUNCATE --------------------------------
+write(
+  "field-notes/binlog-comment-truncate",
+  page({
+    slug: "field-notes/binlog-comment-truncate",
+    title: "The binlog keeps your SQL comments — and our TRUNCATE parser didn't know",
+    subtitle: "A leading -- comment on a TRUNCATE made our CDC reader miss the statement entirely. The source emptied; the target kept every row, forever, with no error and no lag.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL binlog CDC. Internally Bug 140 (fixed in PR #208). Postgres is immune (see below).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A CDC stream from MySQL silently diverged: the source ran a <code>TRUNCATE</code>, the source table emptied, and the target kept every one of its rows — indefinitely, with no error and no replication lag to hint at the gap. The stream looked perfectly healthy. It just never applied the truncate.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>MySQL's binlog <code>QUERY_EVENT</code> preserves a statement's <em>leading</em> comment verbatim — it strips only the trailing delimiter. Our CDC reader recognized a truncate by checking whether the event body <em>starts with</em> <code>TRUNCATE</code>. So a statement written as:</p>
+<pre><code>${esc(`-- clear staging
+TRUNCATE TABLE t;`)}</code></pre>
+<p>arrived in the binlog as <code>-- clear staging\nTRUNCATE TABLE t</code>, failed the &ldquo;starts with <code>TRUNCATE</code>&rdquo; test, and fell through to generic DDL handling — which quietly did nothing for this statement. The truncate was never applied to the target.</p>
+<p>This is not a synthetic-harness artifact. Hand-written migrations and ORM/APM query tags (<code>/* trace=... */</code>, <code>-- deploy 2026-...</code>) prepend comments to statements routinely, and MySQL dutifully records them in the binlog. Any consumer that pattern-matches SQL out of a binlog by prefix will trip on them.</p>
+
+<h2 id="repro">The repro</h2>
+<p>Run a commented <code>TRUNCATE</code> against a MySQL source under CDC and watch the target keep its rows:</p>
+<pre><code>${esc(`-- on the source, under an active CDC stream:
+INSERT INTO t VALUES (1), (2), (3);
+-- leading comment: preserved verbatim in the binlog QUERY_EVENT
+-- clear staging
+TRUNCATE TABLE t;
+
+-- source: 0 rows.  target (before the fix): still 3 rows, no error, no lag.`)}</code></pre>
+<p>It was found by a randomized convergence fuzzer whose 5th generated transaction happened to be a commented <code>TRUNCATE</code> — a shape no hand-written test corpus in the project had ever produced.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The reader now strips leading comment prefixes (both <code>--</code> line comments and <code>/* ... */</code> block comments) before pattern-matching the statement, so a commented <code>TRUNCATE</code> is recognized and applied like any other. <strong>Postgres was never affected</strong>: <code>pgoutput</code> emits a typed <code>TruncateMessage</code> with the relation OIDs, so there is no string to parse and no comment to trip over — the immunity is a direct consequence of a typed replication protocol versus a re-parsed SQL one.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Two lessons, both cheap to internalize. First: anything that pattern-matches SQL text out of a binlog must normalize comments (and whitespace) <em>before</em> matching — the binlog is not the clean statement you typed, it's the statement plus whatever the client prepended. Second: randomized differential convergence testing finds the shapes your hand-written corpus never will. A fuzzer that runs the same random workload through two implementations and diffs the targets surfaces exactly this class of &ldquo;nobody thought to write that test&rdquo; bug.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL binlog event reference (<code>QUERY_EVENT</code> carries the statement text) — <a href="https://dev.mysql.com/doc/dev/mysql-server/latest/">MySQL internals / binary log documentation</a>.</li>
+  <li>Postgres logical replication message formats (typed <code>Truncate</code> message) — <a href="https://www.postgresql.org/docs/current/protocol-logicalrep-message-formats.html">PostgreSQL logical replication message formats</a>.</li>
+  <li>sluice CDC behavior across engines — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/vstream-throttle-blind/", label: "vtgate erases the throttle signal" },
+    next: { href: "/docs/field-notes/int64-json-boundary/", label: "2^53 is a database boundary now" },
+  })
+);
+
+// ---- Field Notes: 2^53 / JSON double boundary ----------------------------
+write(
+  "field-notes/int64-json-boundary",
+  page({
+    slug: "field-notes/int64-json-boundary",
+    title: "2^53 is a database boundary now",
+    subtitle: "JSON has one number type, and it's a double. That single fact produced two independent silent-corruption incidents in one week — one in third-party tooling, one in our own decoder.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — a D1-to-Postgres head-to-head (2026-06-30) and sluice's incremental-backup decoder. Internally Bug 172 (fixed v0.99.159).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>JSON's only numeric type is an IEEE-754 double, which represents integers exactly only up to 2<sup>53</sup> (9,007,199,254,740,992). Any integer path that passes through a JSON number above that boundary can round silently. In one week that bit us twice, from two completely different directions.</p>
+<ul>
+  <li><strong>Third-party tooling.</strong> In a ~5 GB Cloudflare D1 → Postgres head-to-head, a competing importer that consumes <code>wrangler d1 export</code> silently corrupted <strong>50% (625,000 of 1,250,000) of the &gt;2<sup>53</sup> integer test values</strong> — every odd value above the boundary landed off by one — because <code>wrangler d1 export</code> serializes integers as JSON numbers and rounds them through float64 before any database sees them. sluice's D1 reader was exact on the same corpus (0 corrupted) because it projects each integer through a lossless <code>(typeof, CAST(... AS TEXT))</code> path instead of a JSON number.</li>
+  <li><strong>Our own code.</strong> sluice's incremental-backup change-chunk decoder stored int64s <em>exactly</em> on disk in a typed envelope, then decoded them back through Go's <code>interface{}</code> — which <code>encoding/json</code> unmarshals every number into a float64 by default. Values near int64 max failed loudly; values merely above 2<sup>53</sup> decoded off-by-one with <em>no</em> error. Downstream that was worse than a bad value: a <code>DELETE</code> whose before-image carried a corrupted big-int matched zero rows and silently no-op'd, leaving <strong>2,043 deleted rows alive on the target</strong>.</li>
+</ul>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>A double has a 52-bit mantissa, so it can represent every integer up to 2<sup>53</sup> and only <em>even</em> integers immediately above it — odd values above the boundary are rounded to the nearest representable even. The corruption is invisible to the usual sanity checks: it doesn't overflow, doesn't error, and an aggregate checksum can hide it entirely (in our head-to-head a <code>SUM</code> matched despite 50% per-row corruption, because round-half-to-even makes the +1/&minus;1 errors cancel). You only see it per row.</p>
+<p>In Go specifically, the trap is <code>json.Unmarshal</code> into an <code>interface{}</code> (or <code>map[string]any</code>): every JSON number becomes a <code>float64</code>, so an int64 that was written exactly comes back rounded even though the bytes on disk were correct.</p>
+
+<h2 id="repro">The repro</h2>
+<p>The whole class is visible in a two-line round-trip of a single big integer through a default JSON decode:</p>
+<pre><code>${esc(`// Go: exact on disk, rounded on the way back
+var v any
+_ = json.Unmarshal([]byte(\`9007199254740993\`), &v)   // 2^53 + 1
+fmt.Printf("%.0f\\n", v)   // 9007199254740992   <- off by one, no error
+
+// The fix: decode through json.RawMessage / json.Number (UseNumber),
+// never through interface{}:
+d := json.NewDecoder(bytes.NewReader([]byte(\`9007199254740993\`)))
+d.UseNumber()
+var n json.Number
+_ = d.Decode(&n)
+fmt.Println(n.String())   // 9007199254740993   <- exact`)}</code></pre>
+<p>The same boundary is why <code>wrangler d1 export</code> corrupts big integers before the data ever reaches a database, and why sluice's live-D1 reader deliberately avoids JSON numbers for integer columns.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The fix was a single doctrine, applied wherever an int64 can ride a JSON hop: decode with <code>json.RawMessage</code> / <code>UseNumber</code> (<code>json.Number</code>), never through <code>interface{}</code>. sluice's change-chunk decoder moved from <code>map[string]any</code> to <code>map[string]json.RawMessage</code> so big-ints survive the round-trip byte-exact; the live-D1 reader projects integers through <code>typeof()</code> + <code>CAST(... AS TEXT)</code> (and BLOBs through <code>hex()</code>) so no value above 2<sup>53</sup> is ever rendered as a JavaScript number. Both are documented on the <a href="/docs/type-mapping/#sqlite-d1">type-mapping page</a> and in the <a href="/docs/import-sqlite-d1/">SQLite / D1 import guide</a>.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>If your IDs are Snowflakes, or your rows count past 9,007,199,254,740,992, treat every JSON hop in your pipeline as a potential rounding event. Audit each one for how it decodes numbers — in Go that means never <code>interface{}</code> for a field that can hold an int64 — and don't let an aggregate checksum reassure you, because symmetric rounding can make a <code>SUM</code> match while half the individual rows are wrong. Verify big-int fidelity per row, on the actual values, against an oracle.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice type-mapping — <a href="/docs/type-mapping/#sqlite-d1">the &gt;2<sup>53</sup> lossless-integer projection for SQLite / D1</a>.</li>
+  <li>sluice import guide — <a href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a> (the live-D1 reader path).</li>
+  <li>Go <code>encoding/json</code> — <a href="https://pkg.go.dev/encoding/json#Decoder.UseNumber"><code>Decoder.UseNumber</code></a> and <a href="https://pkg.go.dev/encoding/json#Number"><code>json.Number</code></a>.</li>
+  <li>The double-precision boundary — <a href="https://en.wikipedia.org/wiki/Double-precision_floating-point_format">IEEE-754 double-precision format</a> (exact integers up to 2<sup>53</sup>).</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/binlog-comment-truncate/", label: "A comment hid a TRUNCATE from CDC" },
   })
 );
 
