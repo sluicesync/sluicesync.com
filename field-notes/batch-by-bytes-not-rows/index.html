@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Count your bytes, not your rows — sluice docs</title>
+<meta name="description" content="A batch size tuned for narrow OLTP rows — 5,000 rows, under 10 MB — quietly pins hundreds of MB the moment the workload is MB-scale TEXT, BYTEA, JSON, or geometry. Row count is a proxy for memory, and it's only honest when rows are uniform.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/field-notes/batch-by-bytes-not-rows/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="active" href="/field-notes/">Field Notes</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Field Notes</div><a class="lnk" href="/field-notes/">About these notes</a><a class="lnk" href="/field-notes/float-in-primary-key/"><span class="fn-date">2026-07-09</span>When the row's own identity gets rounded</a><a class="lnk" href="/field-notes/signed-manifest-chunk-binding/"><span class="fn-date">2026-07-09</span>A signature that verified green while restoring the wrong table's rows</a><a class="lnk" href="/field-notes/three-clouds-three-signatures/"><span class="fn-date">2026-07-09</span>Three clouds, three ways to return an ECDSA signature</a><a class="lnk" href="/field-notes/vstream-float-precision/"><span class="fn-date">2026-07-09</span>Vitess copy phase rounds your FLOATs</a><a class="lnk" href="/field-notes/xid-wraparound-cdc/"><span class="fn-date">2026-07-08</span>Comparing 32-bit transaction ids breaks after four billion of them</a><a class="lnk" href="/field-notes/d1-not-local-sqlite/"><span class="fn-date">2026-06-30</span>Cloudflare D1 is not your local SQLite</a><a class="lnk" href="/field-notes/planetscale-grow-reparent/"><span class="fn-date">2026-06-29</span>When PlanetScale un-acked our rows</a><a class="lnk" href="/field-notes/int64-json-boundary/"><span class="fn-date">2026-06-29</span>2^53 is a database boundary now</a><a class="lnk" href="/field-notes/vitess-tx-killer-wan/"><span class="fn-date">2026-06-28</span>The 20-second guillotine over a WAN</a><a class="lnk" href="/field-notes/sqlite-wal-checkpoint-starvation/"><span class="fn-date">2026-06-28</span>One long-lived reader, 75 GB of WAL</a><a class="lnk" href="/field-notes/sqlite-decimal-affinity/"><span class="fn-date">2026-06-27</span>SQLite's DECIMAL is a suggestion</a><a class="lnk" href="/field-notes/poll-cost-grows-with-history/"><span class="fn-date">2026-06-22</span>A poller that re-reads all of history every tick</a><a class="lnk" href="/field-notes/mysql-enum-set-binlog-encoding/"><span class="fn-date">2026-06-20</span>ENUM is an ordinal and SET is a bitmask on the wire</a><a class="lnk" href="/field-notes/vitess-per-shard-primary-key/"><span class="fn-date">2026-06-18</span>Your primary key is only unique per shard</a><a class="lnk" href="/field-notes/binlog-transaction-compression/"><span class="fn-date">2026-06-17</span>A whole transaction in one zstd binlog event</a><a class="lnk" href="/field-notes/zero-value-config-trap/"><span class="fn-date">2026-06-15</span>The zero value is a loaded gun</a><a class="lnk" href="/field-notes/vstream-throttle-blind/"><span class="fn-date">2026-06-13</span>vtgate erases the throttle signal</a><a class="lnk" href="/field-notes/binlog-comment-truncate/"><span class="fn-date">2026-06-13</span>A comment hid a TRUNCATE from CDC</a><a class="lnk" href="/field-notes/postgres-slot-leaks/"><span class="fn-date">2026-06-11</span>Replication slots don't die with your process</a><a class="lnk" href="/field-notes/backup-manifest-quadratic/"><span class="fn-date">2026-06-11</span>Rewriting the whole manifest, once per chunk</a><a class="lnk" href="/field-notes/migrate-state-quadratic-blob/"><span class="fn-date">2026-06-10</span>One JSON blob in one row is a quadratic write</a><a class="lnk" href="/field-notes/vstream-snapshot-oom/"><span class="fn-date">2026-06-09</span>The cold-start that buffered a whole table into swap</a><a class="lnk" href="/field-notes/olap-workload-truncation/"><span class="fn-date">2026-06-07</span>Setting workload=olap silently truncated our chunked reads</a><a class="lnk" href="/field-notes/postgres-text-no-nul-byte/"><span class="fn-date">2026-06-02</span>Postgres text can't hold a NUL byte</a><a class="lnk" href="/field-notes/mysql-time-is-a-duration/"><span class="fn-date">2026-05-31</span>MySQL TIME is a duration, not a time of day</a><a class="lnk" href="/field-notes/mysql-enum-emoji/"><span class="fn-date">2026-05-30</span>MySQL turned our emoji into '?'</a><a class="lnk" href="/field-notes/redact-two-engines/"><span class="fn-date">2026-05-30</span>One redaction flag, two engines, two behaviors</a><a class="lnk" href="/field-notes/replica-identity-full-updates/"><span class="fn-date">2026-05-28</span>REPLICA IDENTITY FULL ate our UPDATEs</a><a class="lnk" href="/field-notes/cdc-carries-no-default/"><span class="fn-date">2026-05-25</span>The replication stream never tells you the column default</a><a class="lnk" href="/field-notes/create-if-not-exists-race/"><span class="fn-date">2026-05-24</span>CREATE IF NOT EXISTS is not a lock</a><a class="lnk" href="/field-notes/pgoutput-streaming-abort/"><span class="fn-date">2026-05-23</span>proto_version lets you parse streaming; only streaming='on' emits it</a><a class="lnk" href="/field-notes/postgres-lsn-timeline-scoped/"><span class="fn-date">2026-05-22</span>A Postgres LSN means nothing without its timeline</a><a class="lnk" href="/field-notes/numeric-array-flatten/"><span class="fn-date">2026-05-17</span>The pgx codec that flattened numeric[][]</a><a class="lnk active" href="/field-notes/batch-by-bytes-not-rows/"><span class="fn-date">2026-05-15</span>Count your bytes, not your rows</a><a class="lnk" href="/field-notes/empty-object-vs-array/"><span class="fn-date">2026-05-10</span>{}: two characters, two types</a><a class="lnk" href="/field-notes/postgres-idle-slot-failover/"><span class="fn-date">2026-05-07</span>Every HA knob on, and the slot still vanished at failover</a><a class="lnk" href="/field-notes/mysql-load-data-charset/"><span class="fn-date">2026-05-05</span>One LOAD DATA can't load a BLOB and a JSON column</a><a class="lnk" href="/field-notes/mysql-json-where-cast/"><span class="fn-date">2026-05-04</span>MySQL won't match a JSON column by bind parameter</a></aside>
+  <main class="content">
+    <h1>Count your bytes, not your rows</h1>
+    <p class="subtitle">A batch size tuned for narrow OLTP rows — 5,000 rows, under 10 MB — quietly pins hundreds of MB the moment the workload is MB-scale TEXT, BYTEA, JSON, or geometry. Row count is a proxy for memory, and it's only honest when rows are uniform.</p>
+    <p class="fn-landed">Landed in sluice · 2026-05-15 · Cross-cutting</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#what-happened">What happened</a></li><li><a href="#why">Why (the mechanism)</a></li><li><a href="#repro">The repro (the arithmetic)</a></li><li><a href="#what-sluice-does">What sluice does about it</a></li><li><a href="#lesson">The transferable lesson</a></li><li><a href="#sources">Primary sources</a></li></ul></nav>
+    
+<p class="fn-meta"><strong>Observed</strong> — bulk-copy (batched INSERT) and CDC apply into a target, a batch size set by row count meeting wide columns. Internally ADR-0028 (memory-bounded streaming).</p>
+
+<h2 id="what-happened">What happened <a class="hlink" href="#what-happened" aria-label="Permalink to this section">#</a></h2>
+<p>The batch accumulators were bounded by <strong>row count</strong> — <code>--bulk-batch-size 5000</code> for bulk INSERT, <code>--apply-batch-size</code> for CDC. On the narrow OLTP rows most tests use, 5,000 rows is under 10 MB and everything is fine. On a table with MB-scale <code>TEXT</code> / <code>BYTEA</code> / <code>JSON</code> / geometry columns, the same 5,000-row batch pinned <em>hundreds of MB</em> of driver parameter buffer — and a 500-change CDC batch holding one open transaction's parameter slice did the same. Memory spiked exactly where the configured batch size promised it wouldn't.</p>
+
+<h2 id="why">Why (the mechanism) <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
+<p>Row count is a stand-in for memory that only holds when every row is about the same small size. A batch accumulator holds N rows' worth of shaped values and driver parameter buffers before it flushes — that's N &times; (row width), and row width varies across workloads by orders of magnitude. A schema with one wide column breaks the proxy: <code>5000 &times; 10&nbsp;bytes</code> is 50&nbsp;KB, <code>5000 &times; 2&nbsp;MB</code> is 10&nbsp;GB, same batch size. Notably, the <code>COPY</code> and <code>LOAD DATA</code> paths were <em>immune</em> — they stream row-by-row through driver-controlled wire buffers and never hold N rows at once — so only the two <strong>accumulators</strong> (batched INSERT, and the open-transaction CDC apply) had the problem. The bound was on the wrong axis.</p>
+
+<h2 id="repro">The repro (the arithmetic) <a class="hlink" href="#repro" aria-label="Permalink to this section">#</a></h2>
+<pre><code>-- same batch size, four orders of magnitude apart in memory:
+--   narrow:  5000 rows x ~10 B/row   = ~50 KB   in flight
+--   wide:    5000 rows x ~2 MB/row   = ~10 GB   in flight
+-- a batch size that is safe for your test data is a memory bomb for
+-- someone else's schema — a single BYTEA/JSON/geometry column does it.</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it <a class="hlink" href="#what-sluice-does" aria-label="Permalink to this section">#</a></h2>
+<p>Add a byte budget: <code>--max-buffer-bytes</code> (default 64 MiB) that flushes on whichever fires first, the row count or the accumulated bytes. A wide-row workload transparently uses a smaller batch; a narrow one keeps the full count. The streaming paths (<code>COPY</code>, <code>LOAD DATA</code>) need no change, because they were never accumulators. The precedent is worth stealing: PlanetScale's pscale dumper already flushes its bulk-INSERT batcher at ~1 MB of <em>statement body</em>, not a fixed row count, for exactly this reason.</p>
+
+<h2 id="lesson">The transferable lesson <a class="hlink" href="#lesson" aria-label="Permalink to this section">#</a></h2>
+<p>Row count is a proxy for memory, and the proxy is only accurate when rows are uniform. The moment a schema has a wide column — a blob, a document, a geometry — "5,000 rows" can mean 50 KB or 10 GB, so a batch size that's safe for your data is a memory bomb for someone else's. Bound an accumulator by the resource you actually care about (bytes), and keep the count as a secondary cap. And know which of your paths are accumulators and which are streamers: the streaming ones were never at risk here, because they never hold the whole batch at once — the same reason a byte cap belongs on the two that do. (It's the smaller cousin of a <a href="/field-notes/vstream-snapshot-oom/">snapshot reader that buffered a whole table into swap</a>.)</p>
+
+<h2 id="sources">Primary sources <a class="hlink" href="#sources" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li>Postgres large-value storage (why a "row" can be megabytes) — <a href="https://www.postgresql.org/docs/current/storage-toast.html">TOAST</a>.</li>
+  <li>The 1 MB statement-body flush precedent — pscale / mydumper batch sizing conventions.</li>
+  <li>How sluice copies data (streaming vs batched paths) — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/field-notes/numeric-array-flatten/">← The pgx codec that flattened numeric[][]</a><a class="next" href="/field-notes/empty-object-vs-array/">{}: two characters, two types →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/field-notes/batch-by-bytes-not-rows/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

@@ -26,7 +26,7 @@ Split the single blob into a header row plus one row per table, and give the sto
 
 ## The transferable lesson
 
-"Just keep the state as one JSON column and upsert it" is an O(n&sup2;) amplifier the moment the state grows and the checkpoints are frequent — and on an MVCC database the cost is not merely re-serialization: every write is a new tuple version plus a re-TOAST of the entire oversized value, all concentrated on one hot row that also becomes a lock. Give any growing state map an O(1) per-key write surface (a row per key), and you fix the algorithmic cost, the storage amplification, and the write contention in one move. The same shape shows up in this project's backup manifest — a growing metadata object rewritten once per unit of progress is the pattern to watch for.
+"Just keep the state as one JSON column and upsert it" is an O(n&sup2;) amplifier the moment the state grows and the checkpoints are frequent — and on an MVCC database the cost is not merely re-serialization: every write is a new tuple version plus a re-TOAST of the entire oversized value, all concentrated on one hot row that also becomes a lock. Give any growing state map an O(1) per-key write surface (a row per key), and you fix the algorithmic cost, the storage amplification, and the write contention in one move. The same shape shows up in this project's backup manifest — a growing metadata object rewritten once per unit of progress is the pattern to watch for — and, per tick instead of per write, in a poller that re-derives its state from full history.
 
 ## Primary sources
 

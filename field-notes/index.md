@@ -32,6 +32,8 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-06-27SQLite & D1 SQLite's DECIMAL is a suggestion — Declare a column DECIMAL(10,2) and you get NUMERIC affinity, which stores 19.99 as 19.989999999999998. Not a rounding bug — an engine storage property, and the real predicate is dyadic representability.
 
+- 2026-06-22Cross-cutting A poller that re-reads all of history every tick — A backup broker rebuilt its entire lineage chain on every 30-second tick &mdash; ~2,000 object-store GETs per tick on a week-old stream, even when nothing had changed, with a tick that could outlast its own interval. Cost that grows with accumulated history, forever.
+
 - 2026-06-20MySQL & Vitess ENUM is an ordinal and SET is a bitmask on the wire — In a raw binlog row event a MySQL ENUM is its 1-based ordinal and a SET is a numeric bitmask; the member-name list lives only in the table definition. Decode without the schema and SET('a','c') becomes "5". Snapshot and VStream hand you text, so it hides until raw CDC.
 
 - 2026-06-18MySQL & Vitess Your primary key is only unique per shard — vtgate merges every Vitess/PlanetScale shard into one logical stream, but per-shard id ranges mean the same primary-key value legitimately exists on several shards. Copy them into one target table and the collisions silently overwrite &mdash; exit 0, rows short.
@@ -73,6 +75,8 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 - 2026-05-22Postgres A Postgres LSN means nothing without its timeline — Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL gets this right for free with GTIDs; Postgres's raw LSN carries no provenance.
 
 - 2026-05-17Postgres The pgx codec that flattened numeric[][] — A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped int[][] perfectly.
+
+- 2026-05-15Cross-cutting Count your bytes, not your rows — A batch size tuned for narrow OLTP rows &mdash; 5,000 rows, under 10 MB &mdash; quietly pins hundreds of MB the moment the workload is MB-scale TEXT, BYTEA, JSON, or geometry. The streaming paths were fine; only the two accumulators blew up.
 
 - 2026-05-10Cross-cutting {}: two characters, two types — {} is an empty array in Postgres and an empty object in JSON; []byte("{}") is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way.
 
