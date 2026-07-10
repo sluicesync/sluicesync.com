@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Postgres text can't hold a NUL byte — sluice docs</title>
+<meta name="description" content="text, varchar, and char reject an embedded 0x00 with SQLSTATE 22021; MySQL char/text store it without complaint. A cross-engine copy hits it, and because it fires inside the COPY protocol the error lands far from the offending row.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/field-notes/postgres-text-no-nul-byte/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="active" href="/field-notes/">Field Notes</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Field Notes</div><a class="lnk" href="/field-notes/">About these notes</a><a class="lnk" href="/field-notes/float-in-primary-key/"><span class="fn-date">2026-07-09</span>When the row's own identity gets rounded</a><a class="lnk" href="/field-notes/signed-manifest-chunk-binding/"><span class="fn-date">2026-07-09</span>A signature that verified green while restoring the wrong table's rows</a><a class="lnk" href="/field-notes/three-clouds-three-signatures/"><span class="fn-date">2026-07-09</span>Three clouds, three ways to return an ECDSA signature</a><a class="lnk" href="/field-notes/vstream-float-precision/"><span class="fn-date">2026-07-09</span>Vitess copy phase rounds your FLOATs</a><a class="lnk" href="/field-notes/xid-wraparound-cdc/"><span class="fn-date">2026-07-08</span>Comparing 32-bit transaction ids breaks after four billion of them</a><a class="lnk" href="/field-notes/d1-not-local-sqlite/"><span class="fn-date">2026-06-30</span>Cloudflare D1 is not your local SQLite</a><a class="lnk" href="/field-notes/planetscale-grow-reparent/"><span class="fn-date">2026-06-29</span>When PlanetScale un-acked our rows</a><a class="lnk" href="/field-notes/int64-json-boundary/"><span class="fn-date">2026-06-29</span>2^53 is a database boundary now</a><a class="lnk" href="/field-notes/vitess-tx-killer-wan/"><span class="fn-date">2026-06-28</span>The 20-second guillotine over a WAN</a><a class="lnk" href="/field-notes/sqlite-wal-checkpoint-starvation/"><span class="fn-date">2026-06-28</span>One long-lived reader, 75 GB of WAL</a><a class="lnk" href="/field-notes/sqlite-decimal-affinity/"><span class="fn-date">2026-06-27</span>SQLite's DECIMAL is a suggestion</a><a class="lnk" href="/field-notes/mysql-enum-set-binlog-encoding/"><span class="fn-date">2026-06-20</span>ENUM is an ordinal and SET is a bitmask on the wire</a><a class="lnk" href="/field-notes/vitess-per-shard-primary-key/"><span class="fn-date">2026-06-18</span>Your primary key is only unique per shard</a><a class="lnk" href="/field-notes/binlog-transaction-compression/"><span class="fn-date">2026-06-17</span>A whole transaction in one zstd binlog event</a><a class="lnk" href="/field-notes/zero-value-config-trap/"><span class="fn-date">2026-06-15</span>The zero value is a loaded gun</a><a class="lnk" href="/field-notes/vstream-throttle-blind/"><span class="fn-date">2026-06-13</span>vtgate erases the throttle signal</a><a class="lnk" href="/field-notes/binlog-comment-truncate/"><span class="fn-date">2026-06-13</span>A comment hid a TRUNCATE from CDC</a><a class="lnk" href="/field-notes/postgres-slot-leaks/"><span class="fn-date">2026-06-11</span>Replication slots don't die with your process</a><a class="lnk" href="/field-notes/olap-workload-truncation/"><span class="fn-date">2026-06-07</span>Setting workload=olap silently truncated our chunked reads</a><a class="lnk active" href="/field-notes/postgres-text-no-nul-byte/"><span class="fn-date">2026-06-02</span>Postgres text can't hold a NUL byte</a><a class="lnk" href="/field-notes/mysql-time-is-a-duration/"><span class="fn-date">2026-05-31</span>MySQL TIME is a duration, not a time of day</a><a class="lnk" href="/field-notes/mysql-enum-emoji/"><span class="fn-date">2026-05-30</span>MySQL turned our emoji into '?'</a><a class="lnk" href="/field-notes/redact-two-engines/"><span class="fn-date">2026-05-30</span>One redaction flag, two engines, two behaviors</a><a class="lnk" href="/field-notes/replica-identity-full-updates/"><span class="fn-date">2026-05-28</span>REPLICA IDENTITY FULL ate our UPDATEs</a><a class="lnk" href="/field-notes/cdc-carries-no-default/"><span class="fn-date">2026-05-25</span>The replication stream never tells you the column default</a><a class="lnk" href="/field-notes/create-if-not-exists-race/"><span class="fn-date">2026-05-24</span>CREATE IF NOT EXISTS is not a lock</a><a class="lnk" href="/field-notes/pgoutput-streaming-abort/"><span class="fn-date">2026-05-23</span>proto_version lets you parse streaming; only streaming='on' emits it</a><a class="lnk" href="/field-notes/postgres-lsn-timeline-scoped/"><span class="fn-date">2026-05-22</span>A Postgres LSN means nothing without its timeline</a><a class="lnk" href="/field-notes/numeric-array-flatten/"><span class="fn-date">2026-05-17</span>The pgx codec that flattened numeric[][]</a><a class="lnk" href="/field-notes/empty-object-vs-array/"><span class="fn-date">2026-05-10</span>{}: two characters, two types</a><a class="lnk" href="/field-notes/postgres-idle-slot-failover/"><span class="fn-date">2026-05-07</span>Every HA knob on, and the slot still vanished at failover</a><a class="lnk" href="/field-notes/mysql-load-data-charset/"><span class="fn-date">2026-05-05</span>One LOAD DATA can't load a BLOB and a JSON column</a><a class="lnk" href="/field-notes/mysql-json-where-cast/"><span class="fn-date">2026-05-04</span>MySQL won't match a JSON column by bind parameter</a></aside>
+  <main class="content">
+    <h1>Postgres text can't hold a NUL byte</h1>
+    <p class="subtitle">text, varchar, and char reject an embedded 0x00 with SQLSTATE 22021; MySQL char/text store it without complaint. A cross-engine copy hits it, and because it fires inside the COPY protocol the error lands far from the offending row.</p>
+    <p class="fn-landed">Landed in sluice · 2026-06-02 · Postgres</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#what-happened">What happened</a></li><li><a href="#why">Why (the mechanism)</a></li><li><a href="#repro">The repro</a></li><li><a href="#what-sluice-does">What sluice does about it</a></li><li><a href="#lesson">The transferable lesson</a></li><li><a href="#sources">Primary sources</a></li></ul></nav>
+    
+<p class="fn-meta"><strong>Observed</strong> — MySQL &rarr; Postgres copy of a text column containing an embedded NUL byte. Internally the Postgres <code>prepareValue</code> NUL guard.</p>
+
+<h2 id="what-happened">What happened <a class="hlink" href="#what-happened" aria-label="Permalink to this section">#</a></h2>
+<p>A cross-engine copy of a perfectly ordinary <code>VARCHAR</code> column failed on the Postgres side with a cryptic <code>invalid byte sequence for encoding "UTF8": 0x00</code> — and because it surfaced inside the bulk <code>COPY</code> stream, the error landed nowhere near the row that carried the byte. The source column held a string with an embedded <code>0x00</code> (a stray NUL from an upstream C string, a serialized blob mislabeled as text, a bad import), which MySQL had stored without objection.</p>
+
+<h2 id="why">Why (the mechanism) <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
+<p>Postgres text types — <code>text</code>, <code>varchar</code>, <code>char</code> — <strong>cannot store a <code>0x00</code> byte</strong>. The NUL is reserved as a string terminator in the server's internal C representation, so an embedded one is rejected as an invalid byte sequence (SQLSTATE <code>22021</code>, character-not-in-repertoire). MySQL's <code>CHAR</code>/<code>VARCHAR</code>/<code>TEXT</code> have no such rule — they treat the NUL as an ordinary byte and store it. So the value is legal on one engine and illegal on the other, and a migration is exactly where the two meet. The diagnosis is made harder by <code>COPY</code>: the failure fires while streaming the bulk buffer, so the error message is detached from the individual offending row.</p>
+
+<h2 id="repro">The repro <a class="hlink" href="#repro" aria-label="Permalink to this section">#</a></h2>
+<pre><code>-- MySQL stores an embedded NUL happily:
+CREATE TABLE t (id INT, s VARCHAR(64));
+INSERT INTO t VALUES (1, CONCAT('a', CHAR(0), 'b'));   -- OK, 3 bytes
+
+-- Postgres rejects the same bytes in a text type:
+SELECT E'a\x00b'::text;
+--   ERROR: invalid byte sequence for encoding "UTF8": 0x00  (SQLSTATE 22021)
+-- bytea holds arbitrary bytes, NUL included:
+SELECT E'\x610062'::bytea;   -- \x610062, no complaint</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it <a class="hlink" href="#what-sluice-does" aria-label="Permalink to this section">#</a></h2>
+<p>sluice refuses the value loudly with a coded error (<code>SLUICE-E-VALUE-NUL-BYTE</code>) that names the column and the constraint, rather than letting the opaque COPY-stream error surface far from the row — and rather than the tempting silent "fix" of stripping the NUL, which would quietly alter the data. The data-preserving path, when you genuinely need to carry those bytes, is to target <code>bytea</code>, which stores arbitrary binary including <code>0x00</code>. Loud refusal with the remedy named beats a cryptic wire error or a silent mutation.</p>
+
+<h2 id="lesson">The transferable lesson <a class="hlink" href="#lesson" aria-label="Permalink to this section">#</a></h2>
+<p>"It's a string column on both sides" is not the same as "the same bytes are legal on both sides." Postgres text is Unicode text with a hard rule — no <code>0x00</code> — that MySQL text does not share, so a value that lives happily in MySQL is a hard error in Postgres. When the two disagree about what bytes a type may hold, the honest options are to refuse loudly (naming the column and the fix) or to route the data to a type that can hold it (<code>bytea</code>); silently stripping the offending byte to make the insert succeed is data corruption wearing the disguise of a bug fix.</p>
+
+<h2 id="sources">Primary sources <a class="hlink" href="#sources" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li>Postgres on the NUL character in text — <a href="https://www.postgresql.org/docs/current/datatype-character.html">character types</a> and SQLSTATE <code>22021</code> in the <a href="https://www.postgresql.org/docs/current/errcodes-appendix.html">error-code appendix</a>.</li>
+  <li><code>bytea</code> for arbitrary bytes — <a href="https://www.postgresql.org/docs/current/datatype-binary.html">binary data types</a>.</li>
+  <li>sluice's value contract and coded refusals — <a href="/docs/error-codes/">Error &amp; exit codes</a>.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/field-notes/olap-workload-truncation/">← Setting workload=olap silently truncated our chunked reads</a><a class="next" href="/field-notes/mysql-time-is-a-duration/">MySQL TIME is a duration, not a time of day →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/field-notes/postgres-text-no-nul-byte/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
