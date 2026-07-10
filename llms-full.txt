@@ -4003,7 +4003,7 @@ For an encrypted chain, add --encrypt plus the same key source you backed up wit
 
 ===============================================================
 # Field Notes
-(https://sluicesync.com/docs/field-notes/)
+(https://sluicesync.com/field-notes/)
 
 War stories from building a correctness-first migration tool — the engine behaviors, wire-protocol edges, and silent-corruption classes we hit, and what we changed because of them.
 
@@ -4013,50 +4013,44 @@ Field notes are evergreen engine-behavior documentation, not release announcemen
 
 None of these require sluice to reproduce — they are properties of Postgres, MySQL, Vitess, SQLite, and the wire protocols and drivers around them. If you move data between databases for a living, several of them will eventually be your problem too.
 
-## Postgres
+They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
-- The same bytes, a different codec: how numeric[][] silently flattened — a driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped int[][] perfectly.
+- 2026-07-09MySQL & Vitess Vitess copy phase rounds your FLOATs — A 17-year-old MySQL display-rounding bug with a fresh consequence: the same FLOAT arrives exact or rounded depending on which VStream phase delivered it.
 
-- REPLICA IDENTITY FULL silently ate our UPDATEs — building an UPDATE's WHERE over every old column works forever on int/varchar, then a jsonb value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss.
+- 2026-06-30SQLite & D1 Cloudflare D1 is not your local SQLite — A UUID-conformance GLOB passed every local test, then died on live D1 with code 7500: LIKE or GLOB pattern too complex. The dialect is the same; the hidden limits are a config surface you can't test against locally.
 
-- Replication slots don't die with your process — a slot is a promise the server keeps until you drop it; a crashed backup, a refused cold-start, and a week-one leak each pinned WAL on the source until the disk filled.
+- 2026-06-29MySQL & Vitess When PlanetScale un-acked our rows — Committed, client-acknowledged rows that simply weren't on the new primary after a volume-grow reparent. Exit 0, ~4,000 rows short.
 
-## MySQL & Vitess
+- 2026-06-29Cross-cutting 2^53 is a database boundary now — JSON has one number type and it's a double, so every JSON hop in a pipeline is a potential rounding event for Snowflake IDs and any integer past 9,007,199,254,740,992.
 
-- PlanetScale acked our rows, then a storage-grow reparent un-acked them — committed, client-acknowledged rows that simply weren't on the new primary after a volume-grow reparent. Exit 0, ~4,000 rows short.
+- 2026-06-28MySQL & Vitess The 20-second guillotine over a WAN — With no statement pipelining, an N-row apply costs N round-trips; every batch big enough to be efficient overran Vitess's 20 s timeout and every batch small enough to commit crawled. A self-tuning system converged to a stall.
 
-- Vitess's copy phase rounds your FLOATs; its binlog phase doesn't — a 17-year-old MySQL display-rounding bug with a fresh consequence: the same FLOAT arrives exact or rounded depending on which VStream phase delivered it.
+- 2026-06-28SQLite & D1 One long-lived reader, 75 GB of WAL — A continuous-CDC run watched the -wal file grow to 75 GB in 52 minutes while the table it tracked stayed bounded; one idle reader's snapshot pinned every superseded page. Kill the process and it collapsed to ~0.6 GB.
 
-- vtgate erases the throttle signal: every VStream consumer is throttle-blind — the one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one.
+- 2026-06-27SQLite & D1 SQLite's DECIMAL is a suggestion — Declare a column DECIMAL(10,2) and you get NUMERIC affinity, which stores 19.99 as 19.989999999999998. Not a rounding bug — an engine storage property, and the real predicate is dyadic representability.
 
-- The binlog keeps your SQL comments — and our TRUNCATE parser didn't know — a leading -- comment on a TRUNCATE made a CDC reader miss it entirely; the source emptied, the target kept every row, forever.
+- 2026-06-15Cross-cutting The zero value is a loaded gun — A config field that &ldquo;defaults on&rdquo; silently defaults off for every caller that didn't go through the CLI, because in Go every unset field gets the zero value. Twice, with real database consequences.
 
-- MySQL's data dictionary turned our emoji into question marks — MySQL substitutes ? for 4-byte UTF-8 in ENUM/SET labels at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it.
+- 2026-06-13MySQL & Vitess vtgate erases the throttle signal — The one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one.
 
-- The 20-second guillotine: Vitess's transaction killer meets a 96 ms WAN — with no statement pipelining, an N-row apply costs N round-trips; every batch big enough to be efficient overran Vitess's 20 s timeout and every batch small enough to commit crawled. A self-tuning system converged to a stall.
+- 2026-06-13MySQL & Vitess A comment hid a TRUNCATE from CDC — A leading -- comment on a TRUNCATE made a CDC reader miss it entirely; the source emptied, the target kept every row, forever.
 
-## SQLite & D1
+- 2026-06-11Postgres Replication slots don't die with your process — A slot is a promise the server keeps until you drop it; a crashed backup, a refused cold-start, and a week-one leak each pinned WAL on the source until the disk filled.
 
-- Cloudflare D1 is not your local SQLite — a UUID-conformance GLOB passed every local test, then died on live D1 with code 7500: LIKE or GLOB pattern too complex. The dialect is the same; the hidden limits are a config surface you can't test against locally.
+- 2026-05-30MySQL & Vitess MySQL turned our emoji into '?' — MySQL substitutes ? for 4-byte UTF-8 in ENUM/SET labels at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it.
 
-- SQLite's DECIMAL is a suggestion — declare a column DECIMAL(10,2) and you get NUMERIC affinity, which stores 19.99 as 19.989999999999998. Not a rounding bug — an engine storage property, and the real predicate is dyadic representability.
+- 2026-05-28Postgres REPLICA IDENTITY FULL ate our UPDATEs — Building an UPDATE's WHERE over every old column works forever on int/varchar, then a jsonb value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss.
 
-- One long-lived reader, 75 GB of WAL — a continuous-CDC run watched the -wal file grow to 75 GB in 52 minutes while the table it tracked stayed bounded; one idle reader's snapshot pinned every superseded page. Kill the process and it collapsed to ~0.6 GB.
+- 2026-05-17Postgres The pgx codec that flattened numeric[][] — A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped int[][] perfectly.
 
-## Cross-cutting
-
-- 253 is a database boundary now — JSON has one number type and it's a double, so every JSON hop in a pipeline is a potential rounding event for Snowflake IDs and any integer past 9,007,199,254,740,992.
-
-- {}: two characters, two types, one silent corruption — {} is an empty array in Postgres and an empty object in JSON; []byte("{}") is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way.
-
-- The zero value is a loaded gun — a config field that &ldquo;defaults on&rdquo; silently defaults off for every caller that didn't go through the CLI, because in Go every unset field gets the zero value. Twice, with real database consequences.
+- 2026-05-10Cross-cutting {}: two characters, two types — {} is an empty array in Postgres and an empty object in JSON; []byte("{}") is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way.
 
 These notes are also swept into llms.txt / llms-full.txt, so an AI assistant pointed at sluice's docs inherits this engine lore too.
 
 
 ===============================================================
 # The same bytes, a different codec: how numeric[][] silently flattened
-(https://sluicesync.com/docs/field-notes/numeric-array-flatten/)
+(https://sluicesync.com/field-notes/numeric-array-flatten/)
 
 We pinned multi-dimensional array support green on int[][] and text[][] and shipped. numeric[][] — running through byte-identical code — flattened a 2×2 matrix into a 1-D four-element array. Exit 0, no warning.
 
@@ -4108,7 +4102,7 @@ When a change touches an encoder, decoder, or codec that dispatches on a type fa
 
 ===============================================================
 # PlanetScale acked our rows, then a storage-grow reparent un-acked them
-(https://sluicesync.com/docs/field-notes/planetscale-grow-reparent/)
+(https://sluicesync.com/field-notes/planetscale-grow-reparent/)
 
 A 5.5M-row migrate into PlanetScale MySQL returned exit 0 and “migration complete” — and landed 5,496,003 rows. About four thousand, gone in scattered whole-batch units, no error anywhere.
 
@@ -4161,7 +4155,7 @@ A war-story footnote worth its own lesson: the first version of this fix shipped
 
 ===============================================================
 # Vitess's copy phase rounds your FLOATs; its binlog phase doesn't
-(https://sluicesync.com/docs/field-notes/vstream-float-precision/)
+(https://sluicesync.com/field-notes/vstream-float-precision/)
 
 MySQL renders FLOAT to 6 significant digits over the text protocol, so a stored, exact 8388608 comes back as 8388610. Vitess's VStream copy phase inherits it; its binlog phase doesn't — the same column, same row, arrives exact or rounded depending on which phase delivered it.
 
@@ -4224,7 +4218,7 @@ When a system has two independent paths to deliver the same data — a bulk copy
 
 ===============================================================
 # vtgate erases the throttle signal: every VStream consumer is throttle-blind
-(https://sluicesync.com/docs/field-notes/vstream-throttle-blind/)
+(https://sluicesync.com/field-notes/vstream-throttle-blind/)
 
 Our stream went silent under a write burst, a progress watchdog called it a failover hang, the process restarted, resumed at the same stuck position, and stalled again — indefinitely. The one in-band signal that would have said “this is a throttle, wait” is deleted before any client can see it.
 
@@ -4261,7 +4255,7 @@ Since the in-band throttle flag can't reach us, sluice can't treat silence alone
 
 ===============================================================
 # The binlog keeps your SQL comments — and our TRUNCATE parser didn't know
-(https://sluicesync.com/docs/field-notes/binlog-comment-truncate/)
+(https://sluicesync.com/field-notes/binlog-comment-truncate/)
 
 A leading -- comment on a TRUNCATE made our CDC reader miss the statement entirely. The source emptied; the target kept every row, forever, with no error and no lag.
 
@@ -4316,7 +4310,7 @@ Two lessons, both cheap to internalize. First: anything that pattern-matches SQL
 
 ===============================================================
 # 2^53 is a database boundary now
-(https://sluicesync.com/docs/field-notes/int64-json-boundary/)
+(https://sluicesync.com/field-notes/int64-json-boundary/)
 
 JSON has one number type, and it's a double. That single fact produced two independent silent-corruption incidents in one week — one in third-party tooling, one in our own decoder.
 
@@ -4376,7 +4370,7 @@ If your IDs are Snowflakes, or your rows count past 9,007,199,254,740,992, treat
 
 ===============================================================
 # REPLICA IDENTITY FULL silently ate our UPDATEs
-(https://sluicesync.com/docs/field-notes/replica-identity-full-updates/)
+(https://sluicesync.com/field-notes/replica-identity-full-updates/)
 
 Build a CDC UPDATE's WHERE clause over every old column and it works forever on int and varchar. Then a jsonb column rides along unchanged, its old value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss.
 
@@ -4432,7 +4426,7 @@ Treat rich types — jsonb, timestamptz, bytea, high-precision numeric — as ra
 
 ===============================================================
 # Replication slots don't die with your process
-(https://sluicesync.com/docs/field-notes/postgres-slot-leaks/)
+(https://sluicesync.com/field-notes/postgres-slot-leaks/)
 
 A Postgres logical replication slot is a promise the server keeps: it retains WAL from the slot's restart_lsn until you drop it — even if the process that created it crashed weeks ago. We hit the class three separate ways, each invisible until the source disk fills.
 
@@ -4493,7 +4487,7 @@ If your tool creates replication slots (or any server-side, session-decoupled re
 
 ===============================================================
 # MySQL's data dictionary turned our emoji into question marks
-(https://sluicesync.com/docs/field-notes/mysql-enum-emoji/)
+(https://sluicesync.com/field-notes/mysql-enum-emoji/)
 
 A MySQL ENUM whose label contains an emoji doesn't contain that emoji by the time you read it back. MySQL substitutes ? for 4-byte UTF-8 characters in ENUM/SET labels at CREATE TABLE time, regardless of column charset — and the label is gone from the catalog before any client sees it.
 
@@ -4548,7 +4542,7 @@ Character-set correctness is not uniform across a database's own surfaces. A col
 
 ===============================================================
 # The 20-second guillotine: Vitess's transaction killer meets a 96 ms WAN
-(https://sluicesync.com/docs/field-notes/vitess-tx-killer-wan/)
+(https://sluicesync.com/field-notes/vitess-tx-killer-wan/)
 
 Continuous CDC into PlanetScale MySQL over the internet stalled at effectively zero throughput. The failure geometry: with no statement pipelining an N-row apply costs N round-trips; at 96 ms RTT a 1,000-row batch takes ~100 seconds; Vitess kills any transaction at 20 seconds; the adaptive batch controller shrinks the batch — and converges to a stall.
 
@@ -4601,7 +4595,7 @@ Over a WAN, the shape of your protocol dominates every tuning knob. If your appl
 
 ===============================================================
 # Cloudflare D1 is not your local SQLite
-(https://sluicesync.com/docs/field-notes/d1-not-local-sqlite/)
+(https://sluicesync.com/field-notes/d1-not-local-sqlite/)
 
 Our type-inference validated candidate columns with SQLite GLOB patterns — a UUID check is a 356-character char-class pattern — and passed every test we had, including a multi-GB head-to-head. Then it hit live D1 and died instantly: code 7500, LIKE or GLOB pattern too complex, on a 1,750-row table with pristine data.
 
@@ -4653,7 +4647,7 @@ When you target a hosted build of an embedded engine, the SQL dialect is the sam
 
 ===============================================================
 # SQLite's DECIMAL is a suggestion: 19.99, stored as 19.989999999999998
-(https://sluicesync.com/docs/field-notes/sqlite-decimal-affinity/)
+(https://sluicesync.com/field-notes/sqlite-decimal-affinity/)
 
 SQLite doesn't have column types; it has affinities. Declare DECIMAL(10,2) and you get NUMERIC affinity, which stores any non-integer as a float64 — so 19.99 lands as 19.989999999999998 on disk. Not a rounding bug: an engine storage property.
 
@@ -4709,7 +4703,7 @@ If you produce .db files for anyone — or consume them — a declared column ty
 
 ===============================================================
 # One long-lived reader, 75 GB of WAL
-(https://sluicesync.com/docs/field-notes/sqlite-wal-checkpoint-starvation/)
+(https://sluicesync.com/field-notes/sqlite-wal-checkpoint-starvation/)
 
 A continuous-CDC run against a 20 GB SQLite source watched the -wal file grow from zero to 75 GB in 52 minutes — while the change-log table it tracked stayed bounded at a few thousand rows. In WAL mode, a checkpoint can only reclaim frames older than the oldest live reader's snapshot.
 
@@ -4755,7 +4749,7 @@ A reader's snapshot pins the log — this is the same principle that makes an id
 
 ===============================================================
 # {}: two characters, two types, one silent corruption
-(https://sluicesync.com/docs/field-notes/empty-object-vs-array/)
+(https://sluicesync.com/field-notes/empty-object-vs-array/)
 
 In Postgres, {} is an empty array literal. In JSON, it's an empty object. Funnel both through one value-preparation path and []byte("{}") is genuinely ambiguous — and for nine releases our MySQL writer resolved it the wrong way.
 
@@ -4805,7 +4799,7 @@ Value translation is only sound when type information travels with the value, al
 
 ===============================================================
 # The zero value is a loaded gun
-(https://sluicesync.com/docs/field-notes/zero-value-config-trap/)
+(https://sluicesync.com/field-notes/zero-value-config-trap/)
 
 Twice in this project a config field that “defaults on” silently defaulted off (or worse) for every caller that didn't go through the CLI — because in Go, every construction site that doesn't set a field gets the zero value. Both had real database consequences.
 

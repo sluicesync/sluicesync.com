@@ -1,0 +1,4 @@
+# Cloudflare Pages redirects.
+# Field Notes moved from /docs/field-notes/* to their own top-level /field-notes/*
+# section. Keep the 6 originally-published /docs/field-notes/ URLs alive.
+/docs/field-notes/* /field-notes/:splat 301

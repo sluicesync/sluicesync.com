@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replication slots don't die with your process — sluice docs</title>
+<meta name="description" content="A Postgres logical replication slot is a promise the server keeps: it retains WAL from the slot's restart_lsn until you drop it — even if the process that created it crashed weeks ago. We hit the class three separate ways, each invisible until the source disk fills.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/field-notes/postgres-slot-leaks/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="active" href="/field-notes/">Field Notes</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Field Notes</div><a class="lnk" href="/field-notes/">About these notes</a><a class="lnk" href="/field-notes/vstream-float-precision/"><span class="fn-date">2026-07-09</span>Vitess copy phase rounds your FLOATs</a><a class="lnk" href="/field-notes/d1-not-local-sqlite/"><span class="fn-date">2026-06-30</span>Cloudflare D1 is not your local SQLite</a><a class="lnk" href="/field-notes/planetscale-grow-reparent/"><span class="fn-date">2026-06-29</span>When PlanetScale un-acked our rows</a><a class="lnk" href="/field-notes/int64-json-boundary/"><span class="fn-date">2026-06-29</span>2^53 is a database boundary now</a><a class="lnk" href="/field-notes/vitess-tx-killer-wan/"><span class="fn-date">2026-06-28</span>The 20-second guillotine over a WAN</a><a class="lnk" href="/field-notes/sqlite-wal-checkpoint-starvation/"><span class="fn-date">2026-06-28</span>One long-lived reader, 75 GB of WAL</a><a class="lnk" href="/field-notes/sqlite-decimal-affinity/"><span class="fn-date">2026-06-27</span>SQLite's DECIMAL is a suggestion</a><a class="lnk" href="/field-notes/zero-value-config-trap/"><span class="fn-date">2026-06-15</span>The zero value is a loaded gun</a><a class="lnk" href="/field-notes/vstream-throttle-blind/"><span class="fn-date">2026-06-13</span>vtgate erases the throttle signal</a><a class="lnk" href="/field-notes/binlog-comment-truncate/"><span class="fn-date">2026-06-13</span>A comment hid a TRUNCATE from CDC</a><a class="lnk active" href="/field-notes/postgres-slot-leaks/"><span class="fn-date">2026-06-11</span>Replication slots don't die with your process</a><a class="lnk" href="/field-notes/mysql-enum-emoji/"><span class="fn-date">2026-05-30</span>MySQL turned our emoji into '?'</a><a class="lnk" href="/field-notes/replica-identity-full-updates/"><span class="fn-date">2026-05-28</span>REPLICA IDENTITY FULL ate our UPDATEs</a><a class="lnk" href="/field-notes/numeric-array-flatten/"><span class="fn-date">2026-05-17</span>The pgx codec that flattened numeric[][]</a><a class="lnk" href="/field-notes/empty-object-vs-array/"><span class="fn-date">2026-05-10</span>{}: two characters, two types</a></aside>
+  <main class="content">
+    <h1>Replication slots don't die with your process</h1>
+    <p class="subtitle">A Postgres logical replication slot is a promise the server keeps: it retains WAL from the slot's restart_lsn until you drop it — even if the process that created it crashed weeks ago. We hit the class three separate ways, each invisible until the source disk fills.</p>
+    <p class="fn-landed">Landed in sluice · 2026-06-11 · Postgres</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#what-happened">What happened</a></li><li><a href="#why">Why (the mechanism)</a></li><li><a href="#repro">The repro</a></li><li><a href="#what-sluice-does">What sluice does about it</a></li><li><a href="#lesson">The transferable lesson</a></li><li><a href="#sources">Primary sources</a></li></ul></nav>
+    
+<p class="fn-meta"><strong>Observed</strong> — Postgres source, replication-slot lifecycle across crashes and early exits. Internally Bug 5 (fixed v0.2.0), Bug 137 (fixed v0.99.37), Bug 177 (fixed v0.99.179).</p>
+
+<h2 id="what-happened">What happened <a class="hlink" href="#what-happened" aria-label="Permalink to this section">#</a></h2>
+<p>A Postgres logical replication slot retains WAL from its <code>restart_lsn</code> onward until something drops it. A slot left behind by a dead process keeps pinning WAL forever — the server has no idea the client is gone, and it is doing exactly what you asked: holding the log so a consumer can resume. On a write-active source, an orphaned slot is a slow disk-fill with no loud signal until Postgres goes read-only. We hit this class three separate ways.</p>
+<ul>
+  <li><strong>A hard-killed backup.</strong> A PG-source <code>backup full</code> created a non-temporary snapshot-anchor slot (<code>sluice_backup_anchor_&lt;ts&gt;</code>). Kill it mid-run and the slot survives inactive; the subsequent resume creates a <em>new</em> anchor and never sweeps the old one, so every crashed run adds one more WAL-pinning orphan, each frozen at its creation-time <code>restart_lsn</code>.</li>
+  <li><strong>A cold-start that refused for an unrelated reason.</strong> A <code>sync start</code> created its slot <em>before</em> the target-empty check, then hit <code>SLUICE-E-COLDSTART-TARGET-NOT-EMPTY</code> and exited — without dropping the slot it had just created. The refusal was loud and correct; the leaked slot behind it was silent.</li>
+  <li><strong>The earliest version of the tool.</strong> In week one, any cold-start that failed between <code>CREATE_REPLICATION_SLOT</code> and clean shutdown left <code>sluice_slot</code> behind, and the next start refused with <code>replication slot "sluice_slot" already exists</code> until an operator ran <code>pg_drop_replication_slot</code> by hand.</li>
+</ul>
+
+<h2 id="why">Why (the mechanism) <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
+<p>A non-temporary slot's lifetime is <em>server-side</em> and unbounded — it is decoupled from the TCP connection or OS process that created it, by design, so a consumer can disconnect and reconnect without losing its place. That is exactly why a crash leaks it: there is no session-teardown hook that drops a persistent slot, and <code>kill -9</code> gives the client no chance to clean up. Any code path that creates a slot and can exit abnormally — a crash, a signal, an early-return refusal — is therefore a potential leak, and the leak is invisible from the application side. You only see it in <code>pg_replication_slots</code>, or when the disk fills.</p>
+
+<h2 id="repro">The repro <a class="hlink" href="#repro" aria-label="Permalink to this section">#</a></h2>
+<p>Create a slot, kill the process before it drops it, and look at the catalog:</p>
+<pre><code>-- create a slot, then hard-kill the creating process (kill -9 / taskkill /F)
+SELECT slot_name, temporary, active, restart_lsn
+FROM pg_replication_slots
+WHERE slot_name LIKE 'sluice_%';
+--  sluice_backup_anchor_178...  | f | f | 0/1A2B3C4   &lt;- persistent, inactive,
+--                                                        pinning WAL at that LSN
+
+-- the WAL it pins never recycles until you drop it:
+SELECT pg_drop_replication_slot('sluice_backup_anchor_178...');</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it <a class="hlink" href="#what-sluice-does" aria-label="Permalink to this section">#</a></h2>
+<p>The toolbox that closed the class:</p>
+<ul>
+  <li><strong>Protocol <code>TEMPORARY</code> slots</strong> for anything single-run-scoped. A temporary slot auto-drops when its session ends — including under <code>kill -9</code> — so a crashed backup no longer leaks its anchor. (<code>CREATE_REPLICATION_SLOT &hellip; TEMPORARY</code> supports <code>EXPORT_SNAPSHOT</code>, so the snapshot-anchored backup path can use it.)</li>
+  <li><strong>An orphan sweep with an age safety margin</strong> on the resume path, for slots leaked by pre-fix binaries: old orphans are dropped with an INFO naming each one; a slot younger than the margin is only WARN-named (it might belong to a concurrent run), never auto-dropped.</li>
+  <li><strong>Teardown-on-refusal ordering</strong>: an early-exit refusal now abandons the slot it created before returning, so the target-not-empty path leaves the source slot count unchanged.</li>
+</ul>
+<p>This is the <a href="/docs/postgres-source-prep/">contain-Postgres-complexity</a> tenet in practice: slot lifecycle is surfaced explicitly — via <code>sluice slot list</code> / <code>slot drop</code> and named WARNs — rather than silently auto-handled or silently leaked.</p>
+
+<h2 id="lesson">The transferable lesson <a class="hlink" href="#lesson" aria-label="Permalink to this section">#</a></h2>
+<p>If your tool creates replication slots (or any server-side, session-decoupled resource), <strong>your crash paths are part of your API.</strong> Enumerate every way the process can exit abnormally — signal, panic, early-return refusal, hard kill — and make sure each one either can't leak the resource (protocol-<code>TEMPORARY</code>) or is reconciled on the next run (an age-bounded sweep). A resource whose lifetime the server owns will outlive your process by default; that is a feature you have to opt out of, not a bug you can ignore.</p>
+
+<h2 id="sources">Primary sources <a class="hlink" href="#sources" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li>Postgres replication slots — <a href="https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS">streaming replication slots</a> and <a href="https://www.postgresql.org/docs/current/view-pg-replication-slots.html"><code>pg_replication_slots</code></a>.</li>
+  <li>The replication protocol's <code>CREATE_REPLICATION_SLOT &hellip; TEMPORARY</code> — <a href="https://www.postgresql.org/docs/current/protocol-replication.html">streaming replication protocol</a>.</li>
+  <li>sluice Postgres-source preparation — <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> and the <a href="/docs/managed-postgres-slotless/">managed (slot-less) path</a>.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/field-notes/binlog-comment-truncate/">← A comment hid a TRUNCATE from CDC</a><a class="next" href="/field-notes/mysql-enum-emoji/">MySQL turned our emoji into '?' →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/field-notes/postgres-slot-leaks/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

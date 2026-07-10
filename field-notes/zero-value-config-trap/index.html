@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The zero value is a loaded gun — sluice docs</title>
+<meta name="description" content="Twice in this project a config field that “defaults on” silently defaulted off (or worse) for every caller that didn't go through the CLI — because in Go, every construction site that doesn't set a field gets the zero value. Both had real database consequences.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/field-notes/zero-value-config-trap/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="active" href="/field-notes/">Field Notes</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Field Notes</div><a class="lnk" href="/field-notes/">About these notes</a><a class="lnk" href="/field-notes/vstream-float-precision/"><span class="fn-date">2026-07-09</span>Vitess copy phase rounds your FLOATs</a><a class="lnk" href="/field-notes/d1-not-local-sqlite/"><span class="fn-date">2026-06-30</span>Cloudflare D1 is not your local SQLite</a><a class="lnk" href="/field-notes/planetscale-grow-reparent/"><span class="fn-date">2026-06-29</span>When PlanetScale un-acked our rows</a><a class="lnk" href="/field-notes/int64-json-boundary/"><span class="fn-date">2026-06-29</span>2^53 is a database boundary now</a><a class="lnk" href="/field-notes/vitess-tx-killer-wan/"><span class="fn-date">2026-06-28</span>The 20-second guillotine over a WAN</a><a class="lnk" href="/field-notes/sqlite-wal-checkpoint-starvation/"><span class="fn-date">2026-06-28</span>One long-lived reader, 75 GB of WAL</a><a class="lnk" href="/field-notes/sqlite-decimal-affinity/"><span class="fn-date">2026-06-27</span>SQLite's DECIMAL is a suggestion</a><a class="lnk active" href="/field-notes/zero-value-config-trap/"><span class="fn-date">2026-06-15</span>The zero value is a loaded gun</a><a class="lnk" href="/field-notes/vstream-throttle-blind/"><span class="fn-date">2026-06-13</span>vtgate erases the throttle signal</a><a class="lnk" href="/field-notes/binlog-comment-truncate/"><span class="fn-date">2026-06-13</span>A comment hid a TRUNCATE from CDC</a><a class="lnk" href="/field-notes/postgres-slot-leaks/"><span class="fn-date">2026-06-11</span>Replication slots don't die with your process</a><a class="lnk" href="/field-notes/mysql-enum-emoji/"><span class="fn-date">2026-05-30</span>MySQL turned our emoji into '?'</a><a class="lnk" href="/field-notes/replica-identity-full-updates/"><span class="fn-date">2026-05-28</span>REPLICA IDENTITY FULL ate our UPDATEs</a><a class="lnk" href="/field-notes/numeric-array-flatten/"><span class="fn-date">2026-05-17</span>The pgx codec that flattened numeric[][]</a><a class="lnk" href="/field-notes/empty-object-vs-array/"><span class="fn-date">2026-05-10</span>{}: two characters, two types</a></aside>
+  <main class="content">
+    <h1>The zero value is a loaded gun</h1>
+    <p class="subtitle">Twice in this project a config field that “defaults on” silently defaulted off (or worse) for every caller that didn't go through the CLI — because in Go, every construction site that doesn't set a field gets the zero value. Both had real database consequences.</p>
+    <p class="fn-landed">Landed in sluice · 2026-06-15 · Cross-cutting</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#what-happened">What happened</a></li><li><a href="#why">Why (the mechanism)</a></li><li><a href="#repro">The repro</a></li><li><a href="#what-sluice-does">What sluice does about it</a></li><li><a href="#lesson">The transferable lesson</a></li><li><a href="#sources">Primary sources</a></li></ul></nav>
+    
+<p class="fn-meta"><strong>Observed</strong> — two config-defaulting bugs with database consequences. The first (a CDC resnapshot path) is the v0.99.51 trap behind ADR-0093; the second is Bug 180, an un-extendable encrypted backup chain (fixed v0.99.185).</p>
+
+<h2 id="what-happened">What happened <a class="hlink" href="#what-happened" aria-label="Permalink to this section">#</a></h2>
+<p>Twice, a config field meant to "default on" silently defaulted <em>off</em> — or to an unreachable value — for every caller that didn't construct it through the CLI. Both looked correct in a unit test and both had a real database consequence: one a CDC resnapshot path, the other an encrypted backup chain you couldn't extend.</p>
+
+<h2 id="why">Why (the mechanism) <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
+<p>In Go, every struct construction site that doesn't set a field gets that field's <strong>zero value</strong> — <code>false</code> for a bool, <code>""</code> for a string. The CLI is one construction site; every test, every internal broker/chain path, and every future caller is another, and they all get the zero value unless they explicitly set the field. A field <em>named for its on-behavior</em> silently inverts to off for all of them.</p>
+<ul>
+  <li><strong>Round one — a boolean defaulting the wrong way.</strong> <code>AutoResnapshotOnInvalidPosition</code> was intended to default <em>true</em>. But every test and internal construction that didn't set it got <code>false</code> and took the suppressed branch. The race-detector integration job surfaced it as a nil-deref panic on that branch — an intended-on safety behavior was off everywhere except the CLI.</li>
+  <li><strong>Round two — a default that made a feature unreachable, and it shipped.</strong> The backup encrypt-mode feature "omit <code>--encrypt-mode</code> to inherit the chain's mode" keyed the inherit branch on an empty string. But <code>kong</code>, the CLI parser, fills the flag's declared default (<code>"per-chain"</code>) whenever the operator omits it — so no CLI invocation could ever produce the empty string the inherit branch needed. The branch was dead from the parser's side. The unit test passed <code>""</code> directly and went green, sailing right past the layer that made it unreachable. The operator-visible result: extending or resuming a <code>per-chunk</code>-encrypted backup chain via the natural "omit the flag" invocation was refused.</li>
+</ul>
+
+<h2 id="repro">The repro <a class="hlink" href="#repro" aria-label="Permalink to this section">#</a></h2>
+<pre><code>type Streamer struct {
+    // intended to default ON — but every caller that doesn't set it
+    // gets the zero value (false) and silently takes the OFF branch:
+    AutoResnapshotOnInvalidPosition bool
+}
+
+s := Streamer{}          // a test, a broker path, a future caller...
+// s.AutoResnapshotOnInvalidPosition == false  -&gt; suppressed branch
+
+// The kong variant: a direct-call test cannot see a default the parser injects.
+//   flag omitted on the CLI -&gt; kong fills "per-chain" -&gt; inherit branch (keyed
+//   on "") is unreachable; but a unit test that passes "" directly goes green.</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it <a class="hlink" href="#what-sluice-does" aria-label="Permalink to this section">#</a></h2>
+<p>Two rules fell out, both now project doctrine. First: <strong>name a boolean config for its opt-out</strong> (<code>SuppressX</code>, <code>NoX</code>), never <code>EnableX</code>-defaulting-true-by-intent, so the zero value <em>is</em> the safe, common behavior and no construction site can silently invert it. Second: <strong>pin any omitted-flag semantics through the real argument parser</strong>, not a direct call — a unit test that hands the function a value the parser would never produce (an empty string kong fills with a default) proves nothing about the actual CLI path. Bug 180's fix is verified end-to-end: omitting <code>--encrypt-mode</code> now resolves to <code>""</code>, flows to the orchestrator, and correctly inherits the chain's mode, so an incremental into a <code>per-chunk</code> chain succeeds and restores byte-exact.</p>
+
+<h2 id="lesson">The transferable lesson <a class="hlink" href="#lesson" aria-label="Permalink to this section">#</a></h2>
+<p>In any language with zero-value initialization, the default that matters is the one an <em>unset</em> field takes, not the one your primary constructor writes — and your CLI is only one of many constructors. Make the zero value the safe, common case. And when a behavior is gated on a specific config value, especially an omitted or empty one, test it <em>through the real parser</em>: a framework default (kong, argparse, a builder's fallback) can quietly make a branch unreachable while a direct-call unit test that supplies the value by hand stays green. The green test is testing a code path no user can reach.</p>
+
+<h2 id="sources">Primary sources <a class="hlink" href="#sources" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li>Go zero values — <a href="https://go.dev/ref/spec#The_zero_value">the language spec on zero values</a>.</li>
+  <li><code>kong</code>, the CLI parser sluice uses (default injection) — <a href="https://github.com/alecthomas/kong">github.com/alecthomas/kong</a>.</li>
+  <li>sluice encrypted-backup chains and modes — <a href="/docs/encrypted-backups/">Take encrypted backups</a> and <a href="/docs/from-backup-sync/">Sync from a backup chain</a>.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/field-notes/sqlite-decimal-affinity/">← SQLite's DECIMAL is a suggestion</a><a class="next" href="/field-notes/vstream-throttle-blind/">vtgate erases the throttle signal →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/field-notes/zero-value-config-trap/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

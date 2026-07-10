@@ -22,6 +22,18 @@ function hl(raw) {
 }
 const pre = (raw) => "<pre><code>" + hl(raw) + "</code></pre>";
 
+// ---- routing ------------------------------------------------------------
+// Field Notes live at their OWN top-level route (/field-notes/...), not under
+// /docs/. A page is a field note when its slug is the landing ("field-notes")
+// or is prefixed "field-notes/". These helpers keep every URL/path derivation
+// (page links, markdown-alternate, llms.txt, on-disk output) in one place so
+// docs and field notes can diverge without scattering `/docs/` assumptions.
+const isFieldNote = (slug) => slug === "field-notes" || slug.startsWith("field-notes/");
+// Public URL path for a page's HTML.
+const pagePath = (slug) => (slug === "" ? "/docs/" : isFieldNote(slug) ? "/" + slug + "/" : "/docs/" + slug + "/");
+// Public URL path for a page's Markdown alternate (index.md).
+const pageMdPath = (slug) => (slug === "" ? "/docs/index.md" : isFieldNote(slug) ? "/" + slug + "/index.md" : "/docs/" + slug + "/index.md");
+
 // ---- site nav ------------------------------------------------------------
 const NAV = [
   {
@@ -62,27 +74,6 @@ const NAV = [
       { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
       { slug: "planetscale-postgres-analytics-replica", label: "PlanetScale Postgres analytics replica" },
       { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
-    ],
-  },
-  {
-    group: "Field Notes",
-    items: [
-      { slug: "field-notes", label: "About these notes" },
-      { slug: "field-notes/numeric-array-flatten", label: "The pgx codec that flattened numeric[][]" },
-      { slug: "field-notes/replica-identity-full-updates", label: "REPLICA IDENTITY FULL ate our UPDATEs" },
-      { slug: "field-notes/postgres-slot-leaks", label: "Replication slots don't die with your process" },
-      { slug: "field-notes/planetscale-grow-reparent", label: "When PlanetScale un-acked our rows" },
-      { slug: "field-notes/vstream-float-precision", label: "Vitess copy phase rounds your FLOATs" },
-      { slug: "field-notes/vstream-throttle-blind", label: "vtgate erases the throttle signal" },
-      { slug: "field-notes/binlog-comment-truncate", label: "A comment hid a TRUNCATE from CDC" },
-      { slug: "field-notes/mysql-enum-emoji", label: "MySQL turned our emoji into '?'" },
-      { slug: "field-notes/vitess-tx-killer-wan", label: "The 20-second guillotine over a WAN" },
-      { slug: "field-notes/d1-not-local-sqlite", label: "Cloudflare D1 is not your local SQLite" },
-      { slug: "field-notes/sqlite-decimal-affinity", label: "SQLite's DECIMAL is a suggestion" },
-      { slug: "field-notes/sqlite-wal-checkpoint-starvation", label: "One long-lived reader, 75 GB of WAL" },
-      { slug: "field-notes/int64-json-boundary", label: "2^53 is a database boundary now" },
-      { slug: "field-notes/empty-object-vs-array", label: "{}: two characters, two types" },
-      { slug: "field-notes/zero-value-config-trap", label: "The zero value is a loaded gun" },
     ],
   },
   {
@@ -134,6 +125,63 @@ function sidebar(activeSlug) {
         }
       }
     }
+  }
+  return out;
+}
+
+// ---- Field Notes: data model --------------------------------------------
+// Single source of truth for the field-notes SECTION — drives the chronological
+// sidebar, the landing list, the prev/next pager, and the llms.txt entries.
+// Ordered CHRONOLOGICALLY (oldest → newest) by roughly when the work landed in
+// sluice; the sidebar/landing/pager present it NEWEST-FIRST. `date` is the
+// authoritative landed-date (from the fix's git tag); `dek` is the one-line
+// landing summary. Slugs are bare (no "field-notes/" prefix) — the section
+// route prepends it. Add a note here and it appears everywhere automatically.
+const FIELD_NOTES = [
+  { slug: "empty-object-vs-array", date: "2026-05-10", engine: "Cross-cutting", label: "{}: two characters, two types", dek: "<code>{}</code> is an empty array in Postgres and an empty object in JSON; <code>[]byte(\"{}\")</code> is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way." },
+  { slug: "numeric-array-flatten", date: "2026-05-17", engine: "Postgres", label: "The pgx codec that flattened numeric[][]", dek: "A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped <code>int[][]</code> perfectly." },
+  { slug: "replica-identity-full-updates", date: "2026-05-28", engine: "Postgres", label: "REPLICA IDENTITY FULL ate our UPDATEs", dek: "Building an UPDATE's <code>WHERE</code> over every old column works forever on int/varchar, then a <code>jsonb</code> value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss." },
+  { slug: "mysql-enum-emoji", date: "2026-05-30", engine: "MySQL & Vitess", label: "MySQL turned our emoji into '?'", dek: "MySQL substitutes <code>?</code> for 4-byte UTF-8 in ENUM/SET <em>labels</em> at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it." },
+  { slug: "postgres-slot-leaks", date: "2026-06-11", engine: "Postgres", label: "Replication slots don't die with your process", dek: "A slot is a promise the server keeps until you drop it; a crashed backup, a refused cold-start, and a week-one leak each pinned WAL on the source until the disk filled." },
+  { slug: "binlog-comment-truncate", date: "2026-06-13", engine: "MySQL & Vitess", label: "A comment hid a TRUNCATE from CDC", dek: "A leading <code>-- comment</code> on a <code>TRUNCATE</code> made a CDC reader miss it entirely; the source emptied, the target kept every row, forever." },
+  { slug: "vstream-throttle-blind", date: "2026-06-13", engine: "MySQL & Vitess", label: "vtgate erases the throttle signal", dek: "The one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one." },
+  { slug: "zero-value-config-trap", date: "2026-06-15", engine: "Cross-cutting", label: "The zero value is a loaded gun", dek: "A config field that &ldquo;defaults on&rdquo; silently defaults <em>off</em> for every caller that didn't go through the CLI, because in Go every unset field gets the zero value. Twice, with real database consequences." },
+  { slug: "sqlite-decimal-affinity", date: "2026-06-27", engine: "SQLite & D1", label: "SQLite's DECIMAL is a suggestion", dek: "Declare a column <code>DECIMAL(10,2)</code> and you get NUMERIC affinity, which stores <code>19.99</code> as <code>19.989999999999998</code>. Not a rounding bug — an engine storage property, and the real predicate is dyadic representability." },
+  { slug: "sqlite-wal-checkpoint-starvation", date: "2026-06-28", engine: "SQLite & D1", label: "One long-lived reader, 75 GB of WAL", dek: "A continuous-CDC run watched the <code>-wal</code> file grow to 75 GB in 52 minutes while the table it tracked stayed bounded; one idle reader's snapshot pinned every superseded page. Kill the process and it collapsed to ~0.6 GB." },
+  { slug: "vitess-tx-killer-wan", date: "2026-06-28", engine: "MySQL & Vitess", label: "The 20-second guillotine over a WAN", dek: "With no statement pipelining, an N-row apply costs N round-trips; every batch big enough to be efficient overran Vitess's 20&nbsp;s timeout and every batch small enough to commit crawled. A self-tuning system converged to a stall." },
+  { slug: "int64-json-boundary", date: "2026-06-29", engine: "Cross-cutting", label: "2^53 is a database boundary now", dek: "JSON has one number type and it's a double, so every JSON hop in a pipeline is a potential rounding event for Snowflake IDs and any integer past 9,007,199,254,740,992." },
+  { slug: "planetscale-grow-reparent", date: "2026-06-29", engine: "MySQL & Vitess", label: "When PlanetScale un-acked our rows", dek: "Committed, client-acknowledged rows that simply weren't on the new primary after a volume-grow reparent. Exit 0, ~4,000 rows short." },
+  { slug: "d1-not-local-sqlite", date: "2026-06-30", engine: "SQLite & D1", label: "Cloudflare D1 is not your local SQLite", dek: "A UUID-conformance <code>GLOB</code> passed every local test, then died on live D1 with <code>code 7500: LIKE or GLOB pattern too complex</code>. The dialect is the same; the hidden limits are a config surface you can't test against locally." },
+  { slug: "vstream-float-precision", date: "2026-07-09", engine: "MySQL & Vitess", label: "Vitess copy phase rounds your FLOATs", dek: "A 17-year-old MySQL display-rounding bug with a fresh consequence: the same <code>FLOAT</code> arrives exact or rounded depending on which VStream phase delivered it." },
+];
+
+// Newest-first, indexed by full "field-notes/<slug>".
+const FIELD_NOTES_NEWEST = [...FIELD_NOTES].reverse();
+const fnBySlug = new Map(FIELD_NOTES.map((n) => ["field-notes/" + n.slug, n]));
+// Pager sequence: landing first, then notes newest → oldest. `prev` walks toward
+// newer (and the landing); `next` walks toward older.
+const FN_SEQUENCE = ["field-notes", ...FIELD_NOTES_NEWEST.map((n) => "field-notes/" + n.slug)];
+const fnLabel = (fullSlug) => (fullSlug === "field-notes" ? "About these notes" : fnBySlug.get(fullSlug).label);
+
+function fnPager(fullSlug) {
+  const i = FN_SEQUENCE.indexOf(fullSlug);
+  const link = (s) => ({ href: pagePath(s), label: fnLabel(s) });
+  return {
+    prev: i > 0 ? link(FN_SEQUENCE[i - 1]) : undefined,
+    next: i >= 0 && i < FN_SEQUENCE.length - 1 ? link(FN_SEQUENCE[i + 1]) : undefined,
+  };
+}
+
+// The field-notes section's OWN sidebar: a flat, chronological (newest-first)
+// list of every note with its landed-date — NOT the docs NAV.
+function fieldNoteSidebar(activeSlug) {
+  let out = '<div class="grp">Field Notes</div>';
+  const landingActive = activeSlug === "field-notes" ? " active" : "";
+  out += '<a class="lnk' + landingActive + '" href="/field-notes/">About these notes</a>';
+  for (const n of FIELD_NOTES_NEWEST) {
+    const full = "field-notes/" + n.slug;
+    const active = full === activeSlug ? " active" : "";
+    out += '<a class="lnk' + active + '" href="/field-notes/' + n.slug + '/"><span class="fn-date">' + n.date + "</span>" + n.label + "</a>";
   }
   return out;
 }
@@ -222,25 +270,17 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "operate-fleet",
     "encrypted-backups",
     "agent-skills",
-    "field-notes",
-    "field-notes/numeric-array-flatten",
-    "field-notes/replica-identity-full-updates",
-    "field-notes/postgres-slot-leaks",
-    "field-notes/planetscale-grow-reparent",
-    "field-notes/vstream-float-precision",
-    "field-notes/vstream-throttle-blind",
-    "field-notes/binlog-comment-truncate",
-    "field-notes/mysql-enum-emoji",
-    "field-notes/vitess-tx-killer-wan",
-    "field-notes/d1-not-local-sqlite",
-    "field-notes/sqlite-decimal-affinity",
-    "field-notes/sqlite-wal-checkpoint-starvation",
-    "field-notes/int64-json-boundary",
-    "field-notes/empty-object-vs-array",
-    "field-notes/zero-value-config-trap",
   ];
-  const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "supported-directions" || slug === "how-sluice-copies" || slug === "error-codes" || slug === "type-mapping" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
-  const top = '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>';
+  const fieldNote = isFieldNote(slug);
+  const docsActive = !fieldNote && (slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "supported-directions" || slug === "how-sluice-copies" || slug === "error-codes" || slug === "type-mapping" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug));
+  // Field-note pages derive their prev/next from the chronological FIELD_NOTES
+  // sequence (single source of truth), overriding any passed pager.
+  if (fieldNote) ({ prev, next } = fnPager(slug));
+  const top =
+    '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>' +
+    '<a class="' + (fieldNote ? "active" : "") + '" href="/field-notes/">Field Notes</a>';
+  // A dated "landed" line under the dek on each note page (not the landing).
+  const landedLine = fieldNote && fnBySlug.has(slug) ? '<p class="fn-landed">Landed in sluice · ' + fnBySlug.get(slug).date + " · " + esc(fnBySlug.get(slug).engine) + "</p>" : "";
   let pager = "";
   if (prev || next) {
     pager = '<div class="pager">';
@@ -260,7 +300,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#0d1b22">
 <link rel="stylesheet" href="/assets/docs.css">
-<link rel="alternate" type="text/markdown" href="${slug === "" ? "/docs/index.md" : "/docs/" + slug + "/index.md"}" title="This page as Markdown (for AI agents)">
+<link rel="alternate" type="text/markdown" href="${pageMdPath(slug)}" title="This page as Markdown (for AI agents)">
 </head>
 <body>
 <header class="top">
@@ -274,25 +314,29 @@ function page({ slug, title, subtitle, body, prev, next }) {
   </div>
 </header>
 <div class="layout">
-  <aside class="sidebar">${sidebar(slug)}</aside>
+  <aside class="sidebar">${fieldNote ? fieldNoteSidebar(slug) : sidebar(slug)}</aside>
   <main class="content">
     <h1>${esc(title)}</h1>
     ${subtitle ? '<p class="subtitle">' + esc(subtitle) + "</p>" : ""}
+    ${landedLine}
     ${tocHtml}
     ${bodyHtml}
     ${pager}
   </main>
 </div>
-<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="${slug === "" ? "/docs/index.md" : "/docs/" + slug + "/index.md"}">View this page as Markdown</a></footer>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="${pageMdPath(slug)}">View this page as Markdown</a></footer>
 </body>
 </html>`;
 }
 
+// Writes a page's index.html. Docs live under docs/<slug>/; field notes live at
+// the top-level <slug>/ (slug already carries the "field-notes/..." prefix).
 function write(slug, html) {
-  const dir = slug === "" ? join(ROOT, "docs") : join(ROOT, "docs", slug);
+  const rel = slug === "" ? "docs" : isFieldNote(slug) ? slug : "docs/" + slug;
+  const dir = join(ROOT, rel);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "index.html"), html);
-  console.log("wrote", slug === "" ? "docs/index.html" : "docs/" + slug + "/index.html");
+  console.log("wrote", rel + "/index.html");
 }
 
 // =========================================================================
@@ -1002,7 +1046,7 @@ write(
 <tr><td><code>SET('a','b')</code></td><td class="desc"><code>text[]</code> + <code>CHECK</code></td><td class="desc">Membership preserved via a CHECK; override to a comma-delimited <code>text</code>.</td></tr>
 <tr><td><code>JSON</code></td><td class="desc"><code>jsonb</code> (default) / <code>json</code></td><td class="desc">MySQL <code>JSON</code> and PG <code>jsonb</code> both validate + normalise; PG <code>json</code> (no b) preserves whitespace/key order. Carried as raw bytes.</td></tr>
 <tr><td class="desc">(no MySQL type)</td><td class="desc"><code>uuid</code></td><td class="desc">PG <code>uuid</code> → MySQL <code>CHAR(36)</code> / <code>BINARY(16)</code>.</td></tr>
-<tr><td class="desc"><code>JSON</code> (degraded)</td><td class="desc"><code>T[]</code> (array)</td><td class="desc">MySQL has no array type: a PG array → MySQL <code>JSON</code> (empty <code>{}</code>→<code>[]</code>, NULL element→JSON <code>null</code>, nested preserved). Override <code>array_strategy: concat</code> for simple scalar arrays. Multi-dimensional arrays are pinned per element family — see the field note on <a href="/docs/field-notes/numeric-array-flatten/">the pgx codec that silently flattened <code>numeric[][]</code></a>.</td></tr>
+<tr><td class="desc"><code>JSON</code> (degraded)</td><td class="desc"><code>T[]</code> (array)</td><td class="desc">MySQL has no array type: a PG array → MySQL <code>JSON</code> (empty <code>{}</code>→<code>[]</code>, NULL element→JSON <code>null</code>, nested preserved). Override <code>array_strategy: concat</code> for simple scalar arrays. Multi-dimensional arrays are pinned per element family — see the field note on <a href="/field-notes/numeric-array-flatten/">the pgx codec that silently flattened <code>numeric[][]</code></a>.</td></tr>
 <tr><td class="desc"><code>VARCHAR(45/30)</code></td><td class="desc"><code>inet</code> / <code>cidr</code> / <code>macaddr</code></td><td class="desc">PG network types have no MySQL native form: <code>inet</code>/<code>cidr</code>→<code>VARCHAR(45)</code>, <code>macaddr</code>→<code>VARCHAR(30)</code> (auto-shaped since v0.7.0; overridable).</td></tr>
 <tr><td class="desc">spatial types</td><td class="desc"><code>geometry</code> (PostGIS)</td><td class="desc">Requires PostGIS on the target via <code>--enable-pg-extension</code>; carried as WKB. Every subtype/SRID preserved.</td></tr>
 </tbody></table>
@@ -1423,7 +1467,7 @@ sluice migrate --source-driver sqlite --source dump.sql \\
 <div class="note warn"><strong>The export rounds big integers.</strong> Both of D1's <em>default</em> extraction paths — the <code>wrangler d1 export</code> dump and the bare query API — silently lose integers larger than 2<sup>53</sup> (≈ 9 ×10<sup>15</sup>): D1 serializes them through a JavaScript double before sluice ever sees them. For Snowflake-style IDs (Discord/Twitter 64-bit IDs), nanosecond timestamps, or large counters, use the live query-API reader below — it's the only lossless path. For a D1 database <em>without</em> integers that large (the common case), the export path is exact and simple.</div>
 
 <h2 id="live">A live Cloudflare D1 (lossless)</h2>
-<p><code>--source-driver d1</code> reads a live D1 over its HTTP query API and is the <strong>lossless</strong> import. It projects every column through <code>typeof()</code> + <code>CAST(… AS TEXT)</code> / <code>hex()</code>, so integers above 2<sup>53</sup> round-trip exactly, INTEGER is distinguished from REAL, and BLOBs decode from hex. Reads don't take D1 offline. (Why the text projection instead of the obvious JSON number? See the field note on <a href="/docs/field-notes/int64-json-boundary/">2<sup>53</sup> as a database boundary</a> — <code>wrangler d1 export</code> rounds big integers through float64 before any database sees them.) The API token is read from the environment only — never a flag, never logged:</p>
+<p><code>--source-driver d1</code> reads a live D1 over its HTTP query API and is the <strong>lossless</strong> import. It projects every column through <code>typeof()</code> + <code>CAST(… AS TEXT)</code> / <code>hex()</code>, so integers above 2<sup>53</sup> round-trip exactly, INTEGER is distinguished from REAL, and BLOBs decode from hex. Reads don't take D1 offline. (Why the text projection instead of the obvious JSON number? See the field note on <a href="/field-notes/int64-json-boundary/">2<sup>53</sup> as a database boundary</a> — <code>wrangler d1 export</code> rounds big integers through float64 before any database sees them.) The API token is read from the environment only — never a flag, never logged:</p>
 ${pre(`export CLOUDFLARE_API_TOKEN=...        # required
 export CLOUDFLARE_ACCOUNT_ID=...       # optional if the account is in the DSN
 
@@ -1450,13 +1494,13 @@ ${pre(`sluice migrate \\
     --target-driver postgres --target '<pg-dsn>' \\
     --infer-types`)}
 <p>Candidates are picked by name hint (<code>is_*</code>/<code>*_flag</code>; <code>*_at</code>/<code>created</code>/<code>updated</code>; <code>*_json</code>/<code>metadata</code>/<code>payload</code>; <code>*_id</code>/<code>*_uuid</code>) and then each is gated by one aggregate pushed down to the source — a boolean column promotes only if <em>no</em> value is outside <code>(0,1)</code>, a UUID column only if every value matches an anchored hex-UUID <code>GLOB</code>, and so on. A <code>*_id</code> holding <code>cus_abc123</code> fails UUID validation and <strong>stays <code>text</code></strong> — the exact case that's a total-data-loss failure under name-only type guessing. Temporal handling is tz-aware (<code>timestamptz</code> only when every value carries an offset, else naive <code>timestamp</code>); a <strong>mixed</strong> offset/naive column or a <strong>sub-microsecond</strong> fraction is kept <code>text</code> rather than risk a silent UTC-shift or rounding. A structured report names every promotion (with the validated row count) and every column kept safe. An explicit <code>--type-override</code> always wins.</p>
-<div class="note"><strong>On a live D1, inference stages locally first (automatic).</strong> Cloudflare D1's query API rejects the rich-type validation patterns (its <code>GLOB</code> complexity limit), so against <code>--source-driver d1</code> sluice first replicates the database into a byte-faithful local SQLite file and validates there — engaged automatically when you pass <code>--infer-types</code> (v0.99.167). The staged copy is lossless (exact storage classes, integers above 2<sup>53</sup> included — unlike <code>wrangler d1 export</code>), so inference sees the original types and decides identically. Pass <code>--stage-local</code> to stage even without inference (a faster local bulk read), or <code>--no-stage-local</code> to force the direct path. A plain D1 migrate without <code>--infer-types</code> streams directly as before. (Not needed for a local SQLite file — it has no such limit.) The war story behind this — a UUID <code>GLOB</code> that passed every local test and died on live D1 with <code>code 7500</code> — is the field note <a href="/docs/field-notes/d1-not-local-sqlite/">Cloudflare D1 is not your local SQLite</a>.</div>
+<div class="note"><strong>On a live D1, inference stages locally first (automatic).</strong> Cloudflare D1's query API rejects the rich-type validation patterns (its <code>GLOB</code> complexity limit), so against <code>--source-driver d1</code> sluice first replicates the database into a byte-faithful local SQLite file and validates there — engaged automatically when you pass <code>--infer-types</code> (v0.99.167). The staged copy is lossless (exact storage classes, integers above 2<sup>53</sup> included — unlike <code>wrangler d1 export</code>), so inference sees the original types and decides identically. Pass <code>--stage-local</code> to stage even without inference (a faster local bulk read), or <code>--no-stage-local</code> to force the direct path. A plain D1 migrate without <code>--infer-types</code> streams directly as before. (Not needed for a local SQLite file — it has no such limit.) The war story behind this — a UUID <code>GLOB</code> that passed every local test and died on live D1 with <code>code 7500</code> — is the field note <a href="/field-notes/d1-not-local-sqlite/">Cloudflare D1 is not your local SQLite</a>.</div>
 
 <h2 id="orm-tables">ORM bookkeeping tables</h2>
 <p>An app's ORM keeps its migration state in a bookkeeping table — Rails <code>schema_migrations</code>, Prisma <code>_prisma_migrations</code>, Drizzle <code>__drizzle_migrations</code>, Laravel <code>migrations</code>, Flyway, Goose, and more. That state describes the <em>source</em> engine's schema history and is meaningless — sometimes actively misleading — on a different target engine. On a <strong>cross-engine</strong> migrate (e.g. D1→Postgres) sluice skips these by default, <strong>announcing each skip by name</strong> so nothing vanishes silently. Copy them anyway with <code>--include-orm-tables</code>; on a same-engine run they're kept by default (the history is still valid) unless you pass <code>--skip-orm-tables</code>. Recognition is by distinctive name plus a column-shape guard for the generic names (<code>migrations</code>, <code>schema_migrations</code>), so an app table that merely shares a name isn't skipped by accident.</p>
 
 <h2 id="target">SQLite as a target</h2>
-<p>SQLite is also a migrate <strong>target</strong> (<code>--target-driver sqlite</code>) — emit a <code>.db</code> from any source (decimals are stored byte-exact as <code>TEXT</code> affinity, not lossy <code>REAL</code> — see the field note <a href="/docs/field-notes/sqlite-decimal-affinity/">SQLite's DECIMAL is a suggestion</a> for why), e.g. to then run <code>wrangler d1 import</code>. D1 itself is not a write target; produce a SQLite <code>.db</code> and import it with wrangler.</p>
+<p>SQLite is also a migrate <strong>target</strong> (<code>--target-driver sqlite</code>) — emit a <code>.db</code> from any source (decimals are stored byte-exact as <code>TEXT</code> affinity, not lossy <code>REAL</code> — see the field note <a href="/field-notes/sqlite-decimal-affinity/">SQLite's DECIMAL is a suggestion</a> for why), e.g. to then run <code>wrangler d1 import</code>. D1 itself is not a write target; produce a SQLite <code>.db</code> and import it with wrangler.</p>
 ${pre(`sluice migrate \\
     --source-driver postgres --source '<pg-dsn>' \\
     --target-driver sqlite   --target ./out.db`)}
@@ -2732,7 +2776,7 @@ sluice verify \\
     --source-driver planetscale --source "$SLUICE_SOURCE" \\
     --target-driver planetscale --target "$SLUICE_TARGET"`)}
 <div class="note"><strong>Wait for caught-up before cutover.</strong> A <em>trickle</em> of changes can take tens of seconds to ~2 minutes to appear on the target — that latency is PlanetScale VStream's roughly 60&nbsp;s server-side delivery cadence, <em>not</em> sluice (the applier commits within seconds of <em>receiving</em> an event). Under sustained write load, lag stays low. So before you cut over, wait for <code>sync health</code> / <code>verify</code> to report caught-up rather than trusting a fixed timer.</div>
-<div class="note"><strong>Keep <code>--apply-batch-size</code> in the 25–50 range on a PS target.</strong> Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here. The field note <a href="/docs/field-notes/vitess-tx-killer-wan/">The 20-second guillotine over a WAN</a> explains why — and why insert-heavy syncs now pipeline past the limit.</div>
+<div class="note"><strong>Keep <code>--apply-batch-size</code> in the 25–50 range on a PS target.</strong> Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here. The field note <a href="/field-notes/vitess-tx-killer-wan/">The 20-second guillotine over a WAN</a> explains why — and why insert-heavy syncs now pipeline past the limit.</div>
 
 <h3 id="one-shot">Option B — one-shot migrate</h3>
 <p>If you can take a short maintenance window, a one-shot migrate is simpler — one command, no control tables left behind, and <code>identity_sync</code> auto-primes <code>AUTO_INCREMENT</code> so there's no separate cutover step:</p>
@@ -3517,41 +3561,17 @@ write(
 <p>sluice's first tenet is that a migration must never <em>silently</em> corrupt or lose data — a loud failure you can act on beats an exit 0 that quietly dropped four thousand rows. Living up to that means chasing down a lot of surprising database behavior: drivers that pick a different binary codec per column type, managed services with hidden query limits, replication phases that disagree with each other, precision edges that only bite above a specific integer. This section is where we write those up.</p>
 <p>Field notes are <strong>evergreen engine-behavior documentation</strong>, not release announcements. Each one is a real thing we hit — most of them silent-corruption classes caught by fuzzing, battle-testing, or differential runs — with the mechanism explained, a repro you can run yourself, what sluice does about it, and the transferable lesson for anyone building on the same engines. Where the root cause is upstream (an open MySQL bug, a Vitess design choice), we say so and cite the public source; where it was our bug, we name it and link the fix.</p>
 <p>None of these require sluice to reproduce — they are properties of Postgres, MySQL, Vitess, SQLite, and the wire protocols and drivers around them. If you move data between databases for a living, several of them will eventually be your problem too.</p>
+<p>They're listed <strong>newest first</strong>, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.</p>
 
-<h2 id="postgres">Postgres</h2>
-<ul>
-  <li><a href="/docs/field-notes/numeric-array-flatten/">The same bytes, a different codec: how <code>numeric[][]</code> silently flattened</a> — a driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped <code>int[][]</code> perfectly.</li>
-  <li><a href="/docs/field-notes/replica-identity-full-updates/">REPLICA IDENTITY FULL silently ate our UPDATEs</a> — building an UPDATE's <code>WHERE</code> over every old column works forever on int/varchar, then a <code>jsonb</code> value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss.</li>
-  <li><a href="/docs/field-notes/postgres-slot-leaks/">Replication slots don't die with your process</a> — a slot is a promise the server keeps until you drop it; a crashed backup, a refused cold-start, and a week-one leak each pinned WAL on the source until the disk filled.</li>
-</ul>
-
-<h2 id="mysql-vitess">MySQL &amp; Vitess</h2>
-<ul>
-  <li><a href="/docs/field-notes/planetscale-grow-reparent/">PlanetScale acked our rows, then a storage-grow reparent un-acked them</a> — committed, client-acknowledged rows that simply weren't on the new primary after a volume-grow reparent. Exit 0, ~4,000 rows short.</li>
-  <li><a href="/docs/field-notes/vstream-float-precision/">Vitess's copy phase rounds your FLOATs; its binlog phase doesn't</a> — a 17-year-old MySQL display-rounding bug with a fresh consequence: the same <code>FLOAT</code> arrives exact or rounded depending on which VStream phase delivered it.</li>
-  <li><a href="/docs/field-notes/vstream-throttle-blind/">vtgate erases the throttle signal: every VStream consumer is throttle-blind</a> — the one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one.</li>
-  <li><a href="/docs/field-notes/binlog-comment-truncate/">The binlog keeps your SQL comments — and our TRUNCATE parser didn't know</a> — a leading <code>-- comment</code> on a <code>TRUNCATE</code> made a CDC reader miss it entirely; the source emptied, the target kept every row, forever.</li>
-  <li><a href="/docs/field-notes/mysql-enum-emoji/">MySQL's data dictionary turned our emoji into question marks</a> — MySQL substitutes <code>?</code> for 4-byte UTF-8 in ENUM/SET <em>labels</em> at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it.</li>
-  <li><a href="/docs/field-notes/vitess-tx-killer-wan/">The 20-second guillotine: Vitess's transaction killer meets a 96&nbsp;ms WAN</a> — with no statement pipelining, an N-row apply costs N round-trips; every batch big enough to be efficient overran Vitess's 20&nbsp;s timeout and every batch small enough to commit crawled. A self-tuning system converged to a stall.</li>
-</ul>
-
-<h2 id="sqlite-d1">SQLite &amp; D1</h2>
-<ul>
-  <li><a href="/docs/field-notes/d1-not-local-sqlite/">Cloudflare D1 is not your local SQLite</a> — a UUID-conformance <code>GLOB</code> passed every local test, then died on live D1 with <code>code 7500: LIKE or GLOB pattern too complex</code>. The dialect is the same; the hidden limits are a config surface you can't test against locally.</li>
-  <li><a href="/docs/field-notes/sqlite-decimal-affinity/">SQLite's DECIMAL is a suggestion</a> — declare a column <code>DECIMAL(10,2)</code> and you get NUMERIC affinity, which stores <code>19.99</code> as <code>19.989999999999998</code>. Not a rounding bug — an engine storage property, and the real predicate is dyadic representability.</li>
-  <li><a href="/docs/field-notes/sqlite-wal-checkpoint-starvation/">One long-lived reader, 75 GB of WAL</a> — a continuous-CDC run watched the <code>-wal</code> file grow to 75 GB in 52 minutes while the table it tracked stayed bounded; one idle reader's snapshot pinned every superseded page. Kill the process and it collapsed to ~0.6 GB.</li>
-</ul>
-
-<h2 id="cross-cutting">Cross-cutting</h2>
-<ul>
-  <li><a href="/docs/field-notes/int64-json-boundary/">2<sup>53</sup> is a database boundary now</a> — JSON has one number type and it's a double, so every JSON hop in a pipeline is a potential rounding event for Snowflake IDs and any integer past 9,007,199,254,740,992.</li>
-  <li><a href="/docs/field-notes/empty-object-vs-array/"><code>{}</code>: two characters, two types, one silent corruption</a> — <code>{}</code> is an empty array in Postgres and an empty object in JSON; <code>[]byte("{}")</code> is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way.</li>
-  <li><a href="/docs/field-notes/zero-value-config-trap/">The zero value is a loaded gun</a> — a config field that &ldquo;defaults on&rdquo; silently defaults <em>off</em> for every caller that didn't go through the CLI, because in Go every unset field gets the zero value. Twice, with real database consequences.</li>
+<ul class="fn-list">
+${FIELD_NOTES_NEWEST.map(
+  (n) =>
+    `  <li><span class="fn-when"><span class="fn-date">${n.date}</span><span class="fn-tag">${esc(n.engine)}</span></span> <a href="/field-notes/${n.slug}/">${esc(n.label)}</a> — ${n.dek}</li>`,
+).join("\n")}
 </ul>
 
 <div class="note">These notes are also swept into <a href="/llms.txt"><code>llms.txt</code></a> / <a href="/llms-full.txt"><code>llms-full.txt</code></a>, so an AI assistant pointed at sluice's docs inherits this engine lore too.</div>
 `,
-    next: { href: "/docs/field-notes/numeric-array-flatten/", label: "The pgx codec that flattened numeric[][]" },
   })
 );
 
@@ -3599,8 +3619,6 @@ SELECT array_dims(grid) FROM m WHERE id = 1;
   <li>pgx's per-OID codec registry (the underlying behavior): <a href="https://github.com/jackc/pgx">github.com/jackc/pgx</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/", label: "About these notes" },
-    next: { href: "/docs/field-notes/replica-identity-full-updates/", label: "REPLICA IDENTITY FULL ate our UPDATEs" },
   })
 );
 
@@ -3648,8 +3666,6 @@ write(
   <li>Vitess reparenting (the promotion mechanism) — <a href="https://vitess.io/docs/reference/features/reparenting/">vitess.io reparenting docs</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/postgres-slot-leaks/", label: "Replication slots don't die with your process" },
-    next: { href: "/docs/field-notes/vstream-float-precision/", label: "Vitess copy phase rounds your FLOATs" },
   })
 );
 
@@ -3706,8 +3722,6 @@ SELECT CAST(8388610 AS FLOAT) = CAST(8388608 AS FLOAT) AS same;            -- 0 
   <li>Vitess's exact binlog formatter: <code>go/mysql/binlog/rbr.go</code>; the projection-expression restriction: <code>go/vt/vttablet/tabletserver/vstreamer/planbuilder.go</code> (<a href="https://github.com/vitessio/vitess">github.com/vitessio/vitess</a>).</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/planetscale-grow-reparent/", label: "When PlanetScale un-acked our rows" },
-    next: { href: "/docs/field-notes/vstream-throttle-blind/", label: "vtgate erases the throttle signal" },
   })
 );
 
@@ -3743,8 +3757,6 @@ write(
   <li>Vitess tablet throttler (gates on replica lag) — <a href="https://vitess.io/docs/reference/features/tablet-throttler/">vitess.io tablet-throttler docs</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/vstream-float-precision/", label: "Vitess copy phase rounds your FLOATs" },
-    next: { href: "/docs/field-notes/binlog-comment-truncate/", label: "A comment hid a TRUNCATE from CDC" },
   })
 );
 
@@ -3792,8 +3804,6 @@ TRUNCATE TABLE t;
   <li>sluice CDC behavior across engines — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/vstream-throttle-blind/", label: "vtgate erases the throttle signal" },
-    next: { href: "/docs/field-notes/mysql-enum-emoji/", label: "MySQL turned our emoji into '?'" },
   })
 );
 
@@ -3848,8 +3858,6 @@ fmt.Println(n.String())   // 9007199254740993   <- exact`)}</code></pre>
   <li>The double-precision boundary — <a href="https://en.wikipedia.org/wiki/Double-precision_floating-point_format">IEEE-754 double-precision format</a> (exact integers up to 2<sup>53</sup>).</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/sqlite-wal-checkpoint-starvation/", label: "One long-lived reader, 75 GB of WAL" },
-    next: { href: "/docs/field-notes/empty-object-vs-array/", label: "{}: two characters, two types" },
   })
 );
 
@@ -3891,7 +3899,7 @@ UPDATE ledger SET seq = 30000 WHERE id = 1;   -- doc untouched
 <p>What surfaced it in practice was a <strong>differential test</strong>: the same workload run through two independent CDC implementations — the slot-based engine and a trigger-based variant — with the two targets diffed. The brand-new variant was correct; the proven engine was wrong.</p>
 
 <h2 id="what-sluice-does">What sluice does about it</h2>
-<p>The fix narrows the UPDATE's <code>Before</code> image to the identity-key columns under <code>FULL</code>, so the <code>WHERE</code> becomes <code>id = $1</code> — mirroring the DELETE path's existing narrowing. It is pinned with a family matrix in the spirit of the <a href="/docs/field-notes/numeric-array-flatten/">pin-the-class rule</a>: <code>numeric</code> / <code>jsonb</code> / <code>bytea</code> / temporal columns &times; <code>FULL</code> + UPDATE, because a green test on one representative rich type proves nothing about the others.</p>
+<p>The fix narrows the UPDATE's <code>Before</code> image to the identity-key columns under <code>FULL</code>, so the <code>WHERE</code> becomes <code>id = $1</code> — mirroring the DELETE path's existing narrowing. It is pinned with a family matrix in the spirit of the <a href="/field-notes/numeric-array-flatten/">pin-the-class rule</a>: <code>numeric</code> / <code>jsonb</code> / <code>bytea</code> / temporal columns &times; <code>FULL</code> + UPDATE, because a green test on one representative rich type proves nothing about the others.</p>
 
 <h2 id="lesson">The transferable lesson</h2>
 <p>Treat rich types — <code>jsonb</code>, <code>timestamptz</code>, <code>bytea</code>, high-precision <code>numeric</code> — as radioactive in equality predicates: a value that is semantically unchanged is not guaranteed to compare <code>=</code> after a decode&ndash;rebind round-trip. Narrow replication <code>WHERE</code> clauses to identity-key columns, never the full old tuple. And if you have two implementations of one contract, make them testify against each other — a differential run caught a CRITICAL silent-loss bug in the proven engine that months of single-implementation tests had missed.</p>
@@ -3903,8 +3911,6 @@ UPDATE ledger SET seq = 30000 WHERE id = 1;   -- doc untouched
   <li>sluice CDC behavior across engines — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/numeric-array-flatten/", label: "The pgx codec that flattened numeric[][]" },
-    next: { href: "/docs/field-notes/postgres-slot-leaks/", label: "Replication slots don't die with your process" },
   })
 );
 
@@ -3960,8 +3966,6 @@ SELECT pg_drop_replication_slot('sluice_backup_anchor_178...');`)}</code></pre>
   <li>sluice Postgres-source preparation — <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> and the <a href="/docs/managed-postgres-slotless/">managed (slot-less) path</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/replica-identity-full-updates/", label: "REPLICA IDENTITY FULL ate our UPDATEs" },
-    next: { href: "/docs/field-notes/planetscale-grow-reparent/", label: "When PlanetScale un-acked our rows" },
   })
 );
 
@@ -4011,8 +4015,6 @@ SELECT COLUMN_TYPE FROM information_schema.COLUMNS
   <li>sluice type mapping and overrides — <a href="/docs/type-mapping/">type mapping</a> (the <code>--type-override</code> escape).</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/binlog-comment-truncate/", label: "A comment hid a TRUNCATE from CDC" },
-    next: { href: "/docs/field-notes/vitess-tx-killer-wan/", label: "The 20-second guillotine over a WAN" },
   })
 );
 
@@ -4059,8 +4061,6 @@ sluice sync start --no-auto-tune --apply-batch-size 80 ...
   <li>How sluice's CDC apply works — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/mysql-enum-emoji/", label: "MySQL turned our emoji into '?'" },
-    next: { href: "/docs/field-notes/d1-not-local-sqlite/", label: "Cloudflare D1 is not your local SQLite" },
   })
 );
 
@@ -4095,7 +4095,7 @@ SELECT count(*) FROM customers
 -- default SQLITE_MAX_LIKE_PATTERN_LENGTH = 50000 runs fine.`)}</code></pre>
 
 <h2 id="what-sluice-does">What sluice does about it</h2>
-<p>The fix stops fighting the caps one query shape at a time. <code>migrate --stage-local</code> (D1 source only) first replicates the live D1 database into a <strong>byte-faithful</strong> local SQLite file, then runs the entire migrate — schema read, <code>--infer-types</code> validation, and bulk copy — against that local file via the existing <code>sqlite</code> engine, where neither the pattern-complexity limit nor the CPU ceiling exists. Staging closes the <em>whole class</em> of D1 HTTP-query limits (the GLOB cap, the CPU ceiling, ad-hoc <code>COUNT</code>/<code>MAX</code> 429s) in one move, and because the staged file carries D1's original conservative SQLite types, inference makes identical decisions. It auto-engages when <code>--infer-types</code> is set against a D1 source (the direct path is structurally broken there) unless you pass <code>--no-stage-local</code>. Crucially the staging is <em>lossless</em>, unlike <code>wrangler d1 export</code>, which rounds integers above 2<sup>53</sup> through a JavaScript double (see <a href="/docs/field-notes/int64-json-boundary/">2<sup>53</sup> is a database boundary now</a>). A prototyped rowid-windowed "chunked validation" alternative was parked: it addresses only the CPU ceiling, not the GLOB-complexity limit — the same long patterns still abort at <code>code 7500</code> before any CPU budget is reached.</p>
+<p>The fix stops fighting the caps one query shape at a time. <code>migrate --stage-local</code> (D1 source only) first replicates the live D1 database into a <strong>byte-faithful</strong> local SQLite file, then runs the entire migrate — schema read, <code>--infer-types</code> validation, and bulk copy — against that local file via the existing <code>sqlite</code> engine, where neither the pattern-complexity limit nor the CPU ceiling exists. Staging closes the <em>whole class</em> of D1 HTTP-query limits (the GLOB cap, the CPU ceiling, ad-hoc <code>COUNT</code>/<code>MAX</code> 429s) in one move, and because the staged file carries D1's original conservative SQLite types, inference makes identical decisions. It auto-engages when <code>--infer-types</code> is set against a D1 source (the direct path is structurally broken there) unless you pass <code>--no-stage-local</code>. Crucially the staging is <em>lossless</em>, unlike <code>wrangler d1 export</code>, which rounds integers above 2<sup>53</sup> through a JavaScript double (see <a href="/field-notes/int64-json-boundary/">2<sup>53</sup> is a database boundary now</a>). A prototyped rowid-windowed "chunked validation" alternative was parked: it addresses only the CPU ceiling, not the GLOB-complexity limit — the same long patterns still abort at <code>code 7500</code> before any CPU budget is reached.</p>
 
 <h2 id="lesson">The transferable lesson</h2>
 <p>When you target a hosted build of an embedded engine, the SQL dialect is the same but the <em>limits</em> are a config surface you can't see and can't test against locally: pattern-length caps, per-query CPU/time ceilings, statement-size and result-size bounds. "SQLite-compatible" (or "Postgres-wire-compatible") tells you about syntax, not about the operational envelope. Validate against the real service early, and when the hosted limits are a moving target, the robust move is often to get the data onto an unconstrained local copy and do the heavy work there rather than negotiating with each cap individually.</p>
@@ -4107,8 +4107,6 @@ SELECT count(*) FROM customers
   <li>SQLite's <code>SQLITE_MAX_LIKE_PATTERN_LENGTH</code> — <a href="https://www.sqlite.org/limits.html">SQLite implementation limits</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/vitess-tx-killer-wan/", label: "The 20-second guillotine over a WAN" },
-    next: { href: "/docs/field-notes/sqlite-decimal-affinity/", label: "SQLite's DECIMAL is a suggestion" },
   })
 );
 
@@ -4159,8 +4157,6 @@ INSERT INTO m VALUES (4, 1000000.00);   -- typeof -> real
   <li>The dyadic-rational boundary — <a href="https://en.wikipedia.org/wiki/Double-precision_floating-point_format">IEEE-754 double-precision format</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/d1-not-local-sqlite/", label: "Cloudflare D1 is not your local SQLite" },
-    next: { href: "/docs/field-notes/sqlite-wal-checkpoint-starvation/", label: "One long-lived reader, 75 GB of WAL" },
   })
 );
 
@@ -4195,7 +4191,7 @@ stat --format='%s' big.db-wal     # climbs ~GB/min, no plateau,
 <p>The fix is protocol hygiene, not tuning, and it has two parts (local-SQLite path only — the <code>d1-trigger</code> source polls over HTTP with no local pager and is unaffected). First, the poller's read connection is no longer retained idle (<code>SetMaxIdleConns(0)</code>), so its WAL read-mark is released after each poll and a checkpoint can reset the WAL — this alone held the WAL flat at ~8 MB in a focused repro where the default idle pool grew it to 158 MB in 12 seconds. Second, the poll loop issues <code>PRAGMA wal_checkpoint(TRUNCATE)</code> on a 30-second cadence (busy-tolerant: a <code>BUSY</code> result just retries next cadence), so the WAL stays bounded even when the operator's own application has disabled <code>wal_autocheckpoint</code>. The checkpoint runs in the poll goroutine between polls, never racing the read, and never touches the watermark or the exactly-once path.</p>
 
 <h2 id="lesson">The transferable lesson</h2>
-<p>A reader's snapshot pins the log — this is the same principle that makes an idle Postgres replication slot fill a disk (<a href="/docs/field-notes/postgres-slot-leaks/">slots don't die with your process</a>) and long transactions bloat any MVCC engine's dead-tuple space. SQLite just shows it to you as a single file you can <code>stat</code>. If you hold a long-lived read against a churning table, you are silently retaining every superseded version of the pages you touch; release the snapshot periodically (short-lived read transactions, and mind your connection pool's <em>idle</em> connections — a pooled idle connection holds a read-mark just as a live query does) so the log can be reclaimed. And watch for the second-order effect: a growing WAL that gets mmap'd can look like a memory leak while your heap stays perfectly flat.</p>
+<p>A reader's snapshot pins the log — this is the same principle that makes an idle Postgres replication slot fill a disk (<a href="/field-notes/postgres-slot-leaks/">slots don't die with your process</a>) and long transactions bloat any MVCC engine's dead-tuple space. SQLite just shows it to you as a single file you can <code>stat</code>. If you hold a long-lived read against a churning table, you are silently retaining every superseded version of the pages you touch; release the snapshot periodically (short-lived read transactions, and mind your connection pool's <em>idle</em> connections — a pooled idle connection holds a read-mark just as a live query does) so the log can be reclaimed. And watch for the second-order effect: a growing WAL that gets mmap'd can look like a memory leak while your heap stays perfectly flat.</p>
 
 <h2 id="sources">Primary sources</h2>
 <ul>
@@ -4204,8 +4200,6 @@ stat --format='%s' big.db-wal     # climbs ~GB/min, no plateau,
   <li>sluice trigger-based CDC — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/sqlite-decimal-affinity/", label: "SQLite's DECIMAL is a suggestion" },
-    next: { href: "/docs/field-notes/int64-json-boundary/", label: "2^53 is a database boundary now" },
   })
 );
 
@@ -4253,8 +4247,6 @@ SELECT id, JSON_TYPE(attrs) FROM t WHERE id = 2;
   <li>sluice type mapping (how source type is carried across the translate boundary) — <a href="/docs/type-mapping/">type mapping</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/int64-json-boundary/", label: "2^53 is a database boundary now" },
-    next: { href: "/docs/field-notes/zero-value-config-trap/", label: "The zero value is a loaded gun" },
   })
 );
 
@@ -4305,7 +4297,6 @@ s := Streamer{}          // a test, a broker path, a future caller...
   <li>sluice encrypted-backup chains and modes — <a href="/docs/encrypted-backups/">Take encrypted backups</a> and <a href="/docs/from-backup-sync/">Sync from a backup chain</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/empty-object-vs-array/", label: "{}: two characters, two types" },
   })
 );
 
@@ -4355,7 +4346,7 @@ function textify(html) {
 }
 
 const bySlug = new Map(EMITTED.map((p) => [p.slug, p]));
-const pageURL = (slug) => (slug === "" ? SITE + "/docs/" : SITE + "/docs/" + slug + "/");
+const pageURL = (slug) => SITE + pagePath(slug);
 
 let llms = `# sluice
 
@@ -4370,6 +4361,19 @@ for (const g of NAV) {
     const p = bySlug.get(it.slug);
     const note = p && p.subtitle ? ": " + p.subtitle : "";
     llms += `- [${it.label}](${pageURL(it.slug)})${note}\n`;
+  }
+}
+
+// Field Notes are their own top-level section (not part of the docs NAV), so
+// they're listed here from FIELD_NOTES directly — newest first, with dates.
+llms += `\n## Field Notes\n\n`;
+{
+  const landing = bySlug.get("field-notes");
+  llms += `- [Field Notes](${pageURL("field-notes")})${landing && landing.subtitle ? ": " + landing.subtitle : ""}\n`;
+  for (const n of FIELD_NOTES_NEWEST) {
+    const p = bySlug.get("field-notes/" + n.slug);
+    const note = p && p.subtitle ? ": " + p.subtitle : "";
+    llms += `- [${n.date} · ${n.label}](${pageURL("field-notes/" + n.slug)})${note}\n`;
   }
 }
 
@@ -4415,7 +4419,8 @@ console.log("wrote llms-full.txt");
 // llms-full build uses, so the per-page markdown stays in lockstep with the
 // site (a page added above is picked up automatically via EMITTED).
 for (const p of EMITTED) {
-  const dir = p.slug === "" ? join(ROOT, "docs") : join(ROOT, "docs", p.slug);
+  const rel = p.slug === "" ? "docs" : isFieldNote(p.slug) ? p.slug : "docs/" + p.slug;
+  const dir = join(ROOT, rel);
   mkdirSync(dir, { recursive: true });
   let md = `# ${p.title}\n`;
   if (p.subtitle) md += `\n> ${p.subtitle}\n`;

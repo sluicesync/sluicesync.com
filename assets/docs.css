@@ -30,6 +30,19 @@ aside.sidebar{border-right:1px solid var(--line);padding:30px 20px 60px;position
 .sidebar a:hover{background:var(--paper-2);text-decoration:none;color:var(--ink)}
 .sidebar a.active{background:#fdeee6;color:var(--orange-dk);font-weight:600}
 .sidebar a.sub{padding-left:20px;font-size:13.5px;color:#6a777e}
+/* Field Notes: chronological sidebar date prefix */
+.sidebar a .fn-date{display:block;font-size:11px;font-weight:600;color:#92a0a7;font-variant-numeric:tabular-nums;letter-spacing:.3px;margin-bottom:1px}
+.sidebar a.active .fn-date{color:var(--orange-dk)}
+/* Field Notes: dated "landed" line under a note's dek */
+.fn-landed{margin:-14px 0 22px;font-size:13px;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums;letter-spacing:.2px}
+/* Field Notes: chronological landing list */
+ul.fn-list{list-style:none;margin:26px 0;padding:0}
+ul.fn-list li{padding:14px 0;border-top:1px solid var(--line-2);line-height:1.5}
+ul.fn-list li:first-child{border-top:none}
+ul.fn-list a{font-weight:600}
+.fn-when{display:inline-flex;align-items:baseline;gap:8px;margin-right:6px}
+.fn-when .fn-date{font-size:12.5px;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums;letter-spacing:.3px}
+.fn-tag{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--orange-dk);background:#fdeee6;border-radius:5px;padding:2px 7px}
 
 main.content{padding:38px 46px 90px;max-width:calc(var(--content-max) + 92px);min-width:0}
 main.content h1{font-size:30px;letter-spacing:-.6px;margin:0 0 6px}
