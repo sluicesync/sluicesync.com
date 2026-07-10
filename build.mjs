@@ -138,6 +138,9 @@ function sidebar(activeSlug) {
 // landing summary. Slugs are bare (no "field-notes/" prefix) — the section
 // route prepends it. Add a note here and it appears everywhere automatically.
 const FIELD_NOTES = [
+  { slug: "mysql-json-where-cast", date: "2026-05-04", engine: "MySQL & Vitess", label: "MySQL won't match a JSON column by bind parameter", dek: "<code>WHERE json_col = ?</code> matches zero rows whether you bind the value as a string or as bytes &mdash; MySQL won't cast the parameter to JSON. On a CDC UPDATE, replay-idempotency tolerance turns the zero-row match into silent divergence." },
+  { slug: "mysql-load-data-charset", date: "2026-05-05", engine: "MySQL & Vitess", label: "One LOAD DATA can't load a BLOB and a JSON column", dek: "A <code>BLOB</code> needs <code>CHARACTER SET binary</code> or the server rejects its first non-ASCII byte; a <code>JSON</code> column rejects its input <em>under</em> <code>CHARACTER SET binary</code>. One statement-level clause, two columns that demand opposite answers." },
+  { slug: "postgres-idle-slot-failover", date: "2026-05-07", engine: "Postgres", label: "Every HA knob on, and the slot still vanished at failover", dek: "Patroni slot-sync on, <code>sync_replication_slots</code> on, <code>hot_standby_feedback</code> on &mdash; and a logical slot that hadn't advanced during the sync window was still lost on promotion. The idle slot is the fragile one." },
   { slug: "empty-object-vs-array", date: "2026-05-10", engine: "Cross-cutting", label: "{}: two characters, two types", dek: "<code>{}</code> is an empty array in Postgres and an empty object in JSON; <code>[]byte(\"{}\")</code> is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way." },
   { slug: "numeric-array-flatten", date: "2026-05-17", engine: "Postgres", label: "The pgx codec that flattened numeric[][]", dek: "A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped <code>int[][]</code> perfectly." },
   { slug: "replica-identity-full-updates", date: "2026-05-28", engine: "Postgres", label: "REPLICA IDENTITY FULL ate our UPDATEs", dek: "Building an UPDATE's <code>WHERE</code> over every old column works forever on int/varchar, then a <code>jsonb</code> value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss." },
@@ -4576,6 +4579,165 @@ s := Streamer{}          // a test, a broker path, a future caller...
   <li>Go zero values — <a href="https://go.dev/ref/spec#The_zero_value">the language spec on zero values</a>.</li>
   <li><code>kong</code>, the CLI parser sluice uses (default injection) — <a href="https://github.com/alecthomas/kong">github.com/alecthomas/kong</a>.</li>
   <li>sluice encrypted-backup chains and modes — <a href="/docs/encrypted-backups/">Take encrypted backups</a> and <a href="/docs/from-backup-sync/">Sync from a backup chain</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: MySQL JSON = bind parameter ---------------------------
+write(
+  "field-notes/mysql-json-where-cast",
+  page({
+    slug: "field-notes/mysql-json-where-cast",
+    title: "MySQL won't match a JSON column by bind parameter",
+    subtitle: "WHERE json_col = ? matches zero rows in MySQL whether you bind the value as a string or as bytes — the server won't cast the parameter to JSON for the comparison. On a CDC UPDATE, replay-idempotency tolerance turns that zero-row match into silent divergence.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL &rarr; MySQL logical replication (CDC apply) touching a <code>JSON</code> column. Internally the applier value-shaping fix, ADR-0013 (v0.2.2).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A MySQL-to-MySQL CDC UPDATE on a table with a <code>JSON</code> column silently applied nothing: zero rows affected, stream position advanced, exit 0, no error. The same applier in the <em>other</em> direction — Postgres to MySQL — failed <strong>loudly</strong> on the identical column, crashing with <code>Cannot create a JSON value from a string with CHARACTER SET 'binary'</code>. One applier, one JSON column, two directions, opposite symptoms — and only the loud one was safe.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The applier bound the row's values straight into parameterised SQL. Two MySQL-isms bit, in sequence:</p>
+<ul>
+  <li><strong>The bytes.</strong> <code>go-sql-driver/mysql</code> tags a <code>[]byte</code> parameter with the <code>_binary</code> introducer, and MySQL rejects that for a <code>JSON</code> column (<code>… CHARACTER SET 'binary'</code>) — the loud PG&rarr;MySQL crash. The bulk-copy path had already learned to convert JSON <code>[]byte</code> to a <code>string</code>; the CDC path hadn't inherited the fix.</li>
+  <li><strong>The comparison.</strong> The deeper one, and the silent one: <strong>MySQL's <code>=</code> does not implicitly cast a <code>?</code> bind parameter to JSON</strong> — bind the value as a <code>string</code> or as <code>[]byte</code>, either way <code>WHERE doc = ?</code> compares a <code>JSON</code> column against a non-JSON parameter and matches <em>nothing</em>. The UPDATE found no row to change.</li>
+</ul>
+<p>What made the second one invisible is a property of every correct CDC applier: it must tolerate <em>zero rows affected</em>, because logical-replication resume re-applies events idempotently (a re-applied UPDATE legitimately matches zero rows the second time — <a href="/docs/how-sluice-copies/">that tolerance is what makes replay safe</a>). So the applier could not tell "already applied" from "never matched," logged the zero-row result as normal, advanced the position, and diverged the target with no signal.</p>
+
+<h2 id="repro">The repro</h2>
+<p>The comparison, in isolation — no replication needed:</p>
+<pre><code>${esc(`CREATE TABLE ledger (id BIGINT PRIMARY KEY, doc JSON);
+INSERT INTO ledger VALUES (1, '{"k":"v"}');
+
+-- a JSON column compared against a (string/bytes) parameter:
+SELECT * FROM ledger WHERE doc = '{"k":"v"}';              -- 0 rows
+-- the same comparison, parameter cast to JSON first:
+SELECT * FROM ledger WHERE doc = CAST('{"k":"v"}' AS JSON); -- 1 row
+
+-- so a CDC applier binding: UPDATE ledger SET ... WHERE doc = ?
+--   matches nothing, reports 0 rows affected, and (idempotency
+--   tolerance) advances the stream position anyway.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The CDC applier now routes every bound value through the same per-type <code>prepareValue</code> shaping the bulk-copy path uses (JSON <code>[]byte</code> &rarr; <code>string</code>, and the rest), driven by a lazily-populated per-table column-type cache. For the comparison itself, a <code>placeholderFor(type)</code> helper emits <code>CAST(? AS JSON)</code> instead of a bare <code>?</code> for JSON-typed columns, so the equality is JSON-to-JSON and matches. The Postgres applier needs no cast equivalent — pgx inspects per-column type metadata natively. And a <code>Debug</code> line now fires whenever an UPDATE or DELETE matches zero rows: resume idempotency still depends on tolerating that case, but the silence now leaves a footprint.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A parameterised <code>=</code> against a typed column is not type-agnostic: MySQL will not coerce a bind parameter into JSON, so a comparison that reads correctly matches nothing at runtime. And when the consumer is a CDC applier, its <em>idempotency tolerance</em> — the very thing that makes replay safe — is exactly what hides a never-matched predicate. This is the MySQL sibling of a Postgres story we hit on the same class: <a href="/field-notes/replica-identity-full-updates/">REPLICA IDENTITY FULL silently ate our UPDATEs</a>, where a <code>jsonb</code> value failed an equality round-trip. Same shape, two engines, two root causes: when equality quietly stops matching, replay-tolerance swallows the loss.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL JSON comparison &amp; the need to cast — <a href="https://dev.mysql.com/doc/refman/8.0/en/json.html">The JSON Data Type</a> and <a href="https://dev.mysql.com/doc/refman/8.0/en/cast-functions.html"><code>CAST(… AS JSON)</code></a>.</li>
+  <li>The <code>_binary</code> charset introducer behavior — <a href="https://dev.mysql.com/doc/refman/8.0/en/charset-introducer.html">character set introducers</a>.</li>
+  <li>Why a CDC applier tolerates zero-row applies — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: MySQL LOAD DATA charset dilemma -----------------------
+write(
+  "field-notes/mysql-load-data-charset",
+  page({
+    slug: "field-notes/mysql-load-data-charset",
+    title: "One LOAD DATA can't load a BLOB and a JSON column at once",
+    subtitle: "A BLOB column needs CHARACTER SET binary or the server rejects its first non-ASCII byte; a JSON column rejects its input under CHARACTER SET binary. The two requirements point opposite ways, and there is no statement-level clause that satisfies both.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL bulk load via <code>LOAD DATA LOCAL INFILE</code> into a table with both a binary and a JSON column. Internally the LOAD DATA row writer, ADR-0026.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>The fast bulk-load path — <code>LOAD DATA LOCAL INFILE</code>, typically 5&ndash;10&times; faster than parameter-bound multi-row INSERTs because the server parses one statement and one stream — hit a table that carried both a <code>BLOB</code>/<code>VARBINARY</code> column and a <code>JSON</code> column. There is no single <code>CHARACTER SET</code> clause on the statement that loads both. Pick either one and the other column's rows are rejected.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p><code>LOAD DATA</code> validates every input byte against a charset, and that charset is a <em>statement-level</em> setting — one <code>CHARACTER SET</code> clause for all columns. The two column types want opposite things from it:</p>
+<ul>
+  <li><strong>Without <code>CHARACTER SET binary</code></strong>, the server validates input against the connection charset (utf8mb4) and rejects the first non-ASCII byte in a <code>BLOB</code>/<code>VARBINARY</code> column with <code>Error 1300: Invalid utf8mb4 character string</code>. Any binary column is silently broken.</li>
+  <li><strong>With <code>CHARACTER SET binary</code></strong>, the server flips: a <code>JSON</code> column rejects its input with <code>Cannot create a JSON value from a string with CHARACTER SET 'binary'</code>, because JSON requires a Unicode-tagged input stream.</li>
+</ul>
+<p>The requirements are mutually exclusive at the statement level: binary columns demand the raw-bytes charset, JSON columns demand a Unicode one, and you get to name exactly one.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`CREATE TABLE mixed (id INT PRIMARY KEY, blob_col BLOB, json_col JSON);
+
+-- utf8mb4 (default): the BLOB's first non-ASCII byte →
+--   ERROR 1300 (HY000): Invalid utf8mb4 character string
+LOAD DATA LOCAL INFILE 'Reader::x' INTO TABLE mixed
+  CHARACTER SET utf8mb4 (id, blob_col, json_col);
+
+-- CHARACTER SET binary: the JSON column →
+--   ERROR 3144 (22032): Cannot create a JSON value from a string
+--   with CHARACTER SET 'binary'
+LOAD DATA LOCAL INFILE 'Reader::x' INTO TABLE mixed
+  CHARACTER SET binary (id, blob_col, json_col);`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Load every field into a user variable under <code>CHARACTER SET binary</code>, then re-tag per column in a <code>SET</code> clause. Binary, numeric, and temporal columns take their variable verbatim (raw bytes, exactly what they want); <code>JSON</code>, <code>TEXT</code>, <code>VARCHAR</code>, and <code>SET</code> columns get <code>CONVERT(@cN USING utf8mb4)</code> — the bytes are unchanged, only the charset <em>tag</em> is corrected:</p>
+<pre><code>${esc(`LOAD DATA LOCAL INFILE 'Reader::x' INTO TABLE mixed
+  CHARACTER SET binary
+  (@c0, @c1, @c2)
+  SET id       = @c0,
+      blob_col = @c1,                      -- raw bytes, verbatim
+      json_col = CONVERT(@c2 USING utf8mb4); -- re-tagged to Unicode`)}</code></pre>
+<p>The per-column re-tag is a named, tested wart (<code>columnSetExpr</code>): adding a new type that needs re-tagging is a one-line switch case. (Geometry stays on the batched-INSERT path and forgoes the LOAD DATA speedup; the fallback names the offending column in a WARN so the cause is diagnosable from one log line.)</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p><code>CHARACTER SET</code> on <code>LOAD DATA</code> is a single, statement-wide, all-columns setting for what is really a <em>per-column</em> problem — and MySQL's own type system contains two columns that demand incompatible answers. The escape hatch is a general one: when a bulk statement must apply different byte-interpretation rules to different columns, funnel every field through a user variable and do the per-column work in a <code>SET</code> clause, where each column gets its own expression. It is the row-writer analogue of never trusting a single global setting to be right for every member of a heterogeneous set.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL <code>LOAD DATA</code>, its <code>CHARACTER SET</code> clause, and the user-variable + <code>SET</code> form — <a href="https://dev.mysql.com/doc/refman/8.0/en/load-data.html"><code>LOAD DATA</code> statement</a>.</li>
+  <li>Why JSON rejects a binary charset — <a href="https://dev.mysql.com/doc/refman/8.0/en/json.html">The JSON Data Type</a>.</li>
+  <li>How sluice bulk-loads a MySQL target — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: Postgres idle-slot failover trap ----------------------
+write(
+  "field-notes/postgres-idle-slot-failover",
+  page({
+    slug: "field-notes/postgres-idle-slot-failover",
+    title: "Every HA knob on, and the slot still vanished at failover",
+    subtitle: "Patroni slot-sync on, sync_replication_slots on, hot_standby_feedback on — and a logical slot that hadn't advanced during the sync window was still lost on promotion. “HA-replicated” means the slot's LSN is copied on a timer, not that the slot can't be lost.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — Postgres HA (Patroni / PG&nbsp;17 native slot sync) source, failover during a quiet-source window. Operator-confirmed in production. See <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a>.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Every mechanism for surviving a failover was configured: Patroni <code>slots:</code> (the permanent logical slot), <code>sync_replication_slots = on</code>, and <code>hot_standby_feedback = on</code>. A failover promoted the standby, and the CDC stream came back with <code>wal_status = 'lost'</code> — the slot was present but invalid, pointing at WAL that no longer existed. Nothing in Postgres's logs named the dropped slot at failover time; it surfaced only when the consumer reconnected.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>Slot sync — Patroni's, and PG&nbsp;17's native equivalent gated by <code>logical_slot_sync_timeout</code> (default 300s) — is a primary&rarr;standby <strong>pull on a timer</strong>. The standby periodically copies the slot's LSN from the primary. The copy is therefore only ever as fresh as the last time the primary's slot <em>advanced</em>. If the primary's slot has not moved for the duration of the sync window — because the source is quiet, the consumer is paused, or the consumer's host is down — the standby's replica copy stays pinned at an old LSN. Promote that standby, and the new primary's slot points at WAL that has already been recycled: <code>wal_status = 'lost'</code> on the next resume.</p>
+<p>The counter-intuitive part: the fragile case is the <em>idle</em> slot, not the busy one. A slot that isn't advancing can't be synced fresh, so “no traffic” — which feels safe — is exactly the condition that lets a failover strand it.</p>
+
+<h2 id="repro">The diagnostic</h2>
+<p>A failover is hard to stage on demand, but the precondition is observable: watch whether the slot's <code>confirmed_flush_lsn</code> advances on your workload.</p>
+<pre><code>${esc(`SELECT slot_name, wal_status, active, confirmed_flush_lsn
+FROM pg_replication_slots
+WHERE slot_type = 'logical';
+
+-- On a quiet source, sample confirmed_flush_lsn over time. If it does
+-- NOT advance for hours, the standby's synced copy is frozen at that
+-- LSN — and a failover during that window will surface wal_status='lost'
+-- on resume. Advancement rate is the pre-production check.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Keep the slot advancing, two ways, and fall through cleanly if it's lost anyway:</p>
+<ul>
+  <li><strong>Keep the consumer active.</strong> sluice's PG CDC reader sends <code>pg_send_standby_status_update</code> every 10&nbsp;seconds whether or not events are flowing, so the slot reads as <code>active</code> from the primary's perspective and the standby's sync keeps pace. The operational rule: run <code>sync start</code> <em>continuously</em>, not as a one-shot during low-traffic windows.</li>
+  <li><strong>Make a quiet source advance on purpose.</strong> For genuinely idle databases, inject WAL activity with <code>SELECT pg_logical_emit_message(false, 'sluice-heartbeat', '')</code> on a timer — it writes to WAL without modifying any user data (sluice's reader sees and discards it), guaranteeing the slot moves even if the active consumer briefly disconnects.</li>
+  <li><strong>Backstop.</strong> If the slot is lost regardless, <code>sync start --resume</code> detects it, drops it, and falls through to a fresh cold-start rather than silently stalling.</li>
+</ul>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>“HA-replicated” for a logical replication slot means <em>the slot's LSN is copied to the standby on a timer</em> — not that the slot cannot be lost. Because the sync copies a position, a slot that doesn't advance can't be synced fresh, which inverts the usual intuition: the idle slot is the fragile one, not the busy one. On a quiet source, don't rely on the slot's position drifting forward on its own — make it advance, with an active consumer or an explicit WAL heartbeat. This is a specific instance of a broader Postgres-slot truth we hit from the other side too: <a href="/field-notes/postgres-slot-leaks/">a slot's lifetime is the server's to manage, not your process's</a>.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>PG&nbsp;17 logical replication slot synchronization &amp; <code>logical_slot_sync_timeout</code> — <a href="https://www.postgresql.org/docs/current/logical-replication-failover.html">logical replication failover</a>.</li>
+  <li><code>pg_logical_emit_message</code> (a WAL write with no user-data change) — <a href="https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-DBOBJECT">logical decoding message functions</a>.</li>
+  <li>Patroni permanent slots &amp; slot failover — <a href="https://patroni.readthedocs.io/en/latest/dynamic_configuration.html">Patroni dynamic configuration</a>.</li>
+  <li>sluice's Postgres source prep and the idle-slot mitigations — <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a>.</li>
 </ul>
 `,
   })
