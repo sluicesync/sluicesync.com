@@ -4037,6 +4037,8 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-06-27SQLite & D1 SQLite's DECIMAL is a suggestion — Declare a column DECIMAL(10,2) and you get NUMERIC affinity, which stores 19.99 as 19.989999999999998. Not a rounding bug — an engine storage property, and the real predicate is dyadic representability.
 
+- 2026-06-22Cross-cutting A poller that re-reads all of history every tick — A backup broker rebuilt its entire lineage chain on every 30-second tick &mdash; ~2,000 object-store GETs per tick on a week-old stream, even when nothing had changed, with a tick that could outlast its own interval. Cost that grows with accumulated history, forever.
+
 - 2026-06-20MySQL & Vitess ENUM is an ordinal and SET is a bitmask on the wire — In a raw binlog row event a MySQL ENUM is its 1-based ordinal and a SET is a numeric bitmask; the member-name list lives only in the table definition. Decode without the schema and SET('a','c') becomes "5". Snapshot and VStream hand you text, so it hides until raw CDC.
 
 - 2026-06-18MySQL & Vitess Your primary key is only unique per shard — vtgate merges every Vitess/PlanetScale shard into one logical stream, but per-shard id ranges mean the same primary-key value legitimately exists on several shards. Copy them into one target table and the collisions silently overwrite &mdash; exit 0, rows short.
@@ -4078,6 +4080,8 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 - 2026-05-22Postgres A Postgres LSN means nothing without its timeline — Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL gets this right for free with GTIDs; Postgres's raw LSN carries no provenance.
 
 - 2026-05-17Postgres The pgx codec that flattened numeric[][] — A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped int[][] perfectly.
+
+- 2026-05-15Cross-cutting Count your bytes, not your rows — A batch size tuned for narrow OLTP rows &mdash; 5,000 rows, under 10 MB &mdash; quietly pins hundreds of MB the moment the workload is MB-scale TEXT, BYTEA, JSON, or geometry. The streaming paths were fine; only the two accumulators blew up.
 
 - 2026-05-10Cross-cutting {}: two characters, two types — {} is an empty array in Postgres and an empty object in JSON; []byte("{}") is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way.
 
@@ -4240,6 +4244,8 @@ The stored value is a perfect binary32; the copy-phase text rendering is what lo
 ## What sluice does about it
 
 A VStream consumer can't fix this client-side: the copy SELECT is built inside vttablet's rowstreamer and doesn't honor a client-supplied projection expression — analyzeExpr in go/vt/vttablet/tabletserver/vstreamer/planbuilder.go rejects arithmetic like col * 1E0 in a stream filter. So sluice works around it with a post-copy exact re-read: after the copy phase, it re-reads FLOAT columns with an out-of-band SELECT (col * 1E0) ... through vtgate, which forces MySQL to render at full precision, and patches the rounded copy values. That's only possible for a consumer that also has a direct SQL path to the source and can absorb a second read — which is exactly why the right home for the fix is upstream in rowstreamer.
+
+That patch has a memory cliff of its own, and it's a clean illustration of when you can't stream. Reconciling the exact re-read against the rounded copy rows is a textbook merge-join — and a bounded merge-join needs monotonically-ordered keys on both sides. The VStream copy side has neither: vttablet's rowstreamer scans by whatever unique key is cheapest (not necessarily your primary key), and it re-emits rows already behind its own cursor during binlog catch-up — out of order, with duplicates. With no shared ordering to exploit, there is no safe streaming join, so the repair falls back to holding a whole-table primary-key→float map in memory, which at 100M rows is gigabytes. sluice therefore caps it (--float-reread-max-rows, default 2M) and degrades loudly — keep the rounded value with a WARN by default, or refuse under --strict-float — rather than OOM on a large table. The negative result is the portable bit: a &ldquo;scan the table twice and join the passes&rdquo; plan silently assumes both passes are co-ordered, and a resharding engine that scans by a secondary key and re-emits behind its cursor breaks that assumption, leaving unbounded memory as the only fallback.
 
 We've written up an upstream issue for vitessio/vitess describing the copy-vs-replication inconsistency and proposing two server-side fixes — widen the copy SELECT to project the column as a double (CAST(col AS DOUBLE), so MySQL renders round-trippable precision and the target narrows back to the exact binary32), or read the copy via the binary protocol and reuse the same shortest-round-trip formatter the binlog path already uses in rbr.go. The argument is deliberately narrow: FLOAT is an approximate type, granted, but a row's value shouldn't depend on which Vitess phase delivered it, and Vitess already produces the exact form on one of its two paths. (The write-up references MySQL Bug #43262, the manual's B.3.4.8, and the public Vitess source paths above; it is drafted, not yet filed.)
 
@@ -5873,7 +5879,7 @@ Split the single blob into a header row plus one row per table, and give the sto
 
 ## The transferable lesson
 
-"Just keep the state as one JSON column and upsert it" is an O(n&sup2;) amplifier the moment the state grows and the checkpoints are frequent — and on an MVCC database the cost is not merely re-serialization: every write is a new tuple version plus a re-TOAST of the entire oversized value, all concentrated on one hot row that also becomes a lock. Give any growing state map an O(1) per-key write surface (a row per key), and you fix the algorithmic cost, the storage amplification, and the write contention in one move. The same shape shows up in this project's backup manifest — a growing metadata object rewritten once per unit of progress is the pattern to watch for.
+"Just keep the state as one JSON column and upsert it" is an O(n&sup2;) amplifier the moment the state grows and the checkpoints are frequent — and on an MVCC database the cost is not merely re-serialization: every write is a new tuple version plus a re-TOAST of the entire oversized value, all concentrated on one hot row that also becomes a lock. Give any growing state map an O(1) per-key write surface (a row per key), and you fix the algorithmic cost, the storage amplification, and the write contention in one move. The same shape shows up in this project's backup manifest — a growing metadata object rewritten once per unit of progress is the pattern to watch for — and, per tick instead of per write, in a poller that re-derives its state from full history.
 
 ## Primary sources
 
@@ -5910,7 +5916,7 @@ Split the in-progress manifest into a base written once (schema, anchor, encrypt
 
 ## The transferable lesson
 
-A metadata object that grows with your work and is rewritten once per unit of progress is silently O(n&sup2;), and it will pass every test you run at small scale and only surface as days at 100k. The fix is append-only rather than rewrite — but the trap has a second floor: the two most natural ways to make an append "safe" (write-to-tmp-and-rename, or read-modify-write on a store with no native append) each re-copy the whole file per call and quietly reintroduce the exact quadratic you set out to kill. When you replace an O(n&sup2;) rewrite, verify the replacement is genuinely O(1) per step and not an O(n) copy in disguise — and where the substrate can't give you a true append (object storage), say so out loud instead of shipping the quadratic silently. The same "stop rewriting the whole growing thing per checkpoint" lesson bit this project's migration state store too, there through MVCC and TOAST.
+A metadata object that grows with your work and is rewritten once per unit of progress is silently O(n&sup2;), and it will pass every test you run at small scale and only surface as days at 100k. The fix is append-only rather than rewrite — but the trap has a second floor: the two most natural ways to make an append "safe" (write-to-tmp-and-rename, or read-modify-write on a store with no native append) each re-copy the whole file per call and quietly reintroduce the exact quadratic you set out to kill. When you replace an O(n&sup2;) rewrite, verify the replacement is genuinely O(1) per step and not an O(n) copy in disguise — and where the substrate can't give you a true append (object storage), say so out loud instead of shipping the quadratic silently. The same "stop rewriting the whole growing thing per checkpoint" lesson bit this project's migration state store too, there through MVCC and TOAST — and it recurs per tick rather than per write in a poller that re-reads all of history.
 
 ## Primary sources
 
@@ -5919,3 +5925,77 @@ A metadata object that grows with your work and is rewritten once per unit of pr
 - Why object stores aren't append-friendly — S3 objects are immutable (replace-whole-object).
 
 - sluice's backup format & checkpoints — Take encrypted backups.
+
+
+===============================================================
+# Count your bytes, not your rows
+(https://sluicesync.com/field-notes/batch-by-bytes-not-rows/)
+
+A batch size tuned for narrow OLTP rows — 5,000 rows, under 10 MB — quietly pins hundreds of MB the moment the workload is MB-scale TEXT, BYTEA, JSON, or geometry. Row count is a proxy for memory, and it's only honest when rows are uniform.
+
+Observed — bulk-copy (batched INSERT) and CDC apply into a target, a batch size set by row count meeting wide columns. Internally ADR-0028 (memory-bounded streaming).
+
+## What happened
+
+The batch accumulators were bounded by row count — --bulk-batch-size 5000 for bulk INSERT, --apply-batch-size for CDC. On the narrow OLTP rows most tests use, 5,000 rows is under 10 MB and everything is fine. On a table with MB-scale TEXT / BYTEA / JSON / geometry columns, the same 5,000-row batch pinned hundreds of MB of driver parameter buffer — and a 500-change CDC batch holding one open transaction's parameter slice did the same. Memory spiked exactly where the configured batch size promised it wouldn't.
+
+## Why (the mechanism)
+
+Row count is a stand-in for memory that only holds when every row is about the same small size. A batch accumulator holds N rows' worth of shaped values and driver parameter buffers before it flushes — that's N &times; (row width), and row width varies across workloads by orders of magnitude. A schema with one wide column breaks the proxy: 5000 &times; 10 bytes is 50 KB, 5000 &times; 2 MB is 10 GB, same batch size. Notably, the COPY and LOAD DATA paths were immune — they stream row-by-row through driver-controlled wire buffers and never hold N rows at once — so only the two accumulators (batched INSERT, and the open-transaction CDC apply) had the problem. The bound was on the wrong axis.
+
+## The repro (the arithmetic)
+
+    -- same batch size, four orders of magnitude apart in memory:
+    --   narrow:  5000 rows x ~10 B/row   = ~50 KB   in flight
+    --   wide:    5000 rows x ~2 MB/row   = ~10 GB   in flight
+    -- a batch size that is safe for your test data is a memory bomb for
+    -- someone else's schema — a single BYTEA/JSON/geometry column does it.
+
+## What sluice does about it
+
+Add a byte budget: --max-buffer-bytes (default 64 MiB) that flushes on whichever fires first, the row count or the accumulated bytes. A wide-row workload transparently uses a smaller batch; a narrow one keeps the full count. The streaming paths (COPY, LOAD DATA) need no change, because they were never accumulators. The precedent is worth stealing: PlanetScale's pscale dumper already flushes its bulk-INSERT batcher at ~1 MB of statement body, not a fixed row count, for exactly this reason.
+
+## The transferable lesson
+
+Row count is a proxy for memory, and the proxy is only accurate when rows are uniform. The moment a schema has a wide column — a blob, a document, a geometry — "5,000 rows" can mean 50 KB or 10 GB, so a batch size that's safe for your data is a memory bomb for someone else's. Bound an accumulator by the resource you actually care about (bytes), and keep the count as a secondary cap. And know which of your paths are accumulators and which are streamers: the streaming ones were never at risk here, because they never hold the whole batch at once — the same reason a byte cap belongs on the two that do. (It's the smaller cousin of a snapshot reader that buffered a whole table into swap.)
+
+## Primary sources
+
+- Postgres large-value storage (why a "row" can be megabytes) — TOAST.
+
+- The 1 MB statement-body flush precedent — pscale / mydumper batch sizing conventions.
+
+- How sluice copies data (streaming vs batched paths) — How sluice copies your data.
+
+
+===============================================================
+# A poller that re-reads all of history every tick
+(https://sluicesync.com/field-notes/poll-cost-grows-with-history/)
+
+A backup broker rebuilt its entire lineage chain on every 30-second tick — one object-store GET per manifest, even when nothing had changed. On a week-old stream that's ~2,000 GETs a tick, forever, with a tick that could outlast its own interval. The cost was tied to the age of the stream, not the size of the change.
+
+Observed — the backup broker following a live backup chain on object storage to replay new increments into a target. Internally the broker chain-cache fix.
+
+## What happened
+
+The broker follows a growing backup chain and, every 30 seconds, replays whatever is new into the target. To find "what's new," it rebuilt the entire lineage chain from the root on every tick — one object-store GET plus a JSON decode per manifest — even when nothing had changed since the last tick. On a week-old stream rolling over every 5 minutes, the chain is ~2,000 manifests, so an idle tick did ~2,000 GETs, and a single tick could take longer than the 30-second interval that was supposed to trigger the next one.
+
+## Why (the mechanism)
+
+The walk was O(history) per tick — not quadratic, but a per-tick cost that grows linearly with total accumulated history and never levels off. A poller that re-derives its state from the full history on every interval has a cost bound to the age of the stream rather than the size of the change, so the steady-state (nothing happened) is also the expensive case, and it gets more expensive every day the stream runs. On object storage the sting is doubled: each chain-walk read is a billed GET with real network latency, so "re-read everything, find nothing changed" is both slow and a line item.
+
+## What sluice does about it
+
+Cache the walked chain, keyed on a cheap change-token: the raw-byte identity of the two objects that are rewritten whenever the chain changes — lineage.json (rewritten on every structural change) and the tail manifest (rewritten in place per checkpoint). Read the token before the rebuild, so a racing writer can only ever make the cached key look older, never let a stale chain be served — the worst case is one unnecessary rebuild, never a wrong answer. An idle tick drops from ~2,000 GETs to exactly two.
+
+## The transferable lesson
+
+A polling system that re-derives its state from full history on every tick has a per-tick cost that grows without bound as the history grows — invisible on day one, a self-inflicted slowdown (and a storage bill) by week two, precisely because the idle path is the expensive one. The fix isn't to poll less often; it's to make "nothing changed" cheap: cache on a small change-token, validate the token before the expensive rebuild, and order the reads so a concurrent writer can only invalidate conservatively. This is the same family as two other things that bit this project — rewriting the whole manifest per chunk and re-encoding the whole state blob per checkpoint — all three pay for the entire accumulated size on every small step, and all three pass every fresh, small-scale test and only bite with age or volume.
+
+## Primary sources
+
+- Object-store request cost & latency (why per-tick GET counts matter) — S3 request pricing.
+
+- Change-token / conditional-read patterns — HTTP conditional requests (ETag/If-None-Match, the same idea applied to a cache key).
+
+- sluice's backup chain & broker — Sync from a backup chain.
