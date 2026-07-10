@@ -81,7 +81,7 @@ At ~1.2 GB the cold-start-to-tailing transition took about 5 minutes in testing 
 
 Wait for caught-up before cutover. A trickle of changes can take tens of seconds to ~2 minutes to appear on the target — that latency is PlanetScale VStream's roughly 60 s server-side delivery cadence, not sluice (the applier commits within seconds of receiving an event). Under sustained write load, lag stays low. So before you cut over, wait for sync health / verify to report caught-up rather than trusting a fixed timer.
 
-Keep --apply-batch-size in the 25–50 range on a PS target. Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here.
+Keep --apply-batch-size in the 25–50 range on a PS target. Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here. The field note The 20-second guillotine over a WAN explains why — and why insert-heavy syncs now pipeline past the limit.
 
 ### Option B — one-shot migrate
 

@@ -66,7 +66,7 @@ Because SQLite/D1 storage is dynamically typed, the safe default maps a source c
 
 Candidates are picked by name hint (is_*/*_flag; *_at/created/updated; *_json/metadata/payload; *_id/*_uuid) and then each is gated by one aggregate pushed down to the source — a boolean column promotes only if no value is outside (0,1), a UUID column only if every value matches an anchored hex-UUID GLOB, and so on. A *_id holding cus_abc123 fails UUID validation and stays text — the exact case that's a total-data-loss failure under name-only type guessing. Temporal handling is tz-aware (timestamptz only when every value carries an offset, else naive timestamp); a mixed offset/naive column or a sub-microsecond fraction is kept text rather than risk a silent UTC-shift or rounding. A structured report names every promotion (with the validated row count) and every column kept safe. An explicit --type-override always wins.
 
-On a live D1, inference stages locally first (automatic). Cloudflare D1's query API rejects the rich-type validation patterns (its GLOB complexity limit), so against --source-driver d1 sluice first replicates the database into a byte-faithful local SQLite file and validates there — engaged automatically when you pass --infer-types (v0.99.167). The staged copy is lossless (exact storage classes, integers above 253 included — unlike wrangler d1 export), so inference sees the original types and decides identically. Pass --stage-local to stage even without inference (a faster local bulk read), or --no-stage-local to force the direct path. A plain D1 migrate without --infer-types streams directly as before. (Not needed for a local SQLite file — it has no such limit.)
+On a live D1, inference stages locally first (automatic). Cloudflare D1's query API rejects the rich-type validation patterns (its GLOB complexity limit), so against --source-driver d1 sluice first replicates the database into a byte-faithful local SQLite file and validates there — engaged automatically when you pass --infer-types (v0.99.167). The staged copy is lossless (exact storage classes, integers above 253 included — unlike wrangler d1 export), so inference sees the original types and decides identically. Pass --stage-local to stage even without inference (a faster local bulk read), or --no-stage-local to force the direct path. A plain D1 migrate without --infer-types streams directly as before. (Not needed for a local SQLite file — it has no such limit.) The war story behind this — a UUID GLOB that passed every local test and died on live D1 with code 7500 — is the field note Cloudflare D1 is not your local SQLite.
 
 ## ORM bookkeeping tables
 
@@ -74,7 +74,7 @@ An app's ORM keeps its migration state in a bookkeeping table — Rails schema_m
 
 ## SQLite as a target
 
-SQLite is also a migrate target (--target-driver sqlite) — emit a .db from any source (decimals are stored byte-exact as TEXT affinity, not lossy REAL), e.g. to then run wrangler d1 import. D1 itself is not a write target; produce a SQLite .db and import it with wrangler.
+SQLite is also a migrate target (--target-driver sqlite) — emit a .db from any source (decimals are stored byte-exact as TEXT affinity, not lossy REAL — see the field note SQLite's DECIMAL is a suggestion for why), e.g. to then run wrangler d1 import. D1 itself is not a write target; produce a SQLite .db and import it with wrangler.
 
     sluice migrate \
         --source-driver postgres --source '<pg-dsn>' \

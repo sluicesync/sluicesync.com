@@ -69,11 +69,20 @@ const NAV = [
     items: [
       { slug: "field-notes", label: "About these notes" },
       { slug: "field-notes/numeric-array-flatten", label: "The pgx codec that flattened numeric[][]" },
+      { slug: "field-notes/replica-identity-full-updates", label: "REPLICA IDENTITY FULL ate our UPDATEs" },
+      { slug: "field-notes/postgres-slot-leaks", label: "Replication slots don't die with your process" },
       { slug: "field-notes/planetscale-grow-reparent", label: "When PlanetScale un-acked our rows" },
       { slug: "field-notes/vstream-float-precision", label: "Vitess copy phase rounds your FLOATs" },
       { slug: "field-notes/vstream-throttle-blind", label: "vtgate erases the throttle signal" },
       { slug: "field-notes/binlog-comment-truncate", label: "A comment hid a TRUNCATE from CDC" },
+      { slug: "field-notes/mysql-enum-emoji", label: "MySQL turned our emoji into '?'" },
+      { slug: "field-notes/vitess-tx-killer-wan", label: "The 20-second guillotine over a WAN" },
+      { slug: "field-notes/d1-not-local-sqlite", label: "Cloudflare D1 is not your local SQLite" },
+      { slug: "field-notes/sqlite-decimal-affinity", label: "SQLite's DECIMAL is a suggestion" },
+      { slug: "field-notes/sqlite-wal-checkpoint-starvation", label: "One long-lived reader, 75 GB of WAL" },
       { slug: "field-notes/int64-json-boundary", label: "2^53 is a database boundary now" },
+      { slug: "field-notes/empty-object-vs-array", label: "{}: two characters, two types" },
+      { slug: "field-notes/zero-value-config-trap", label: "The zero value is a loaded gun" },
     ],
   },
   {
@@ -215,11 +224,20 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "agent-skills",
     "field-notes",
     "field-notes/numeric-array-flatten",
+    "field-notes/replica-identity-full-updates",
+    "field-notes/postgres-slot-leaks",
     "field-notes/planetscale-grow-reparent",
     "field-notes/vstream-float-precision",
     "field-notes/vstream-throttle-blind",
     "field-notes/binlog-comment-truncate",
+    "field-notes/mysql-enum-emoji",
+    "field-notes/vitess-tx-killer-wan",
+    "field-notes/d1-not-local-sqlite",
+    "field-notes/sqlite-decimal-affinity",
+    "field-notes/sqlite-wal-checkpoint-starvation",
     "field-notes/int64-json-boundary",
+    "field-notes/empty-object-vs-array",
+    "field-notes/zero-value-config-trap",
   ];
   const docsActive = slug === "getting-started" || slug === "configuration" || slug === "commands" || slug === "supported-directions" || slug === "how-sluice-copies" || slug === "error-codes" || slug === "type-mapping" || slug === "database-objects" || slug === "" || guideSlugs.includes(slug);
   const top = '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>';
@@ -1432,13 +1450,13 @@ ${pre(`sluice migrate \\
     --target-driver postgres --target '<pg-dsn>' \\
     --infer-types`)}
 <p>Candidates are picked by name hint (<code>is_*</code>/<code>*_flag</code>; <code>*_at</code>/<code>created</code>/<code>updated</code>; <code>*_json</code>/<code>metadata</code>/<code>payload</code>; <code>*_id</code>/<code>*_uuid</code>) and then each is gated by one aggregate pushed down to the source — a boolean column promotes only if <em>no</em> value is outside <code>(0,1)</code>, a UUID column only if every value matches an anchored hex-UUID <code>GLOB</code>, and so on. A <code>*_id</code> holding <code>cus_abc123</code> fails UUID validation and <strong>stays <code>text</code></strong> — the exact case that's a total-data-loss failure under name-only type guessing. Temporal handling is tz-aware (<code>timestamptz</code> only when every value carries an offset, else naive <code>timestamp</code>); a <strong>mixed</strong> offset/naive column or a <strong>sub-microsecond</strong> fraction is kept <code>text</code> rather than risk a silent UTC-shift or rounding. A structured report names every promotion (with the validated row count) and every column kept safe. An explicit <code>--type-override</code> always wins.</p>
-<div class="note"><strong>On a live D1, inference stages locally first (automatic).</strong> Cloudflare D1's query API rejects the rich-type validation patterns (its <code>GLOB</code> complexity limit), so against <code>--source-driver d1</code> sluice first replicates the database into a byte-faithful local SQLite file and validates there — engaged automatically when you pass <code>--infer-types</code> (v0.99.167). The staged copy is lossless (exact storage classes, integers above 2<sup>53</sup> included — unlike <code>wrangler d1 export</code>), so inference sees the original types and decides identically. Pass <code>--stage-local</code> to stage even without inference (a faster local bulk read), or <code>--no-stage-local</code> to force the direct path. A plain D1 migrate without <code>--infer-types</code> streams directly as before. (Not needed for a local SQLite file — it has no such limit.)</div>
+<div class="note"><strong>On a live D1, inference stages locally first (automatic).</strong> Cloudflare D1's query API rejects the rich-type validation patterns (its <code>GLOB</code> complexity limit), so against <code>--source-driver d1</code> sluice first replicates the database into a byte-faithful local SQLite file and validates there — engaged automatically when you pass <code>--infer-types</code> (v0.99.167). The staged copy is lossless (exact storage classes, integers above 2<sup>53</sup> included — unlike <code>wrangler d1 export</code>), so inference sees the original types and decides identically. Pass <code>--stage-local</code> to stage even without inference (a faster local bulk read), or <code>--no-stage-local</code> to force the direct path. A plain D1 migrate without <code>--infer-types</code> streams directly as before. (Not needed for a local SQLite file — it has no such limit.) The war story behind this — a UUID <code>GLOB</code> that passed every local test and died on live D1 with <code>code 7500</code> — is the field note <a href="/docs/field-notes/d1-not-local-sqlite/">Cloudflare D1 is not your local SQLite</a>.</div>
 
 <h2 id="orm-tables">ORM bookkeeping tables</h2>
 <p>An app's ORM keeps its migration state in a bookkeeping table — Rails <code>schema_migrations</code>, Prisma <code>_prisma_migrations</code>, Drizzle <code>__drizzle_migrations</code>, Laravel <code>migrations</code>, Flyway, Goose, and more. That state describes the <em>source</em> engine's schema history and is meaningless — sometimes actively misleading — on a different target engine. On a <strong>cross-engine</strong> migrate (e.g. D1→Postgres) sluice skips these by default, <strong>announcing each skip by name</strong> so nothing vanishes silently. Copy them anyway with <code>--include-orm-tables</code>; on a same-engine run they're kept by default (the history is still valid) unless you pass <code>--skip-orm-tables</code>. Recognition is by distinctive name plus a column-shape guard for the generic names (<code>migrations</code>, <code>schema_migrations</code>), so an app table that merely shares a name isn't skipped by accident.</p>
 
 <h2 id="target">SQLite as a target</h2>
-<p>SQLite is also a migrate <strong>target</strong> (<code>--target-driver sqlite</code>) — emit a <code>.db</code> from any source (decimals are stored byte-exact as <code>TEXT</code> affinity, not lossy <code>REAL</code>), e.g. to then run <code>wrangler d1 import</code>. D1 itself is not a write target; produce a SQLite <code>.db</code> and import it with wrangler.</p>
+<p>SQLite is also a migrate <strong>target</strong> (<code>--target-driver sqlite</code>) — emit a <code>.db</code> from any source (decimals are stored byte-exact as <code>TEXT</code> affinity, not lossy <code>REAL</code> — see the field note <a href="/docs/field-notes/sqlite-decimal-affinity/">SQLite's DECIMAL is a suggestion</a> for why), e.g. to then run <code>wrangler d1 import</code>. D1 itself is not a write target; produce a SQLite <code>.db</code> and import it with wrangler.</p>
 ${pre(`sluice migrate \\
     --source-driver postgres --source '<pg-dsn>' \\
     --target-driver sqlite   --target ./out.db`)}
@@ -2714,7 +2732,7 @@ sluice verify \\
     --source-driver planetscale --source "$SLUICE_SOURCE" \\
     --target-driver planetscale --target "$SLUICE_TARGET"`)}
 <div class="note"><strong>Wait for caught-up before cutover.</strong> A <em>trickle</em> of changes can take tens of seconds to ~2 minutes to appear on the target — that latency is PlanetScale VStream's roughly 60&nbsp;s server-side delivery cadence, <em>not</em> sluice (the applier commits within seconds of <em>receiving</em> an event). Under sustained write load, lag stays low. So before you cut over, wait for <code>sync health</code> / <code>verify</code> to report caught-up rather than trusting a fixed timer.</div>
-<div class="note"><strong>Keep <code>--apply-batch-size</code> in the 25–50 range on a PS target.</strong> Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here.</div>
+<div class="note"><strong>Keep <code>--apply-batch-size</code> in the 25–50 range on a PS target.</strong> Above 50, a batch's apply transaction can trip Vitess's 20-second transaction killer. 50 is a safe default here. The field note <a href="/docs/field-notes/vitess-tx-killer-wan/">The 20-second guillotine over a WAN</a> explains why — and why insert-heavy syncs now pipeline past the limit.</div>
 
 <h3 id="one-shot">Option B — one-shot migrate</h3>
 <p>If you can take a short maintenance window, a one-shot migrate is simpler — one command, no control tables left behind, and <code>identity_sync</code> auto-primes <code>AUTO_INCREMENT</code> so there's no separate cutover step:</p>
@@ -3503,6 +3521,8 @@ write(
 <h2 id="postgres">Postgres</h2>
 <ul>
   <li><a href="/docs/field-notes/numeric-array-flatten/">The same bytes, a different codec: how <code>numeric[][]</code> silently flattened</a> — a driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped <code>int[][]</code> perfectly.</li>
+  <li><a href="/docs/field-notes/replica-identity-full-updates/">REPLICA IDENTITY FULL silently ate our UPDATEs</a> — building an UPDATE's <code>WHERE</code> over every old column works forever on int/varchar, then a <code>jsonb</code> value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss.</li>
+  <li><a href="/docs/field-notes/postgres-slot-leaks/">Replication slots don't die with your process</a> — a slot is a promise the server keeps until you drop it; a crashed backup, a refused cold-start, and a week-one leak each pinned WAL on the source until the disk filled.</li>
 </ul>
 
 <h2 id="mysql-vitess">MySQL &amp; Vitess</h2>
@@ -3511,11 +3531,22 @@ write(
   <li><a href="/docs/field-notes/vstream-float-precision/">Vitess's copy phase rounds your FLOATs; its binlog phase doesn't</a> — a 17-year-old MySQL display-rounding bug with a fresh consequence: the same <code>FLOAT</code> arrives exact or rounded depending on which VStream phase delivered it.</li>
   <li><a href="/docs/field-notes/vstream-throttle-blind/">vtgate erases the throttle signal: every VStream consumer is throttle-blind</a> — the one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one.</li>
   <li><a href="/docs/field-notes/binlog-comment-truncate/">The binlog keeps your SQL comments — and our TRUNCATE parser didn't know</a> — a leading <code>-- comment</code> on a <code>TRUNCATE</code> made a CDC reader miss it entirely; the source emptied, the target kept every row, forever.</li>
+  <li><a href="/docs/field-notes/mysql-enum-emoji/">MySQL's data dictionary turned our emoji into question marks</a> — MySQL substitutes <code>?</code> for 4-byte UTF-8 in ENUM/SET <em>labels</em> at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it.</li>
+  <li><a href="/docs/field-notes/vitess-tx-killer-wan/">The 20-second guillotine: Vitess's transaction killer meets a 96&nbsp;ms WAN</a> — with no statement pipelining, an N-row apply costs N round-trips; every batch big enough to be efficient overran Vitess's 20&nbsp;s timeout and every batch small enough to commit crawled. A self-tuning system converged to a stall.</li>
+</ul>
+
+<h2 id="sqlite-d1">SQLite &amp; D1</h2>
+<ul>
+  <li><a href="/docs/field-notes/d1-not-local-sqlite/">Cloudflare D1 is not your local SQLite</a> — a UUID-conformance <code>GLOB</code> passed every local test, then died on live D1 with <code>code 7500: LIKE or GLOB pattern too complex</code>. The dialect is the same; the hidden limits are a config surface you can't test against locally.</li>
+  <li><a href="/docs/field-notes/sqlite-decimal-affinity/">SQLite's DECIMAL is a suggestion</a> — declare a column <code>DECIMAL(10,2)</code> and you get NUMERIC affinity, which stores <code>19.99</code> as <code>19.989999999999998</code>. Not a rounding bug — an engine storage property, and the real predicate is dyadic representability.</li>
+  <li><a href="/docs/field-notes/sqlite-wal-checkpoint-starvation/">One long-lived reader, 75 GB of WAL</a> — a continuous-CDC run watched the <code>-wal</code> file grow to 75 GB in 52 minutes while the table it tracked stayed bounded; one idle reader's snapshot pinned every superseded page. Kill the process and it collapsed to ~0.6 GB.</li>
 </ul>
 
 <h2 id="cross-cutting">Cross-cutting</h2>
 <ul>
   <li><a href="/docs/field-notes/int64-json-boundary/">2<sup>53</sup> is a database boundary now</a> — JSON has one number type and it's a double, so every JSON hop in a pipeline is a potential rounding event for Snowflake IDs and any integer past 9,007,199,254,740,992.</li>
+  <li><a href="/docs/field-notes/empty-object-vs-array/"><code>{}</code>: two characters, two types, one silent corruption</a> — <code>{}</code> is an empty array in Postgres and an empty object in JSON; <code>[]byte("{}")</code> is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way.</li>
+  <li><a href="/docs/field-notes/zero-value-config-trap/">The zero value is a loaded gun</a> — a config field that &ldquo;defaults on&rdquo; silently defaults <em>off</em> for every caller that didn't go through the CLI, because in Go every unset field gets the zero value. Twice, with real database consequences.</li>
 </ul>
 
 <div class="note">These notes are also swept into <a href="/llms.txt"><code>llms.txt</code></a> / <a href="/llms-full.txt"><code>llms-full.txt</code></a>, so an AI assistant pointed at sluice's docs inherits this engine lore too.</div>
@@ -3569,7 +3600,7 @@ SELECT array_dims(grid) FROM m WHERE id = 1;
 </ul>
 `,
     prev: { href: "/docs/field-notes/", label: "About these notes" },
-    next: { href: "/docs/field-notes/planetscale-grow-reparent/", label: "When PlanetScale un-acked our rows" },
+    next: { href: "/docs/field-notes/replica-identity-full-updates/", label: "REPLICA IDENTITY FULL ate our UPDATEs" },
   })
 );
 
@@ -3617,7 +3648,7 @@ write(
   <li>Vitess reparenting (the promotion mechanism) — <a href="https://vitess.io/docs/reference/features/reparenting/">vitess.io reparenting docs</a>.</li>
 </ul>
 `,
-    prev: { href: "/docs/field-notes/numeric-array-flatten/", label: "The pgx codec that flattened numeric[][]" },
+    prev: { href: "/docs/field-notes/postgres-slot-leaks/", label: "Replication slots don't die with your process" },
     next: { href: "/docs/field-notes/vstream-float-precision/", label: "Vitess copy phase rounds your FLOATs" },
   })
 );
@@ -3762,7 +3793,7 @@ TRUNCATE TABLE t;
 </ul>
 `,
     prev: { href: "/docs/field-notes/vstream-throttle-blind/", label: "vtgate erases the throttle signal" },
-    next: { href: "/docs/field-notes/int64-json-boundary/", label: "2^53 is a database boundary now" },
+    next: { href: "/docs/field-notes/mysql-enum-emoji/", label: "MySQL turned our emoji into '?'" },
   })
 );
 
@@ -3817,7 +3848,464 @@ fmt.Println(n.String())   // 9007199254740993   <- exact`)}</code></pre>
   <li>The double-precision boundary — <a href="https://en.wikipedia.org/wiki/Double-precision_floating-point_format">IEEE-754 double-precision format</a> (exact integers up to 2<sup>53</sup>).</li>
 </ul>
 `,
+    prev: { href: "/docs/field-notes/sqlite-wal-checkpoint-starvation/", label: "One long-lived reader, 75 GB of WAL" },
+    next: { href: "/docs/field-notes/empty-object-vs-array/", label: "{}: two characters, two types" },
+  })
+);
+
+// ======================= FIELD NOTES: WAVE 2 =============================
+
+// ---- Field Notes: REPLICA IDENTITY FULL + UPDATE -------------------------
+write(
+  "field-notes/replica-identity-full-updates",
+  page({
+    slug: "field-notes/replica-identity-full-updates",
+    title: "REPLICA IDENTITY FULL silently ate our UPDATEs",
+    subtitle: "Build a CDC UPDATE's WHERE clause over every old column and it works forever on int and varchar. Then a jsonb column rides along unchanged, its old value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — Postgres logical-replication (slot-based) source, tables set to <code>REPLICA IDENTITY FULL</code>. Internally Bug 92 (CRITICAL silent loss, fixed v0.85.2).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A Postgres-to-Postgres CDC stream silently diverged on the core, most-tested engine. An <code>UPDATE</code> that changed a cheap column on a table with <code>REPLICA IDENTITY FULL</code> never landed on the target — the applier logged <code>zero rows affected op=update</code> at INFO and moved on. Exit 0, no error, no lag. The target kept the stale row indefinitely. Every prior test on this path had passed, for months.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>With <code>REPLICA IDENTITY FULL</code>, Postgres ships the <em>entire</em> old row image in each UPDATE's <code>pgoutput</code> old-tuple. The tempting thing for a CDC applier to do is build the UPDATE's <code>WHERE</code> clause over every old column — it's right there, and it's a superset of the key. That works perfectly as long as every column's old value survives the <code>pgoutput</code> decode &rarr; rebind round-trip as an exact <code>=</code> match. Integers and <code>varchar</code> always do. A <strong>rich type does not</strong>: a <code>jsonb</code> value (or <code>timestamptz</code>, <code>bytea</code>, high-precision <code>numeric</code>) that rides along unchanged in the old tuple can fail the <code>=</code> predicate after the decode&ndash;rebind round-trip — semantically equal, not byte-equal in the way the equality operator sees. The <code>WHERE</code> matches zero rows, and the <a href="/docs/how-sluice-copies/">idempotency tolerance</a> that makes replay safe (a zero-row UPDATE is normal during re-apply) swallows the miss. Silent UPDATE loss on the engine you trust most.</p>
+<p>The asymmetry is the tell: the DELETE path had narrowed its <code>WHERE</code> to identity-key columns since an earlier fix; the UPDATE path never got the symmetric narrowing, and the entire prior <code>FULL</code>-plus-UPDATE test corpus used only int and varchar columns, which round-trip exactly, so the <code>=</code> always matched and the loss never surfaced.</p>
+
+<h2 id="repro">The repro</h2>
+<p>Set a table to <code>REPLICA IDENTITY FULL</code>, give it a <code>jsonb</code> column, and update a <em>different</em> column while CDC tails it:</p>
+<pre><code>${esc(`CREATE TABLE ledger (
+  id     bigint PRIMARY KEY,
+  seq    bigint,
+  doc    jsonb,          -- rides along unchanged in the FULL old-tuple
+  note   text
+);
+ALTER TABLE ledger REPLICA IDENTITY FULL;
+INSERT INTO ledger VALUES (1, 1, '{"k":"v"}', 'a');
+
+-- with a CDC stream tailing the slot, on the source:
+UPDATE ledger SET seq = 30000 WHERE id = 1;   -- doc untouched
+
+-- source: seq = 30000.  target (before the fix): still seq = 1,
+--   applier logs "zero rows affected op=update", exit 0, no error.`)}</code></pre>
+<p>What surfaced it in practice was a <strong>differential test</strong>: the same workload run through two independent CDC implementations — the slot-based engine and a trigger-based variant — with the two targets diffed. The brand-new variant was correct; the proven engine was wrong.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The fix narrows the UPDATE's <code>Before</code> image to the identity-key columns under <code>FULL</code>, so the <code>WHERE</code> becomes <code>id = $1</code> — mirroring the DELETE path's existing narrowing. It is pinned with a family matrix in the spirit of the <a href="/docs/field-notes/numeric-array-flatten/">pin-the-class rule</a>: <code>numeric</code> / <code>jsonb</code> / <code>bytea</code> / temporal columns &times; <code>FULL</code> + UPDATE, because a green test on one representative rich type proves nothing about the others.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Treat rich types — <code>jsonb</code>, <code>timestamptz</code>, <code>bytea</code>, high-precision <code>numeric</code> — as radioactive in equality predicates: a value that is semantically unchanged is not guaranteed to compare <code>=</code> after a decode&ndash;rebind round-trip. Narrow replication <code>WHERE</code> clauses to identity-key columns, never the full old tuple. And if you have two implementations of one contract, make them testify against each other — a differential run caught a CRITICAL silent-loss bug in the proven engine that months of single-implementation tests had missed.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres <code>REPLICA IDENTITY</code> — <a href="https://www.postgresql.org/docs/current/sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY">ALTER TABLE &hellip; REPLICA IDENTITY</a> (what <code>FULL</code> ships in the old tuple).</li>
+  <li>Postgres logical-decoding output — <a href="https://www.postgresql.org/docs/current/protocol-logicalrep-message-formats.html">logical replication message formats</a>.</li>
+  <li>sluice CDC behavior across engines — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/numeric-array-flatten/", label: "The pgx codec that flattened numeric[][]" },
+    next: { href: "/docs/field-notes/postgres-slot-leaks/", label: "Replication slots don't die with your process" },
+  })
+);
+
+// ---- Field Notes: Postgres replication-slot leaks ------------------------
+write(
+  "field-notes/postgres-slot-leaks",
+  page({
+    slug: "field-notes/postgres-slot-leaks",
+    title: "Replication slots don't die with your process",
+    subtitle: "A Postgres logical replication slot is a promise the server keeps: it retains WAL from the slot's restart_lsn until you drop it — even if the process that created it crashed weeks ago. We hit the class three separate ways, each invisible until the source disk fills.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — Postgres source, replication-slot lifecycle across crashes and early exits. Internally Bug 5 (fixed v0.2.0), Bug 137 (fixed v0.99.37), Bug 177 (fixed v0.99.179).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A Postgres logical replication slot retains WAL from its <code>restart_lsn</code> onward until something drops it. A slot left behind by a dead process keeps pinning WAL forever — the server has no idea the client is gone, and it is doing exactly what you asked: holding the log so a consumer can resume. On a write-active source, an orphaned slot is a slow disk-fill with no loud signal until Postgres goes read-only. We hit this class three separate ways.</p>
+<ul>
+  <li><strong>A hard-killed backup.</strong> A PG-source <code>backup full</code> created a non-temporary snapshot-anchor slot (<code>sluice_backup_anchor_&lt;ts&gt;</code>). Kill it mid-run and the slot survives inactive; the subsequent resume creates a <em>new</em> anchor and never sweeps the old one, so every crashed run adds one more WAL-pinning orphan, each frozen at its creation-time <code>restart_lsn</code>.</li>
+  <li><strong>A cold-start that refused for an unrelated reason.</strong> A <code>sync start</code> created its slot <em>before</em> the target-empty check, then hit <code>SLUICE-E-COLDSTART-TARGET-NOT-EMPTY</code> and exited — without dropping the slot it had just created. The refusal was loud and correct; the leaked slot behind it was silent.</li>
+  <li><strong>The earliest version of the tool.</strong> In week one, any cold-start that failed between <code>CREATE_REPLICATION_SLOT</code> and clean shutdown left <code>sluice_slot</code> behind, and the next start refused with <code>replication slot "sluice_slot" already exists</code> until an operator ran <code>pg_drop_replication_slot</code> by hand.</li>
+</ul>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>A non-temporary slot's lifetime is <em>server-side</em> and unbounded — it is decoupled from the TCP connection or OS process that created it, by design, so a consumer can disconnect and reconnect without losing its place. That is exactly why a crash leaks it: there is no session-teardown hook that drops a persistent slot, and <code>kill -9</code> gives the client no chance to clean up. Any code path that creates a slot and can exit abnormally — a crash, a signal, an early-return refusal — is therefore a potential leak, and the leak is invisible from the application side. You only see it in <code>pg_replication_slots</code>, or when the disk fills.</p>
+
+<h2 id="repro">The repro</h2>
+<p>Create a slot, kill the process before it drops it, and look at the catalog:</p>
+<pre><code>${esc(`-- create a slot, then hard-kill the creating process (kill -9 / taskkill /F)
+SELECT slot_name, temporary, active, restart_lsn
+FROM pg_replication_slots
+WHERE slot_name LIKE 'sluice_%';
+--  sluice_backup_anchor_178...  | f | f | 0/1A2B3C4   <- persistent, inactive,
+--                                                        pinning WAL at that LSN
+
+-- the WAL it pins never recycles until you drop it:
+SELECT pg_drop_replication_slot('sluice_backup_anchor_178...');`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The toolbox that closed the class:</p>
+<ul>
+  <li><strong>Protocol <code>TEMPORARY</code> slots</strong> for anything single-run-scoped. A temporary slot auto-drops when its session ends — including under <code>kill -9</code> — so a crashed backup no longer leaks its anchor. (<code>CREATE_REPLICATION_SLOT &hellip; TEMPORARY</code> supports <code>EXPORT_SNAPSHOT</code>, so the snapshot-anchored backup path can use it.)</li>
+  <li><strong>An orphan sweep with an age safety margin</strong> on the resume path, for slots leaked by pre-fix binaries: old orphans are dropped with an INFO naming each one; a slot younger than the margin is only WARN-named (it might belong to a concurrent run), never auto-dropped.</li>
+  <li><strong>Teardown-on-refusal ordering</strong>: an early-exit refusal now abandons the slot it created before returning, so the target-not-empty path leaves the source slot count unchanged.</li>
+</ul>
+<p>This is the <a href="/docs/postgres-source-prep/">contain-Postgres-complexity</a> tenet in practice: slot lifecycle is surfaced explicitly — via <code>sluice slot list</code> / <code>slot drop</code> and named WARNs — rather than silently auto-handled or silently leaked.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>If your tool creates replication slots (or any server-side, session-decoupled resource), <strong>your crash paths are part of your API.</strong> Enumerate every way the process can exit abnormally — signal, panic, early-return refusal, hard kill — and make sure each one either can't leak the resource (protocol-<code>TEMPORARY</code>) or is reconciled on the next run (an age-bounded sweep). A resource whose lifetime the server owns will outlive your process by default; that is a feature you have to opt out of, not a bug you can ignore.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres replication slots — <a href="https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS">streaming replication slots</a> and <a href="https://www.postgresql.org/docs/current/view-pg-replication-slots.html"><code>pg_replication_slots</code></a>.</li>
+  <li>The replication protocol's <code>CREATE_REPLICATION_SLOT &hellip; TEMPORARY</code> — <a href="https://www.postgresql.org/docs/current/protocol-replication.html">streaming replication protocol</a>.</li>
+  <li>sluice Postgres-source preparation — <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> and the <a href="/docs/managed-postgres-slotless/">managed (slot-less) path</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/replica-identity-full-updates/", label: "REPLICA IDENTITY FULL ate our UPDATEs" },
+    next: { href: "/docs/field-notes/planetscale-grow-reparent/", label: "When PlanetScale un-acked our rows" },
+  })
+);
+
+// ---- Field Notes: MySQL ENUM emoji --------------------------------------
+write(
+  "field-notes/mysql-enum-emoji",
+  page({
+    slug: "field-notes/mysql-enum-emoji",
+    title: "MySQL's data dictionary turned our emoji into question marks",
+    subtitle: "A MySQL ENUM whose label contains an emoji doesn't contain that emoji by the time you read it back. MySQL substitutes ? for 4-byte UTF-8 characters in ENUM/SET labels at CREATE TABLE time, regardless of column charset — and the label is gone from the catalog before any client sees it.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL &rarr; Postgres cross-engine migrate, <code>ENUM</code>/<code>SET</code> columns with supplementary-plane labels. Internally Bug 106; documented and surfaced in v0.92.2. This is a MySQL server behavior, not a sluice bug.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A MySQL &rarr; Postgres migrate of a table with <code>ENUM('vanilla','strawberry-🍓', &hellip;)</code> on a <code>utf8mb4</code> column created the target enum type with a corrupted label — <code>strawberry-?</code> — and then loud-failed the first row INSERT, because the source row's genuine <code>F0 9F 8D 93</code> bytes matched nothing in the target enum:</p>
+<pre><code>${esc(`ERROR: invalid input value for enum enum_utf8_flavor_enum: "strawberry-🍓" (SQLSTATE 22P02)`)}</code></pre>
+<p>The row <em>data</em> was fine. The enum <em>label</em> in the schema was already <code>?</code> before sluice ever read it.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>MySQL's data dictionary silently substitutes <code>?</code> for supplementary-plane (4-byte UTF-8) characters in <code>ENUM</code>/<code>SET</code> <em>labels</em> at <code>CREATE TABLE</code> time — regardless of the column's charset. 2-byte and 3-byte BMP characters (<code>é</code>, <code>日</code>) survive; only 4-byte characters (emoji) are transliterated. Inspect the label bytes and the loss is unambiguous:</p>
+<pre><code>${esc(`strawberry-?  hex=737472617762657272792d3f   <- emoji replaced with 0x3f '?'
+espéçial      hex=657370c3a9c3a769616c       <- 2-byte chars survived
+日本語        hex=e697a5e69cace8aa9e         <- 3-byte chars survived`)}</code></pre>
+<p>The crucial part: this happens to the <strong>label in the catalog</strong>, not to the column's row data. A stored row keeps the real bytes; only the enum's <em>definition</em> is corrupted, at table-creation time, before any client reads it back. So a cross-engine migration faithfully creates a target enum type with the mangled label and then can't insert the source's honest bytes. <code>mysqldump</code> reproduces the identical loss — the label is gone from the source's own catalog, so no tool can recover it. The original suspicion was a session-charset issue (<code>character_set_results</code>), but forcing <code>utf8mb4</code> on the connection does not fix it; the substitution is a server-side data-dictionary property.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`CREATE TABLE enum_utf8 (
+  id BIGINT PRIMARY KEY,
+  flavor ENUM('vanilla','strawberry-🍓','espéçial','日本語') CHARACTER SET utf8mb4
+);
+
+-- read the label back — the emoji is already '?', regardless of your session charset:
+SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+ WHERE TABLE_NAME = 'enum_utf8' AND COLUMN_NAME = 'flavor';
+--  enum('vanilla','strawberry-?','espéçial','日本語')`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The only honest response available: sluice detects a <code>?</code> in <code>ENUM</code>/<code>SET</code> label metadata at schema-read and WARNs before the runtime INSERT loud-fails, so the operator learns about the loss at the top of the run instead of mid-copy. The heuristic is kept narrow (warn only when a label literally contains <code>?</code>) to avoid false positives, and the escape hatch is <code>--type-override &lt;table&gt;.&lt;col&gt;=text</code>, which carries the column as free text so the real bytes migrate. sluice can't recover the original label — nobody can — but it refuses to let the loss be a surprise.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Character-set correctness is not uniform across a database's own surfaces. A column declared <code>utf8mb4</code> stores 4-byte characters perfectly in its <em>rows</em> while the same server silently downgrades them in <em>identifiers and enum labels</em> in the data dictionary. When you copy schema, you are copying metadata that may have passed through a lossier path than the data did — verify label and identifier bytes with <code>hex()</code>, not by eye, and treat a corrupted catalog value as unrecoverable rather than assuming a re-read with the right charset will heal it.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL <code>ENUM</code> type and its limits — <a href="https://dev.mysql.com/doc/refman/8.0/en/enum.html">MySQL 8.0 Reference Manual: the ENUM type</a>.</li>
+  <li>MySQL character-set support and <code>utf8mb4</code> — <a href="https://dev.mysql.com/doc/refman/8.0/en/charset-unicode-utf8mb4.html">the utf8mb4 character set</a>.</li>
+  <li>sluice type mapping and overrides — <a href="/docs/type-mapping/">type mapping</a> (the <code>--type-override</code> escape).</li>
+</ul>
+`,
     prev: { href: "/docs/field-notes/binlog-comment-truncate/", label: "A comment hid a TRUNCATE from CDC" },
+    next: { href: "/docs/field-notes/vitess-tx-killer-wan/", label: "The 20-second guillotine over a WAN" },
+  })
+);
+
+// ---- Field Notes: Vitess tx killer meets a WAN --------------------------
+write(
+  "field-notes/vitess-tx-killer-wan",
+  page({
+    slug: "field-notes/vitess-tx-killer-wan",
+    title: "The 20-second guillotine: Vitess's transaction killer meets a 96 ms WAN",
+    subtitle: "Continuous CDC into PlanetScale MySQL over the internet stalled at effectively zero throughput. The failure geometry: with no statement pipelining an N-row apply costs N round-trips; at 96 ms RTT a 1,000-row batch takes ~100 seconds; Vitess kills any transaction at 20 seconds; the adaptive batch controller shrinks the batch — and converges to a stall.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — trigger-CDC continuous apply into PlanetScale MySQL (Vitess) at ~96 ms RTT, and into PlanetScale Postgres. Internally Bug 168 (Postgres apply path, fixed v0.99.153) and Bug 169 (MySQL/Vitess apply path, insert path fixed v0.99.155; update/delete tail tracked under ADR-0138).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A continuous CDC sync into a PlanetScale MySQL target over the public internet stalled. With the default apply config, every apply transaction took far longer than Vitess's hard 20-second transaction timeout and was killed:</p>
+<pre><code>${esc(`Error 1105: ... tx killer rollback ... exceeded timeout: 20s`)}</code></pre>
+<p>The adaptive batch controller reacted to the failures and multiplicatively shrank the batch — 1000 &rarr; 500 &rarr; 250 &rarr; 125 &rarr; 62 — but the p95 stayed around 22 seconds, batches kept getting killed, and durable progress was roughly nil (over ~210 seconds the target advanced about 50 net rows; the durable resume position never left <code>last_id=0</code>). A self-tuning system had converged to a stall.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The apply path issued its statements one round-trip at a time — no statement pipelining, no multi-row coalescing — so an N-row apply transaction costs about N network round-trips. At a 96 ms RTT, a 1,000-row batch is <code>1000 &times; ~2&times;RTT &asymp; ~100 s</code>, well past the 20-second killer. So the two knobs fight each other with no winning setting: every batch <em>big enough to be efficient</em> overruns the killer, and every batch <em>small enough to commit</em> crawls at roughly <code>lanes / RTT</code> — with 4 lanes over 96 ms, on the order of 20&ndash;30 changes/s. The controller can only pick between "killed" and "crawling."</p>
+<p>The clean proof that the bottleneck was per-row round-trips and not batch/transaction count came from the Postgres side of the same test: pinning a large <em>static</em> batch (<code>--no-auto-tune --apply-batch-size 1000</code>) barely moved throughput — about 63 changes/s, essentially unchanged from the auto-tuned collapse. If batch <em>count</em> were the cost, a 1,000-row static batch would have jumped; it didn't, because the cost is 1,000 serial round-trips either way. Routing the identical workload through a <strong>pipelined</strong> applier (a batch costs ~1&ndash;2 RTT instead of N) took Postgres from ~63/s to <strong>~5,000 changes/s</strong>. Latency &times; protocol shape beats every knob.</p>
+
+<h2 id="repro">The repro</h2>
+<p>On a high-latency link (add ~80&ndash;100 ms with <code>tc netem</code> if you don't have a real WAN), run continuous CDC into a Vitess/PlanetScale MySQL target under a sustained write workload and watch the durable apply position:</p>
+<pre><code>${esc(`# generate a backlog, then apply over the WAN with the default config:
+#   the 20 s tx-killer fires, AIMD collapses the batch toward 1,
+#   durable progress ~0 (last_id stays near 0).
+# cap the batch low enough to commit inside 20 s to confirm the RTT floor:
+sluice sync start --no-auto-tune --apply-batch-size 80 ...
+#   no tx-kills now — but only ~20-30 changes/s, two orders of
+#   magnitude below the ~2,600/s the source generates. It diverges.`)}</code></pre>
+<p>The diagnostic knob is the static-batch test: if pinning a large static batch <em>doesn't</em> raise throughput, your bottleneck is per-row round-trips, and no batch-size setting will save you.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The real fix is to remove the per-row round-trips. On the <strong>Postgres</strong> apply path, sluice routes the batch through a statement-pipelined applier so a batch of N changes costs ~1&ndash;2 RTT — measured ~5,000 changes/s over the WAN where the round-trip-bound path managed ~63/s. On the <strong>MySQL/Vitess</strong> path, the insert-heavy case is handled by multi-row <code>INSERT</code> coalescing: re-validated on real PlanetScale MySQL at ~101 ms RTT, an insert-only 200,003-change backlog drained at ~4,000 changes/s with the default config and the 20-second killer never firing — versus the prior default-config stall (roughly 100&ndash;200&times;). The update/delete-heavy MySQL path is still round-trip-bound and is tracked as MySQL apply-parity work under ADR-0138; until it lands, migrate/cold-copy (a streaming <code>COPY</code>/bulk-load protocol, bandwidth-bound not RTT-bound) is the safe cross-region primitive.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Over a WAN, the shape of your protocol dominates every tuning knob. If your applier isn't pipelined or multi-row-coalesced, an N-row batch costs N round-trips, and no adaptive batch controller can find a setting that is both efficient and within a managed database's transaction timeout — it will converge to a stall, which is worse than an honest error because it looks like the system is <em>trying</em>. And managed-database transaction killers (Vitess's 20 s, others' equivalents) turn "slow" into "wedged": a batch that would merely have been slow on a self-hosted server gets rolled back entirely. Measure round-trip cost directly — the static-batch test — before you trust batch size as a lever.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Vitess transaction timeout / tx-killer — <a href="https://vitess.io/docs/reference/query-serving/transactions/">Vitess transactions reference</a> (the <code>--queryserver-config-transaction-timeout</code> behavior).</li>
+  <li>sluice PlanetScale &amp; Vitess guidance — <a href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a> and <a href="/docs/planetscale-postgres/">PlanetScale Postgres</a>.</li>
+  <li>How sluice's CDC apply works — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/mysql-enum-emoji/", label: "MySQL turned our emoji into '?'" },
+    next: { href: "/docs/field-notes/d1-not-local-sqlite/", label: "Cloudflare D1 is not your local SQLite" },
+  })
+);
+
+// ---- Field Notes: D1 is not local SQLite --------------------------------
+write(
+  "field-notes/d1-not-local-sqlite",
+  page({
+    slug: "field-notes/d1-not-local-sqlite",
+    title: "Cloudflare D1 is not your local SQLite",
+    subtitle: "Our type-inference validated candidate columns with SQLite GLOB patterns — a UUID check is a 356-character char-class pattern — and passed every test we had, including a multi-GB head-to-head. Then it hit live D1 and died instantly: code 7500, LIKE or GLOB pattern too complex, on a 1,750-row table with pristine data.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — live Cloudflare D1 source (<code>--source-driver d1</code>) with <code>--infer-types</code>. Addressed by ADR-0145 (<code>migrate --stage-local</code>), shipped v0.99.167.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>sluice's <code>--infer-types</code> feature validates candidate columns with SQLite <code>GLOB</code> patterns — the UUID-conformance check is a ~356-character character-class pattern (32 repetitions of <code>[0-9a-fA-F]</code>), the ISO-datetime check ~79 characters. It passed every test we had, including a multi-GB head-to-head. Then it ran against a live D1 database and died instantly:</p>
+<pre><code>${esc(`HTTP 400  code 7500: "LIKE or GLOB pattern too complex"`)}</code></pre>
+<p>Not on a huge table — on a <strong>1,750-row table with pristine data</strong>, on the first <code>*_at</code> / <code>*_uuid</code> candidate column. The failure was size-independent, and no local test could ever have produced it.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>D1's SQLite build ships a low <code>SQLITE_MAX_LIKE_PATTERN_LENGTH</code>, well below the ~356-character UUID pattern. Every stock local SQLite — and <code>modernc.org/sqlite</code>, the pure-Go build sluice uses locally — accepts the default cap of <strong>50,000</strong>, so the long pattern compiles fine everywhere except on the real service. The dialect is identical; the <em>limit</em> is a hidden configuration surface you can't see from the SQL. So the whole failure class was invisible until the query ran on D1 itself: "SQLite-compatible" local testing told us nothing about it.</p>
+<p>One layer deeper sat a second cliff: even where the pattern is accepted (boolean/JSON checks), an unbounded full-column validation scan over a multi-GB table trips D1's <strong>per-query CPU ceiling</strong> and aborts with <code>HTTP 429 / code 7429</code>. Two independent hidden limits, both absent from every local engine.</p>
+
+<h2 id="repro">The repro</h2>
+<p>Run a long-enough <code>GLOB</code> against a live D1 database — the row count and data quality are irrelevant:</p>
+<pre><code>${esc(`-- against live Cloudflare D1 (e.g. via wrangler d1 execute):
+-- a ~356-char character-class pattern like the UUID-conformance check
+SELECT count(*) FROM customers
+ WHERE org_uuid GLOB '[0-9a-fA-F][0-9a-fA-F]... (32x) ...';
+--  D1: HTTP 400 code 7500 "LIKE or GLOB pattern too complex"
+
+-- the identical query on any local SQLite (incl. modernc) with the
+-- default SQLITE_MAX_LIKE_PATTERN_LENGTH = 50000 runs fine.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The fix stops fighting the caps one query shape at a time. <code>migrate --stage-local</code> (D1 source only) first replicates the live D1 database into a <strong>byte-faithful</strong> local SQLite file, then runs the entire migrate — schema read, <code>--infer-types</code> validation, and bulk copy — against that local file via the existing <code>sqlite</code> engine, where neither the pattern-complexity limit nor the CPU ceiling exists. Staging closes the <em>whole class</em> of D1 HTTP-query limits (the GLOB cap, the CPU ceiling, ad-hoc <code>COUNT</code>/<code>MAX</code> 429s) in one move, and because the staged file carries D1's original conservative SQLite types, inference makes identical decisions. It auto-engages when <code>--infer-types</code> is set against a D1 source (the direct path is structurally broken there) unless you pass <code>--no-stage-local</code>. Crucially the staging is <em>lossless</em>, unlike <code>wrangler d1 export</code>, which rounds integers above 2<sup>53</sup> through a JavaScript double (see <a href="/docs/field-notes/int64-json-boundary/">2<sup>53</sup> is a database boundary now</a>). A prototyped rowid-windowed "chunked validation" alternative was parked: it addresses only the CPU ceiling, not the GLOB-complexity limit — the same long patterns still abort at <code>code 7500</code> before any CPU budget is reached.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When you target a hosted build of an embedded engine, the SQL dialect is the same but the <em>limits</em> are a config surface you can't see and can't test against locally: pattern-length caps, per-query CPU/time ceilings, statement-size and result-size bounds. "SQLite-compatible" (or "Postgres-wire-compatible") tells you about syntax, not about the operational envelope. Validate against the real service early, and when the hosted limits are a moving target, the robust move is often to get the data onto an unconstrained local copy and do the heavy work there rather than negotiating with each cap individually.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice import guide — <a href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a> (the <code>--stage-local</code> path).</li>
+  <li>Cloudflare D1 limits — <a href="https://developers.cloudflare.com/d1/platform/limits/">D1 platform limits</a>.</li>
+  <li>SQLite's <code>SQLITE_MAX_LIKE_PATTERN_LENGTH</code> — <a href="https://www.sqlite.org/limits.html">SQLite implementation limits</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/vitess-tx-killer-wan/", label: "The 20-second guillotine over a WAN" },
+    next: { href: "/docs/field-notes/sqlite-decimal-affinity/", label: "SQLite's DECIMAL is a suggestion" },
+  })
+);
+
+// ---- Field Notes: SQLite DECIMAL affinity -------------------------------
+write(
+  "field-notes/sqlite-decimal-affinity",
+  page({
+    slug: "field-notes/sqlite-decimal-affinity",
+    title: "SQLite's DECIMAL is a suggestion: 19.99, stored as 19.989999999999998",
+    subtitle: "SQLite doesn't have column types; it has affinities. Declare DECIMAL(10,2) and you get NUMERIC affinity, which stores any non-integer as a float64 — so 19.99 lands as 19.989999999999998 on disk. Not a rounding bug: an engine storage property.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — SQLite as a migrate target (writer) and as a source (reader). Internally Bug 162 (CRITICAL silent corruption, target side, fixed v0.99.147) and Bug 163 (loud COPY abort, source side, fixed v0.99.150).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Migrating an ordinary money column into a SQLite target, a decimal <code>19.99</code> landed on disk as <code>19.989999999999998</code> — exit 0, no warning. The produced <code>.db</code> is the whole deliverable of that path (the documented flow is <em>X &rarr; SQLite &rarr; Cloudflare D1</em> via <code>wrangler d1 import</code>), so the corrupted value is exactly what the next consumer reads. This wasn't a sluice rounding bug; it was SQLite storing the value as a binary float because of how its type system works.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>SQLite doesn't have column types — it has <strong>affinities</strong>. A column declared <code>DECIMAL(10,2)</code> (or <code>NUMERIC</code>) carries NUMERIC affinity, and SQLite coerces any non-integer inserted value to REAL — a float64 — on store. The first guard against this checked the wrong predicate: it refused values "beyond ~15 significant digits," on the theory that precision loss is about digit count. But float64 inexactness is not about significant digits; it is about <strong>dyadic representability</strong> — whether the value is a finite base-2 fraction. <code>19.99 = 1999/100</code> has a denominator that isn't a power of two, so it is <em>not</em> exactly representable in float64 despite having only four significant digits, and it slipped straight past the &gt;15-digit guard. Essentially every real-world money value (<code>19.99</code>, <code>5.10</code>, <code>0.10</code>) is non-dyadic, so essentially every money value was silently floated. Integer-valued decimals (<code>100.00</code> &rarr; INTEGER <code>100</code>) and the rare dyadic value stored exactly, which is why spot checks missed it.</p>
+<p>The <strong>reader</strong> direction has its own trap. SQLite renders a stored REAL back with Go's <code>strconv.FormatFloat(v, 'g', -1, 64)</code>, and the <code>'g'</code> verb flips to exponent notation at magnitude &ge;&nbsp;10<sup>6</sup> (or &lt;&nbsp;10<sup>-4</sup>). So a perfectly ordinary <code>1000000.00</code> renders as <code>"1e+06"</code> — and pgx's binary <code>numeric</code> (OID 1700) COPY encoder cannot find an encode plan for an exponent-notation string, so the migration aborts:</p>
+<pre><code>${esc(`ERROR: unable to encode "1e-10" into binary format for numeric (OID 1700):
+       cannot find encode plan (SQLSTATE 57014)`)}</code></pre>
+<p>An entirely ordinary $1,000,000.00 in a SQLite <code>DECIMAL</code> column was enough to abort a SQLite&nbsp;&rarr;&nbsp;Postgres migrate.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- WRITER side: what a "DECIMAL" SQLite target actually stores
+CREATE TABLE m (id INTEGER PRIMARY KEY, price DECIMAL(10,2));
+INSERT INTO m VALUES (1, 19.99), (2, 5.10), (3, 100.00);
+SELECT id, typeof(price), price FROM m;
+--  1 | real    | 19.989999999999998   <- non-dyadic, silently floated
+--  2 | real    | 5.0999999999999996
+--  3 | integer | 100                  <- integer-valued: exact
+
+-- READER side: 'g'-verb exponent rendering aborts a binary numeric COPY
+INSERT INTO m VALUES (4, 1000000.00);   -- typeof -> real
+--  Go's FormatFloat(..., 'g', ...) renders 1e+06 -> pgx numeric COPY: SQLSTATE 57014`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Two fixes for one engine property. The writer now stores decimal/numeric columns as <strong>TEXT affinity by default</strong>, so the value is preserved byte-exact (<code>19.99</code> stays <code>'19.99'</code>) and sluice's own reader decodes TEXT&nbsp;&rarr;&nbsp;decimal cleanly — this also keeps the value <code>wrangler d1 import</code>-safe. The reader now renders floats with the <code>'f'</code> verb instead of <code>'g'</code>, so <code>1000000</code> renders as plain digits that pgx's numeric encoder accepts. The change of predicate is the real lesson: the guard moved from "significant-digit count" to "not exactly representable in float64."</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>If you produce <code>.db</code> files for anyone — or consume them — a declared column type in SQLite tells you almost nothing; check <code>typeof()</code> on the actual stored value. And when you reason about float precision, the predicate is <strong>dyadic representability</strong>, not significant-digit count: <code>19.99</code> at four digits is lossy while some 17-digit values are exact, because base-2 can only finitely represent fractions whose denominator is a power of two. A guard written against "big numbers" will wave through every ordinary price.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>SQLite type affinity — <a href="https://www.sqlite.org/datatype3.html">datatypes in SQLite (§3, type affinity)</a>.</li>
+  <li>sluice type mapping for SQLite / D1 — <a href="/docs/type-mapping/#sqlite-d1">type mapping</a>.</li>
+  <li>Go <code>strconv.FormatFloat</code> — <a href="https://pkg.go.dev/strconv#FormatFloat">the <code>'f'</code> vs <code>'g'</code> verbs</a> (exponent switch-over).</li>
+  <li>The dyadic-rational boundary — <a href="https://en.wikipedia.org/wiki/Double-precision_floating-point_format">IEEE-754 double-precision format</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/d1-not-local-sqlite/", label: "Cloudflare D1 is not your local SQLite" },
+    next: { href: "/docs/field-notes/sqlite-wal-checkpoint-starvation/", label: "One long-lived reader, 75 GB of WAL" },
+  })
+);
+
+// ---- Field Notes: SQLite WAL checkpoint starvation ----------------------
+write(
+  "field-notes/sqlite-wal-checkpoint-starvation",
+  page({
+    slug: "field-notes/sqlite-wal-checkpoint-starvation",
+    title: "One long-lived reader, 75 GB of WAL",
+    subtitle: "A continuous-CDC run against a 20 GB SQLite source watched the -wal file grow from zero to 75 GB in 52 minutes — while the change-log table it tracked stayed bounded at a few thousand rows. In WAL mode, a checkpoint can only reclaim frames older than the oldest live reader's snapshot.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — continuous <code>sqlite-trigger</code> CDC against a WAL-mode SQLite source, ~52-minute endurance run. Internally Bug 167 (found v0.99.151, fixed v0.99.152).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A continuous-CDC endurance run against a 20 GB SQLite source watched the <code>-wal</code> sidecar file grow from zero to <strong>75 GB in 52 minutes</strong> — roughly 1.4 GB/min, linear, with no plateau — while the change-log table the sync tracked stayed bounded at a few thousand rows the whole time (a periodic prune kept its row count in check). Exactly-once was never in doubt; the harm was pure disk-fill, and it capped how long a continuous sync against a SQLite source could run. The process RSS crept up in lockstep, ~0.9 MB/min.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>In WAL mode, a checkpoint can only copy-and-reclaim frames older than the <strong>oldest live reader's snapshot</strong>. A reader holding a snapshot pins every WAL frame at or after its read-mark, so the checkpoint can restart the WAL but never <em>truncate</em> the file. sluice's poll loop kept a live read on the source between polls, so the WAL accumulated every superseded version of the same heavily-churned change-log B-tree pages — each insert-then-prune-delete rewrites the same pages, and every old version stayed pinned. An explicit <code>PRAGMA wal_checkpoint(TRUNCATE)</code> <em>with the sync still running</em> could not reclaim the 75 GB.</p>
+<p>Ground truth was theatrical: the instant the process was killed and its read snapshot released, the last-connection-close checkpoint <strong>truncated the 75 GB WAL to zero</strong>, and the whole thing collapsed to about 0.6 GB of genuinely new pages in the main file. So ~74 GB of it was superseded frames the reader's snapshot had pinned. The precise culprit turned out to be subtle: it wasn't a single explicit long transaction but the poller's <code>database/sql</code> connection pool retaining an <strong>idle connection</strong> whose stale WAL read-mark pinned the checkpoint. (The RSS creep tracked the WAL, not the Go heap — it was <code>modernc</code>'s OS-level mmap of the ever-growing <code>-wal</code>, a secondary effect that bounding the WAL also bounds.)</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`# multi-GB WAL-mode SQLite source; start a continuous CDC sync to any target;
+# drive a sustained insert/update/delete workload while pruning the change-log
+# so its ROW count stays bounded; sample the WAL each minute:
+stat --format='%s' big.db-wal     # climbs ~GB/min, no plateau,
+                                  # even though the change-log row count is flat
+
+# stop the sync -> the last connection closes -> the WAL truncates to ~0.
+# That truncation-on-close is the proof the running reader pinned it.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The fix is protocol hygiene, not tuning, and it has two parts (local-SQLite path only — the <code>d1-trigger</code> source polls over HTTP with no local pager and is unaffected). First, the poller's read connection is no longer retained idle (<code>SetMaxIdleConns(0)</code>), so its WAL read-mark is released after each poll and a checkpoint can reset the WAL — this alone held the WAL flat at ~8 MB in a focused repro where the default idle pool grew it to 158 MB in 12 seconds. Second, the poll loop issues <code>PRAGMA wal_checkpoint(TRUNCATE)</code> on a 30-second cadence (busy-tolerant: a <code>BUSY</code> result just retries next cadence), so the WAL stays bounded even when the operator's own application has disabled <code>wal_autocheckpoint</code>. The checkpoint runs in the poll goroutine between polls, never racing the read, and never touches the watermark or the exactly-once path.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A reader's snapshot pins the log — this is the same principle that makes an idle Postgres replication slot fill a disk (<a href="/docs/field-notes/postgres-slot-leaks/">slots don't die with your process</a>) and long transactions bloat any MVCC engine's dead-tuple space. SQLite just shows it to you as a single file you can <code>stat</code>. If you hold a long-lived read against a churning table, you are silently retaining every superseded version of the pages you touch; release the snapshot periodically (short-lived read transactions, and mind your connection pool's <em>idle</em> connections — a pooled idle connection holds a read-mark just as a live query does) so the log can be reclaimed. And watch for the second-order effect: a growing WAL that gets mmap'd can look like a memory leak while your heap stays perfectly flat.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>SQLite Write-Ahead Logging — <a href="https://www.sqlite.org/wal.html">the WAL design</a> (checkpointing and the reader-snapshot constraint).</li>
+  <li><code>PRAGMA wal_checkpoint</code> and <code>wal_autocheckpoint</code> — <a href="https://www.sqlite.org/pragma.html#pragma_wal_checkpoint">SQLite pragmas</a>.</li>
+  <li>sluice trigger-based CDC — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/sqlite-decimal-affinity/", label: "SQLite's DECIMAL is a suggestion" },
+    next: { href: "/docs/field-notes/int64-json-boundary/", label: "2^53 is a database boundary now" },
+  })
+);
+
+// ---- Field Notes: empty object vs empty array ---------------------------
+write(
+  "field-notes/empty-object-vs-array",
+  page({
+    slug: "field-notes/empty-object-vs-array",
+    title: "{}: two characters, two types, one silent corruption",
+    subtitle: "In Postgres, {} is an empty array literal. In JSON, it's an empty object. Funnel both through one value-preparation path and []byte(\"{}\") is genuinely ambiguous — and for nine releases our MySQL writer resolved it the wrong way.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL writer, empty JSON object on bulk copy. Internally Bug 47 (fixed v0.29.1; reproduced identically on every binary from v0.20.0 through v0.29.0).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A MySQL source value <code>attrs = '{}'</code> (an empty JSON <em>object</em>, <code>JSON_TYPE</code> = <code>OBJECT</code>) round-tripped through sluice and landed on a MySQL target as <code>attrs = '[]'</code> — an empty <em>array</em>, <code>JSON_TYPE</code> = <code>ARRAY</code>. Every other JSON shape was perfect: populated objects, empty arrays, populated arrays, JSON null, JSON scalars. Only the empty object flipped type, and it did so silently, on every release for nine versions.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The two literals collide on their bytes. In Postgres, <code>{}</code> is the empty <em>array</em> literal; in JSON, <code>{}</code> is the empty <em>object</em>. When a migration pipeline funnels both worlds through one value-preparation path, <code>[]byte("{}")</code> arriving at the encoder is <strong>genuinely ambiguous</strong> — the bytes alone cannot say whether they mean "empty PG array, which for a MySQL JSON column should become <code>[]</code>" or "empty MySQL JSON object, which should stay <code>{}</code>." The MySQL writer guessed array, so empty objects became <code>[]</code>.</p>
+<p>The instructive part is the first fix attempt, which was rolled back within a day. Simply preserving <code>{}</code> as an object broke the opposite case — a Postgres empty array overridden onto a MySQL JSON column <em>should</em> land as <code>[]</code> — because no local heuristic can disambiguate two bytes that carry two legitimate meanings. The writer didn't need a cleverer guess; it needed <em>information it didn't have</em>: the source column's type, threaded down to the encoder.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- MySQL source: six canonical JSON shapes
+INSERT INTO t (id, attrs) VALUES
+  (1, '{"role":"admin"}'),  -- populated object: preserved
+  (2, '{}'),                -- empty object:     CORRUPTED -> []
+  (3, '[]'),                -- empty array:      preserved
+  (4, '[1,2,3]'),           -- populated array:  preserved
+  (5, 'null'),              -- JSON null:        preserved
+  (6, '"hello"');           -- scalar:           preserved
+
+-- migrate MySQL -> MySQL, then on the target:
+SELECT id, JSON_TYPE(attrs) FROM t WHERE id = 2;
+--  before the fix: ARRAY   (source was OBJECT)`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The fix threads the missing context through the IR: <code>ir.Column</code> gained an optional <code>SourceColumnType</code> field that the translation layer populates, and the MySQL writer consults it to disambiguate — source type is an array &rarr; <code>[]</code>, otherwise &rarr; <code>{}</code>. The disambiguation is <em>column-scoped</em>, proven by a single-row test with two columns: an empty <code>text[]</code> overridden to a MySQL JSON column lands as <code>[]</code>, while an empty JSON object in the sibling column lands as <code>{}</code> — same row, opposite resolutions, because each carries its own source type.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Value translation is only sound when type information travels <em>with</em> the value, all the way to the last encoder. The moment two distinct source types can serialize to identical bytes — <code>{}</code> the empty array and <code>{}</code> the empty object, or an empty string versus SQL <code>NULL</code>, or <code>0</code> the number versus <code>0</code> the boolean — a downstream stage that sees only the bytes cannot recover the intent, and any local heuristic it applies will be right for one meaning and wrong for the other. Don't make the encoder guess; carry the type.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres array input syntax (<code>{}</code> as the empty array) — <a href="https://www.postgresql.org/docs/current/arrays.html">arrays</a>.</li>
+  <li>MySQL JSON type and <code>JSON_TYPE()</code> — <a href="https://dev.mysql.com/doc/refman/8.0/en/json.html">the JSON data type</a>.</li>
+  <li>sluice type mapping (how source type is carried across the translate boundary) — <a href="/docs/type-mapping/">type mapping</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/int64-json-boundary/", label: "2^53 is a database boundary now" },
+    next: { href: "/docs/field-notes/zero-value-config-trap/", label: "The zero value is a loaded gun" },
+  })
+);
+
+// ---- Field Notes: zero-value config trap --------------------------------
+write(
+  "field-notes/zero-value-config-trap",
+  page({
+    slug: "field-notes/zero-value-config-trap",
+    title: "The zero value is a loaded gun",
+    subtitle: "Twice in this project a config field that “defaults on” silently defaulted off (or worse) for every caller that didn't go through the CLI — because in Go, every construction site that doesn't set a field gets the zero value. Both had real database consequences.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — two config-defaulting bugs with database consequences. The first (a CDC resnapshot path) is the v0.99.51 trap behind ADR-0093; the second is Bug 180, an un-extendable encrypted backup chain (fixed v0.99.185).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Twice, a config field meant to "default on" silently defaulted <em>off</em> — or to an unreachable value — for every caller that didn't construct it through the CLI. Both looked correct in a unit test and both had a real database consequence: one a CDC resnapshot path, the other an encrypted backup chain you couldn't extend.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>In Go, every struct construction site that doesn't set a field gets that field's <strong>zero value</strong> — <code>false</code> for a bool, <code>""</code> for a string. The CLI is one construction site; every test, every internal broker/chain path, and every future caller is another, and they all get the zero value unless they explicitly set the field. A field <em>named for its on-behavior</em> silently inverts to off for all of them.</p>
+<ul>
+  <li><strong>Round one — a boolean defaulting the wrong way.</strong> <code>AutoResnapshotOnInvalidPosition</code> was intended to default <em>true</em>. But every test and internal construction that didn't set it got <code>false</code> and took the suppressed branch. The race-detector integration job surfaced it as a nil-deref panic on that branch — an intended-on safety behavior was off everywhere except the CLI.</li>
+  <li><strong>Round two — a default that made a feature unreachable, and it shipped.</strong> The backup encrypt-mode feature "omit <code>--encrypt-mode</code> to inherit the chain's mode" keyed the inherit branch on an empty string. But <code>kong</code>, the CLI parser, fills the flag's declared default (<code>"per-chain"</code>) whenever the operator omits it — so no CLI invocation could ever produce the empty string the inherit branch needed. The branch was dead from the parser's side. The unit test passed <code>""</code> directly and went green, sailing right past the layer that made it unreachable. The operator-visible result: extending or resuming a <code>per-chunk</code>-encrypted backup chain via the natural "omit the flag" invocation was refused.</li>
+</ul>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`type Streamer struct {
+    // intended to default ON — but every caller that doesn't set it
+    // gets the zero value (false) and silently takes the OFF branch:
+    AutoResnapshotOnInvalidPosition bool
+}
+
+s := Streamer{}          // a test, a broker path, a future caller...
+// s.AutoResnapshotOnInvalidPosition == false  -> suppressed branch
+
+// The kong variant: a direct-call test cannot see a default the parser injects.
+//   flag omitted on the CLI -> kong fills "per-chain" -> inherit branch (keyed
+//   on "") is unreachable; but a unit test that passes "" directly goes green.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Two rules fell out, both now project doctrine. First: <strong>name a boolean config for its opt-out</strong> (<code>SuppressX</code>, <code>NoX</code>), never <code>EnableX</code>-defaulting-true-by-intent, so the zero value <em>is</em> the safe, common behavior and no construction site can silently invert it. Second: <strong>pin any omitted-flag semantics through the real argument parser</strong>, not a direct call — a unit test that hands the function a value the parser would never produce (an empty string kong fills with a default) proves nothing about the actual CLI path. Bug 180's fix is verified end-to-end: omitting <code>--encrypt-mode</code> now resolves to <code>""</code>, flows to the orchestrator, and correctly inherits the chain's mode, so an incremental into a <code>per-chunk</code> chain succeeds and restores byte-exact.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>In any language with zero-value initialization, the default that matters is the one an <em>unset</em> field takes, not the one your primary constructor writes — and your CLI is only one of many constructors. Make the zero value the safe, common case. And when a behavior is gated on a specific config value, especially an omitted or empty one, test it <em>through the real parser</em>: a framework default (kong, argparse, a builder's fallback) can quietly make a branch unreachable while a direct-call unit test that supplies the value by hand stays green. The green test is testing a code path no user can reach.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Go zero values — <a href="https://go.dev/ref/spec#The_zero_value">the language spec on zero values</a>.</li>
+  <li><code>kong</code>, the CLI parser sluice uses (default injection) — <a href="https://github.com/alecthomas/kong">github.com/alecthomas/kong</a>.</li>
+  <li>sluice encrypted-backup chains and modes — <a href="/docs/encrypted-backups/">Take encrypted backups</a> and <a href="/docs/from-backup-sync/">Sync from a backup chain</a>.</li>
+</ul>
+`,
+    prev: { href: "/docs/field-notes/empty-object-vs-array/", label: "{}: two characters, two types" },
   })
 );
 
