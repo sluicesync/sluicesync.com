@@ -10,7 +10,15 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
+- 2026-07-09MySQL & Vitess When the row's own identity gets rounded — The VStream FLOAT repair re-reads exactly and matches by primary key &mdash; but when the FLOAT is in the key, the target's identity is itself rounded, so the match never lands, the repair silently no-ops, and --strict-float exits 0 with a rounded archive.
+
+- 2026-07-09Cross-cutting A signature that verified green while restoring the wrong table's rows — A signed backup flattened every table's row chunks into one file-sorted list with no parent-table token, so swapping two same-column-set tables' chunk lists produced byte-identical signed bytes &mdash; every guard green, and table B's rows restored into table A.
+
+- 2026-07-09Cross-cutting Three clouds, three ways to return an ECDSA signature — AWS and GCP hand back an ECDSA signature as ASN.1 DER; Azure returns raw r&#8214;s. Only GCP signs Ed25519, and only GCP wants a CRC32C integrity handshake in both directions. &ldquo;KMS signing&rdquo; is not one API.
+
 - 2026-07-09MySQL & Vitess Vitess copy phase rounds your FLOATs — A 17-year-old MySQL display-rounding bug with a fresh consequence: the same FLOAT arrives exact or rounded depending on which VStream phase delivered it.
+
+- 2026-07-08Postgres Comparing 32-bit transaction ids breaks after four billion of them — A trigger-CDC hold-back compared a change row's 32-bit xmin against a 64-bit xid8 snapshot bound. At XID epoch 0 they agree; past 232 lifetime transactions the predicate goes always-true and silently skips an in-flight transaction's rows.
 
 - 2026-06-30SQLite & D1 Cloudflare D1 is not your local SQLite — A UUID-conformance GLOB passed every local test, then died on live D1 with code 7500: LIKE or GLOB pattern too complex. The dialect is the same; the hidden limits are a config surface you can't test against locally.
 
@@ -32,7 +40,11 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-06-11Postgres Replication slots don't die with your process — A slot is a promise the server keeps until you drop it; a crashed backup, a refused cold-start, and a week-one leak each pinned WAL on the source until the disk filled.
 
+- 2026-06-07MySQL & Vitess Setting workload=olap silently truncated our chunked reads — A one-line fix to lift vtgate's 100k-row cap set workload=olap session-wide; the parallel chunked reader inherited it and each chunk streamed only a prefix, so a 1.5M-row migrate copied 7,536 rows and exited 0 with migration complete.
+
 - 2026-05-30MySQL & Vitess MySQL turned our emoji into '?' — MySQL substitutes ? for 4-byte UTF-8 in ENUM/SET labels at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it.
+
+- 2026-05-30Cross-cutting One redaction flag, two engines, two behaviors — --redact randomize:int:100000,200000 into a SMALLINT column loud-refused on a Postgres target and silently clamped every row to 32767 on a MySQL one &mdash; turning an anonymization rule into a constant, and a compliance guarantee into a compliance failure.
 
 - 2026-05-28Postgres REPLICA IDENTITY FULL ate our UPDATEs — Building an UPDATE's WHERE over every old column works forever on int/varchar, then a jsonb value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss.
 

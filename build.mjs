@@ -141,7 +141,9 @@ const FIELD_NOTES = [
   { slug: "empty-object-vs-array", date: "2026-05-10", engine: "Cross-cutting", label: "{}: two characters, two types", dek: "<code>{}</code> is an empty array in Postgres and an empty object in JSON; <code>[]byte(\"{}\")</code> is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way." },
   { slug: "numeric-array-flatten", date: "2026-05-17", engine: "Postgres", label: "The pgx codec that flattened numeric[][]", dek: "A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped <code>int[][]</code> perfectly." },
   { slug: "replica-identity-full-updates", date: "2026-05-28", engine: "Postgres", label: "REPLICA IDENTITY FULL ate our UPDATEs", dek: "Building an UPDATE's <code>WHERE</code> over every old column works forever on int/varchar, then a <code>jsonb</code> value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss." },
+  { slug: "redact-two-engines", date: "2026-05-30", engine: "Cross-cutting", label: "One redaction flag, two engines, two behaviors", dek: "<code>--redact randomize:int:100000,200000</code> into a SMALLINT column loud-refused on a Postgres target and silently clamped <em>every</em> row to <code>32767</code> on a MySQL one &mdash; turning an anonymization rule into a constant, and a compliance guarantee into a compliance failure." },
   { slug: "mysql-enum-emoji", date: "2026-05-30", engine: "MySQL & Vitess", label: "MySQL turned our emoji into '?'", dek: "MySQL substitutes <code>?</code> for 4-byte UTF-8 in ENUM/SET <em>labels</em> at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it." },
+  { slug: "olap-workload-truncation", date: "2026-06-07", engine: "MySQL & Vitess", label: "Setting workload=olap silently truncated our chunked reads", dek: "A one-line fix to lift vtgate's 100k-row cap set <code>workload=olap</code> session-wide; the parallel chunked reader inherited it and each chunk streamed only a prefix, so a 1.5M-row migrate copied 7,536 rows and exited 0 with <code>migration complete</code>." },
   { slug: "postgres-slot-leaks", date: "2026-06-11", engine: "Postgres", label: "Replication slots don't die with your process", dek: "A slot is a promise the server keeps until you drop it; a crashed backup, a refused cold-start, and a week-one leak each pinned WAL on the source until the disk filled." },
   { slug: "binlog-comment-truncate", date: "2026-06-13", engine: "MySQL & Vitess", label: "A comment hid a TRUNCATE from CDC", dek: "A leading <code>-- comment</code> on a <code>TRUNCATE</code> made a CDC reader miss it entirely; the source emptied, the target kept every row, forever." },
   { slug: "vstream-throttle-blind", date: "2026-06-13", engine: "MySQL & Vitess", label: "vtgate erases the throttle signal", dek: "The one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one." },
@@ -152,7 +154,11 @@ const FIELD_NOTES = [
   { slug: "int64-json-boundary", date: "2026-06-29", engine: "Cross-cutting", label: "2^53 is a database boundary now", dek: "JSON has one number type and it's a double, so every JSON hop in a pipeline is a potential rounding event for Snowflake IDs and any integer past 9,007,199,254,740,992." },
   { slug: "planetscale-grow-reparent", date: "2026-06-29", engine: "MySQL & Vitess", label: "When PlanetScale un-acked our rows", dek: "Committed, client-acknowledged rows that simply weren't on the new primary after a volume-grow reparent. Exit 0, ~4,000 rows short." },
   { slug: "d1-not-local-sqlite", date: "2026-06-30", engine: "SQLite & D1", label: "Cloudflare D1 is not your local SQLite", dek: "A UUID-conformance <code>GLOB</code> passed every local test, then died on live D1 with <code>code 7500: LIKE or GLOB pattern too complex</code>. The dialect is the same; the hidden limits are a config surface you can't test against locally." },
+  { slug: "xid-wraparound-cdc", date: "2026-07-08", engine: "Postgres", label: "Comparing 32-bit transaction ids breaks after four billion of them", dek: "A trigger-CDC hold-back compared a change row's 32-bit <code>xmin</code> against a 64-bit <code>xid8</code> snapshot bound. At XID epoch 0 they agree; past 2<sup>32</sup> lifetime transactions the predicate goes always-true and silently skips an in-flight transaction's rows." },
   { slug: "vstream-float-precision", date: "2026-07-09", engine: "MySQL & Vitess", label: "Vitess copy phase rounds your FLOATs", dek: "A 17-year-old MySQL display-rounding bug with a fresh consequence: the same <code>FLOAT</code> arrives exact or rounded depending on which VStream phase delivered it." },
+  { slug: "three-clouds-three-signatures", date: "2026-07-09", engine: "Cross-cutting", label: "Three clouds, three ways to return an ECDSA signature", dek: "AWS and GCP hand back an ECDSA signature as ASN.1 DER; Azure returns raw <code>r&#8214;s</code>. Only GCP signs Ed25519, and only GCP wants a CRC32C integrity handshake in both directions. &ldquo;KMS signing&rdquo; is not one API." },
+  { slug: "signed-manifest-chunk-binding", date: "2026-07-09", engine: "Cross-cutting", label: "A signature that verified green while restoring the wrong table's rows", dek: "A signed backup flattened every table's row chunks into one file-sorted list with no parent-table token, so swapping two same-column-set tables' chunk lists produced byte-identical signed bytes &mdash; every guard green, and table B's rows restored into table A." },
+  { slug: "float-in-primary-key", date: "2026-07-09", engine: "MySQL & Vitess", label: "When the row's own identity gets rounded", dek: "The VStream FLOAT repair re-reads exactly and matches by primary key &mdash; but when the FLOAT is <em>in</em> the key, the target's identity is itself rounded, so the match never lands, the repair silently no-ops, and <code>--strict-float</code> exits 0 with a rounded archive." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -3720,6 +3726,281 @@ SELECT CAST(8388610 AS FLOAT) = CAST(8388608 AS FLOAT) AS same;            -- 0 
   <li><a href="https://dev.mysql.com/doc/refman/8.0/en/problems-with-float.html">MySQL 8.0 Reference Manual B.3.4.8</a> — &ldquo;Problems with Floating-Point Values.&rdquo;</li>
   <li><a href="https://vitess.io/docs/reference/vreplication/internal/life-of-a-stream/">Vitess VReplication &mdash; &ldquo;Life of a Stream&rdquo;</a> — documents the copy-phase <code>SELECT ... ORDER BY &lt;pk&gt;</code>.</li>
   <li>Vitess's exact binlog formatter: <code>go/mysql/binlog/rbr.go</code>; the projection-expression restriction: <code>go/vt/vttablet/tabletserver/vstreamer/planbuilder.go</code> (<a href="https://github.com/vitessio/vitess">github.com/vitessio/vitess</a>).</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: FLOAT in the primary key -------------------------------
+write(
+  "field-notes/float-in-primary-key",
+  page({
+    slug: "field-notes/float-in-primary-key",
+    title: "When the row's own identity gets rounded",
+    subtitle: "The VStream FLOAT repair re-reads the source exactly and matches rows by primary key. That works perfectly — until the FLOAT is part of the primary key. Then the target's copy of the key is itself rounded, the exact re-read never finds its row, the repair silently no-ops, and --strict-float exits 0 with a rounded archive.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — PlanetScale / self-hosted Vitess source over VStream. A companion to <a href="/field-notes/vstream-float-precision/">Vitess's copy phase rounds your FLOATs</a>: this is the corner where the repair that note describes cannot help.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A VStream cold-start COPY display-rounds single-precision <code>FLOAT</code> to 6 significant digits, and sluice repairs that by re-reading the affected columns exactly and correcting the target. But a table declared <code>PRIMARY KEY (id, f)</code> with a <em>non-PK</em> <code>FLOAT</code> column <code>g</code> came out of the repair with <code>g</code> still rounded — and worse, <code>backup full --strict-float</code>, whose entire contract is &ldquo;exact, or fail; never rounded,&rdquo; exited 0 and wrote a rounded archive. The one flag built to make a rounded archive impossible produced one, silently.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The repair keys row identity on the primary key. It re-reads each repairable table's <code>FLOAT</code> columns exactly from the source (<code>(col * 1E0)</code> forces full-precision rendering) and then, for sync, issues <code>UPDATE t SET g = ? WHERE id = ? AND f = ?</code> to patch the target row; for backup, it builds a PK&rarr;exact-floats map and patches each archived COPY row. Both paths assume the primary-key value is stable between the two sides being matched. When a <code>FLOAT</code> is <em>in</em> the primary key, that assumption breaks: the bulk COPY wrote the PK's <code>f</code> column display-<em>rounded</em>, while the exact re-read scans <code>f</code> at full precision. The two values differ, so the <code>WHERE ... AND f = ?</code> matches zero rows. Zero-rows-affected is, by design, a silent no-op — the table is counted as repaired, exit 0. The <code>--strict-float</code> refusal nets didn't cover this mixed shape (a FLOAT in the PK <em>and</em> another FLOAT outside it), so it fell between them.</p>
+<p>The corollary is wider than the repair machinery: a float-in-PK table on a VStream source has its row <em>identity</em> rounded on the target, so subsequent CDC <code>UPDATE</code>/<code>DELETE</code> events — which carry the exact float32 PK — also miss those rows.</p>
+
+<h2 id="repro">The repro</h2>
+<p>A PlanetScale/Vitess source, a FLOAT in the primary key, and a value that needs more than 6 significant digits:</p>
+<pre><code>${esc(`CREATE TABLE t (
+  id INT,
+  f  FLOAT,   -- part of the PK, needs > 6 sig digits (e.g. 8388608)
+  g  FLOAT,   -- a plain FLOAT column
+  PRIMARY KEY (id, f)
+);
+
+-- Cold-start COPY writes the PK's f rounded (8388608 -> 8388610).
+-- The exact re-read scans f = 8388608 and tries:
+--   UPDATE t SET g = <exact> WHERE id = ? AND f = 8388608
+-- The target row's f is 8388610, so zero rows match: g stays rounded.
+-- backup full --strict-float: the PK->floats patch key never matches,
+--   rows archive rounded, and the mixed shape exits 0.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>A table whose primary key contains a single-precision <code>FLOAT</code> is now classified <strong>non-repairable</strong> through one shared predicate used by <em>both</em> the sync cold-start and backup paths — so the rule can't drift between them. That routes the table to the honest &ldquo;this table cannot be repaired&rdquo; warning and, under <code>--strict-float</code>, to an upfront refusal instead of a rounded archive at exit 0. Tables with no <code>FLOAT</code> in the primary key are unaffected and still repaired exactly, as before.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Precision loss in a <em>value</em> is a bounded problem — you can re-read it, patch it, warn about it. Precision loss in an <em>identity</em> is a different animal: it silently breaks every operation that keys on that identity, all at once and with no error, because the lookups simply don't match anymore. Before you build a repair, a merge, or a change-apply that matches rows by key, check that the key itself survives every path it travels — a key that rounds is a key that can't be joined on.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://bugs.mysql.com/bug.php?id=43262">MySQL Bug #43262</a> — the <code>FLT_DIG</code> display-rounding of single-precision <code>FLOAT</code> that starts this whole chain.</li>
+  <li><a href="https://dev.mysql.com/doc/refman/8.0/en/problems-with-float.html">MySQL 8.0 Reference Manual B.3.4.8</a> — &ldquo;Problems with Floating-Point Values.&rdquo;</li>
+  <li>The value it can repair, and how — <a href="/field-notes/vstream-float-precision/">Vitess's copy phase rounds your FLOATs</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: xid8 wraparound in CDC ---------------------------------
+write(
+  "field-notes/xid-wraparound-cdc",
+  page({
+    slug: "field-notes/xid-wraparound-cdc",
+    title: "Comparing 32-bit transaction ids breaks after four billion of them",
+    subtitle: "A trigger-CDC hold-back compared a change row's 32-bit xmin against a 64-bit xid8 snapshot bound. At XID epoch 0 the two domains coincide and everything works; once a cluster crosses 2^32 lifetime transactions the predicate goes always-true and silently skips an in-flight transaction's rows.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — the <code>postgres-trigger</code> CDC engine (trigger-based capture, no replication slot). Live-confirmed on a <code>pg_resetwal -e 5</code> epoch-bumped PostgreSQL 16.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>The <code>postgres-trigger</code> engine's snapshot&rarr;CDC cold-start handoff has two guards that decide which change-log rows are safe to hand off: a safety-lag <em>hold-back</em> and the cold-start <em>anchor</em>. Both compared a change-log row's system <code>xmin</code> against the boundary of the copy's snapshot. On a fresh cluster this is correct. On a long-lived, busy cluster whose lifetime transaction count has crossed 2<sup>32</sup>, the hold-back predicate becomes <em>always true</em> — the watermark advances past an in-flight transaction's already-allocated change-log ids, and that transaction's changes are silently skipped when it commits — and the anchor's <code>&gt;=</code> arm <em>never</em> matches, degenerating to <code>MAX(id)</code> and re-opening a cold-start gap. Exit 0, zero warnings, missing rows.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>Postgres's transaction id (<code>xid</code>) is a 32-bit counter that wraps. To compare ids across the wraparound boundary Postgres offers <code>xid8</code> — a 64-bit, <em>epoch-extended</em> id that never wraps in practice. The bug was a cross-domain comparison hiding in plain sight: the change-log row's system <code>xmin</code> is a 32-bit epoch-less <code>xid</code>, while <code>pg_snapshot_xmin(pg_current_snapshot())</code> returns a 64-bit epoch-carrying <code>xid8</code>. At epoch 0 the numeric values coincide, so the comparison looks correct and passes every test written on a young database. Past 2<sup>32</sup> lifetime transactions the epoch on the <code>xid8</code> side is &ge; 1 while the raw <code>xmin</code> has wrapped back toward 0 — the two numbers are now in different domains, and the ordering the predicate depends on is meaningless. An in-code comment had even treated the cast as a JSON-precision detail rather than a cross-domain comparison.</p>
+
+<h2 id="repro">The repro</h2>
+<p>You don't have to run four billion transactions — <code>pg_resetwal</code> can move the epoch directly:</p>
+<pre><code>${esc(`# Bump the XID epoch on a stopped cluster so snapshot xmin > 2^32:
+pg_resetwal -e 5 $PGDATA
+# Start it, run the trigger-CDC cold-start handoff, and observe:
+#   - the hold-back predicate emits a committed row while an older
+#     transaction with a LOWER change-log id is still open
+#   - the anchor query returns MAX(id) instead of the intended bound
+# At epoch 0 (a fresh initdb) the identical handoff is correct.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Both queries now compare the capture trigger's own <code>txid</code> column — recorded as <code>pg_current_xact_id()::text::bigint</code>, which is <code>xid8</code> on <em>both</em> sides of the comparison — instead of the row's 32-bit system <code>xmin</code>. That is what the engine's design intended all along: <code>txid</code> has been <code>NOT NULL</code> since the engine's first release, so existing installs need no <code>ALTER</code>, and behavior at epoch 0 is byte-for-byte unchanged (verified live). The fix is pinned by SQL-shape unit tests plus an epoch-bump integration test that gates on <code>pg_resetwal -e 5</code> pushing snapshot <code>xmin</code> above 2<sup>32</sup> and asserts the hold-back and anchor land correctly.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Postgres transaction ids are 32 bits and they wrap — that is not an edge case, it is the routine steady state of any long-lived busy cluster (it is why autovacuum exists). Any comparison of transaction ids that must stay correct across the life of the database has to be done in the <code>xid8</code> / epoch-extended domain, on both sides. A comparison that mixes a 32-bit <code>xid</code> with a 64-bit <code>xid8</code> is a time bomb whose fuse is exactly 2<sup>32</sup> transactions long, and it will test green for the entire life of your CI.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://www.postgresql.org/docs/current/routine-vacuuming.html#VACUUM-FOR-WRAPAROUND">PostgreSQL — Preventing Transaction ID Wraparound Failures</a> — why 32-bit xids wrap and the epoch matters.</li>
+  <li><a href="https://www.postgresql.org/docs/current/functions-info.html#FUNCTIONS-INFO-SNAPSHOT">PostgreSQL — Transaction ID and Snapshot Information Functions</a> — <code>xid8</code>, <code>pg_current_xact_id()</code>, <code>pg_snapshot_xmin()</code>.</li>
+  <li>sluice's trigger-CDC handoff — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: three clouds, three signatures -------------------------
+write(
+  "field-notes/three-clouds-three-signatures",
+  page({
+    slug: "field-notes/three-clouds-three-signatures",
+    title: "Three clouds, three ways to return an ECDSA signature",
+    subtitle: "AWS and GCP hand back an ECDSA signature as ASN.1 DER; Azure returns raw r‖s. Only GCP signs Ed25519, and only GCP wants a CRC32C integrity handshake in both directions. Adding two clouds to a working KMS signer was not a copy-paste — it was normalizing three wire formats to one.",
+    body: `
+<p class="fn-meta"><strong>Landed</strong> — KMS-backed backup-manifest signing, where the private key stays in the cloud HSM and verification is pure local crypto. AWS KMS came first; GCP KMS and Azure Key Vault completed the three-cloud matrix. Signing is opt-in.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>sluice can sign a backup manifest with a key that never leaves a cloud KMS: an <code>AsymmetricSign</code> / <code>Sign</code> call returns a signature, and a later restore verifies it locally against the operator's trusted public key. That worked cleanly with AWS. Extending it to GCP KMS and Azure Key Vault behind the <em>same</em> scheme — so a GCP- or Azure-signed chain verifies identically to an AWS one — turned out to be almost entirely about reconciling how each provider encodes what is, mathematically, the same signature.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>An ECDSA signature is a pair of integers <code>(r, s)</code>. There are two common ways to put that on the wire, and the three clouds don't agree:</p>
+<ul>
+  <li><strong>AWS and GCP</strong> return ECDSA as <strong>ASN.1 DER</strong> — the <code>SEQUENCE { INTEGER r, INTEGER s }</code> encoding.</li>
+  <li><strong>Azure</strong> returns raw <strong><code>r‖s</code></strong> — the two integers concatenated as fixed-width big-endian, the IEEE&nbsp;P1363 form, no DER wrapper.</li>
+</ul>
+<p>That fixed width is where a specific trap lives: for P-521 each half is 66 bytes (521 bits rounds up to 66 bytes), an odd width that off-by-one conversions get wrong precisely because it isn't a clean power of two. Two more divergences: only <strong>GCP</strong> offers <strong>Ed25519</strong> signing (and Ed25519 signs the whole message with no client-side pre-digest, unlike the ECDSA/RSA-PSS digest-then-sign flow), and only GCP wraps its calls in a <strong>CRC32C</strong> wire-integrity handshake — the server echoes the CRC of the digest it received and returns a CRC of the signature it produced. Finally, the providers disagree on how they hand you the <em>public</em> key for verification: AWS and GCP export SPKI (the standard <code>SubjectPublicKeyInfo</code> DER), while Azure exports a <strong>JWK</strong> (a JSON object of base64url key parameters).</p>
+
+<h2 id="repro">The repro</h2>
+<p>Ask each provider to sign the same digest with a P-256 key and look at the bytes:</p>
+<pre><code>${esc(`# AWS KMS  -> DER:      30 44 02 20 <r...> 02 20 <s...>
+# GCP KMS  -> DER:      30 45 02 21 00 <r...> 02 20 <s...>
+# Azure KV -> raw r||s: <32 bytes r><32 bytes s>   (P-256; P-521 = 66+66)
+
+# A verifier that only speaks DER (ecdsa.VerifyASN1) accepts the first two
+# and rejects Azure's bytes outright -- they must be transcoded r||s -> DER
+# BEFORE they reach the verifier. Get P-521's 66-byte half wrong and the
+# transcode silently produces a signature that never verifies.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The verifier stays single-form: it validates ECDSA as DER and never has to know which cloud produced the signature. The provider-specific work is pushed into the signer adapters. Azure's adapter converts <code>r‖s</code> to ASN.1 DER before returning — and that conversion is pinned across P-256, P-384, and P-521, with P-521's 66-byte half specifically covered, because a codec that dispatches on curve width has to be tested at every width, not one representative. GCP's CRC32C is checked in <em>both</em> directions and any mismatch is refused loudly rather than emitting a possibly-corrupted signature; its Ed25519 path is wired through the same scheme. Azure's JWK public key is rebuilt into a standard-library key (with the RSA exponent range-guarded). Critically, the <em>provider</em> is not recorded in the on-disk format at all — only the algorithm is — so an AWS-, GCP-, or Azure-signed chain all verify by exactly the same code path, and verification always anchors on the operator's supplied trusted key, never a key the manifest names.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>&ldquo;We support KMS signing&rdquo; hides a lie of composition: KMS signing is not one API, it is three (or more) APIs that happen to compute the same primitive and then disagree about how to hand it back — signature encoding, public-key export, integrity framing, which algorithms exist at all. If you're going to verify signatures across providers, do the normalization at the edge: convert every provider's native wire form to one canonical form as it enters, keep the verifier single-form, and pin the conversion at every parameter (every curve, every key size) the provider can emit — the P-521 odd-width half is exactly the case a single representative test will miss.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://datatracker.ietf.org/doc/html/rfc8032">RFC 8032</a> — EdDSA / Ed25519 (signs the whole message, no pre-digest).</li>
+  <li><a href="https://datatracker.ietf.org/doc/html/rfc3279#section-2.2.3">RFC 3279 §2.2.3</a> — the ASN.1 DER <code>Ecdsa-Sig-Value SEQUENCE { r, s }</code> AWS and GCP return; contrast the raw fixed-width <code>r‖s</code> of IEEE&nbsp;P1363 that Azure returns.</li>
+  <li><a href="https://datatracker.ietf.org/doc/html/rfc7517">RFC 7517</a> — JSON Web Key (JWK), the form Azure Key Vault exports a public key in.</li>
+  <li><a href="https://cloud.google.com/kms/docs/data-integrity-guidelines">Google Cloud KMS — data-integrity guidelines</a> — the CRC32C request/response checksums.</li>
+  <li>The signature that verified the <em>wrong</em> data — <a href="/field-notes/signed-manifest-chunk-binding/">A signature that verified green while restoring the wrong table's rows</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: signed manifest chunk binding --------------------------
+write(
+  "field-notes/signed-manifest-chunk-binding",
+  page({
+    slug: "field-notes/signed-manifest-chunk-binding",
+    title: "A signature that verified green while restoring the wrong table's rows",
+    subtitle: "A signed, encrypted backup flattened every table's row chunks into one file-sorted list with no parent-table token. Swap the chunk lists of two tables that share a column set and the signed bytes are byte-identical — every guard passes, and one table's rows restore into the other.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — signed, encrypted backup chains (signing is opt-in). Found by an internal audit of the manifest-signing format; a skeptic confirmed it <em>by execution</em>. Fixed by binding the parent table into both the signature and the encryption.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Backup manifest signing exists to make store-level tampering detectable: an adversary with write access to the backup bucket (but <em>not</em> the encryption key) should not be able to alter a signed backup without the signature failing. It caught whole-manifest rollback, change-list truncation, and table renames. But it did not catch one thing: reassigning row chunks <em>between two existing tables that share a column set</em>. Swap the row-chunk lists of <code>orders_2023</code> and <code>orders_2024</code> — or any two same-schema shards or multi-tenant clones — and the manifest and lineage signatures both verify GREEN, the encrypted chunks decrypt cleanly, the column-set and row-count checks pass, and table B's rows restore into table A. Silent cross-table corruption, surviving the exact feature built to prevent tampering.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>A signature only authenticates the associations it actually encodes into its signed bytes. The manifest canonicalization flattened <em>every</em> table's row chunks into one globally file-sorted list of <code>rowchunk | file | sha256 | rowcount</code> tokens — with no parent-table token in each entry. Change chunks bound their replay ordinal; schema deltas bound their table name; row chunks were the gap. So the signed byte stream encoded &ldquo;this set of chunk files exists, with these hashes and row counts&rdquo; but not &ldquo;<em>this</em> chunk belongs to <em>that</em> table.&rdquo; Swapping two same-column-set tables' chunk lists preserves the exact multiset of tokens — same files, same hashes, same counts — so the canonical bytes are identical and the signature still matches. The second layer didn't cover it either: the encrypted-chunk GCM AAD (the authenticated-but-not-encrypted associated data that ties a ciphertext to its context) bound only the manifest identity and the chunk's file path — not the table — so a ciphertext moved between tables still passed its GCM tag.</p>
+
+<h2 id="repro">The repro</h2>
+<p>Two tables with the same column set, in a signed encrypted chain; swap their chunk assignments so the per-table totals are preserved:</p>
+<pre><code>${esc(`# Signed, encrypted backup with two same-column-set tables A and B.
+# A store-write adversary swaps the row-chunk lists in the manifest:
+#   A.chunks <-> B.chunks   (per-table row totals unchanged)
+#
+# Verify:
+#   manifest signature   -> GREEN  (token multiset identical)
+#   lineage signature    -> GREEN
+#   column-set header    -> passes (A and B share columns)
+#   per-table row counts -> passes
+#   GCM chunk decrypt    -> passes (AAD binds path, not table)
+# Restore: B's rows land in A and A's in B. Exit 0.`)}</code></pre>
+<p>The audit's skeptic didn't argue this on paper — a throwaway test that swapped the two tables' chunk slices produced byte-identical canonical bytes, confirming the forgery.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The fix binds the parent table on <em>both</em> layers, each independently versioned and fail-closed. The signature canonicalization is bumped v3&rarr;v4 to fold each row chunk's <code>(schema, name)</code> into its signed token, reusing the existing length-prefixed framing so the encoding stays injective. Independently, a signed encrypted backup's row-chunk GCM AAD is bumped to a new backup FormatVersion that appends the schema and table to the associated data — so a ciphertext moved between tables fails its GCM tag <em>even without</em> the signature. The dual-version verifier is unchanged: signatures written by older releases still verify byte-for-byte, a v4 signature presented to an older binary refuses as an &ldquo;upgrade sluice&rdquo; version gap rather than a false tamper accusation, and a v4&rarr;v3 downgrade-relabel that tried to strip the new parent tokens fails the MAC — so the back-compat path is not a downgrade oracle. Table renames were always caught; this closes chunk <em>reassignment</em> between existing same-column-set tables.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A signature is not a general-purpose integrity charm — it authenticates exactly the bytes you canonicalize, and nothing you leave out. If two genuinely different states can serialize to the same signed bytes, the signature cannot tell them apart, and no amount of key strength changes that. The property to reason about is <em>canonicalization injectivity</em>: distinct logical states must map to distinct signed bytes. When you sign a structure, enumerate every association a consumer will <em>act on</em> after verification — here, which chunk belongs to which table — and make sure each one is inside the signed bytes (and, for encrypted data, inside the AEAD's associated data too). The gap is always the association you assumed was implied.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://datatracker.ietf.org/doc/html/rfc5116">RFC 5116</a> — authenticated encryption with associated data (AEAD): what the &ldquo;associated data&rdquo; is for and why binding context into it matters.</li>
+  <li><a href="https://csrc.nist.gov/pubs/sp/800/38/d/final">NIST SP 800-38D</a> — Galois/Counter Mode (GCM), the AEAD whose AAD now carries the table identity.</li>
+  <li>The three-cloud signer feeding these signatures — <a href="/field-notes/three-clouds-three-signatures/">Three clouds, three ways to return an ECDSA signature</a>.</li>
+  <li>sluice's encrypted-backup model — <a href="/docs/encrypted-backups/">Encrypted backups</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: workload=olap chunked truncation -----------------------
+write(
+  "field-notes/olap-workload-truncation",
+  page({
+    slug: "field-notes/olap-workload-truncation",
+    title: "Setting workload=olap silently truncated our chunked reads",
+    subtitle: "A one-line change set vtgate's workload=olap session-wide to lift a 100k-row cap on no-PK scans. The parallel chunked reader inherited the setting, each concurrent chunk streamed only a prefix, and a 1.5M-row migrate copied 7,536 rows — exit 0, migration complete.",
+    body: `
+<p class="fn-meta"><strong>Observed + bisected</strong> — a PlanetScale / Vitess source (reproduced on <code>vttestserver</code>). The version bisection is clean; the exact behavior <em>inside</em> vtgate that truncates a bounded chunk read under session-wide OLAP was observed but not root-caused down into the gateway (see below).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A <code>migrate</code> from a Vitess/PlanetScale source, of a table large enough to be split into parallel copy chunks, at the default parallelism, silently copied a tiny fraction of the rows and reported success. The measured shape was stark: 1,500,000 source rows, 7,536 copied, exit 0 with <code>migration complete tables=1</code>. Dropping to <code>--bulk-parallelism=1</code> (a single stream) copied all 1,500,000. Vanilla (non-Vitess) MySQL sources were never affected, and neither were tables below the chunking threshold — which is exactly why the existing test suite, built on small tables, never saw it.</p>
+
+<h2 id="why">Why (as far as we bisected it)</h2>
+<p>vtgate's default OLTP workload caps a single result set at roughly 100,000 rows. A no-PK full-table scan is one big streaming <code>SELECT</code> that can't be primary-key-chunked, so it hit that cap and truncated. The fix for <em>that</em> was to set <code>workload=olap</code> (which streams, lifting the cap) on the source reader — but it was set <strong>session-wide</strong>. That session setting also covered the <code>LIMIT</code>-paged, bounded <code>WHERE pk BETWEEN lo AND hi</code> reads that the parallel chunked bulk-copy uses for large PK tables. Under OLAP streaming mode, each concurrently-read chunk's page came back truncated to a small prefix, and sluice treated end-of-(truncated)-stream as &ldquo;chunk complete&rdquo; — so the un-read tail of every chunk was silently dropped.</p>
+<p>Stated honestly: the diagnosis rests on a clean deterministic version bisection (the release before the <code>workload=olap</code> change copied every row; that change is the only relevant difference) plus per-chunk row-count logs that summed to the truncated total. The precise mechanism by which session-wide OLAP truncates a <em>bounded, paged</em> read inside vtgate was not chased into the gateway's source, and whether it reproduces on real PlanetScale at scale versus being a <code>vttestserver</code>/<code>vtcombo</code> streaming interaction was left an open question. The fix removes session-wide OLAP from the paged reads entirely, so it closes the gap regardless of which it was.</p>
+
+<h2 id="repro">The repro</h2>
+<p>Deterministic on <code>vttestserver:mysql80</code> with a 1.5M-row bigint-PK table; only the version and parallelism differ:</p>
+<pre><code>${esc(`sluice version   --bulk-parallelism   rows copied (of 1,500,000)   exit
+--------------   ------------------   -------------------------   ----
+pre-olap         default (8)          1,500,000  ✓                 0
+olap session-wide default (8)         7,536      ✗                 0
+olap session-wide 1 (single stream)   1,500,000  ✓                 0`)}</code></pre>
+<p>A 1,000-row table copies fully even on the affected version — the loss only appears above the chunk threshold, which is precisely the region the sub-threshold test corpus never exercised.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p><code>workload=olap</code> is now scoped to <em>just</em> the unbounded no-PK full scan — the one read that actually needs the cap lifted — and applied on a dedicated connection, never session-wide. The <code>LIMIT</code>-paged batch reader the chunked copy uses is OLAP-free again, exactly as it was before the regression, so the parallel copy reads every row while the no-PK cap lift it was added for is preserved. An operator-supplied <code>workload</code> in the DSN still wins. It's pinned by a regression test that migrates an above-threshold PK table at parallelism &gt; 1 and asserts exact row-count parity — the chunk-threshold dimension the prior pins missed.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A session variable is a blunt instrument: it changes the behavior of <em>every</em> statement on that connection, including ones you weren't thinking about when you set it. Here a knob added to make one read return <em>more</em> rows made a different, unrelated read return <em>fewer</em> — and because the loss was scale-dependent and silent, it sailed past a test suite that only ever ran small tables. Scope a session setting to exactly the code path that needs it (a dedicated, short-lived connection), and when a change alters how much data a query returns, add a test at the scale where the two behaviors actually diverge.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://vitess.io/docs/reference/query-serving/schema-tracking/">Vitess documentation</a> and the OLAP vs OLTP workload modes vtgate exposes (OLAP streams results and lifts the OLTP result-set cap; it also forbids transactions).</li>
+  <li>sluice's parallel bulk-copy and chunking model — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: redaction, two engines ---------------------------------
+write(
+  "field-notes/redact-two-engines",
+  page({
+    slug: "field-notes/redact-two-engines",
+    title: "One redaction flag: clamp on MySQL, refuse on Postgres",
+    subtitle: "--redact randomize:int:100000,200000 into a SMALLINT column loud-refused on a Postgres target and silently clamped every row to 32767 on a MySQL one — turning an anonymization rule into a constant, and a compliance guarantee into a compliance failure.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — a PG&rarr;MySQL cross-engine migrate with a <code>randomize:int</code> redaction rule, compared against the same rule PG&rarr;PG. Fixed with a config-load preflight.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A redaction rule <code>--redact 's=randomize:int:100000,200000'</code> — &ldquo;replace column <code>s</code> with a random integer in [100000, 200000]&rdquo; — was pointed at a <code>SMALLINT</code> column, whose range is [-32768, 32767]. Into a <strong>Postgres</strong> target it loud-refused: <code>143556 is greater than maximum value for int2</code>. Into a <strong>MySQL</strong> target it exited 0, printed <code>migration complete</code>, emitted no warning, and wrote <code>32767</code> into <em>every single row</em>. The operator asked for random values to anonymize a column; they got a deterministic constant — and the original values were gone.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The requested range overflows the target column's type on both engines; the two engines just <em>react</em> differently, and sluice was inheriting the reaction instead of deciding it. Postgres's binary <code>COPY</code> encoder rejects an out-of-range <code>int2</code> outright, so the overflow surfaced as a loud error. MySQL's writer session runs with <code>STRICT_TRANS_TABLES</code> disabled — sluice relaxes it to read legacy data like zero-dates — and in non-strict mode MySQL <em>silently clamps</em> an out-of-range integer to the column's maximum rather than erroring. So every generated value above 32767 became 32767. Two compounded failures: a PII-compliance failure (the whole column collapses to one constant, trivially distinguishable from real data) and silent loss of the original values. The correctness of a redaction guarantee was resting on a target engine's native enforcement — enforcement that sluice's own session had switched off on one of the two engines.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- PG source: a SMALLINT column (range [-32768, 32767])
+CREATE TABLE redact_overflow (id BIGINT PRIMARY KEY, s SMALLINT);
+INSERT INTO redact_overflow VALUES (1, 100), (2, 200);`)}</code></pre>
+<pre><code>${esc(`sluice migrate \\
+  --source-driver=postgres  --source='postgresql://.../src' \\
+  --target-driver=mysql     --target='root:...@tcp(localhost:3317)/dst' \\
+  --include-table=redact_overflow \\
+  --redact='redact_overflow.s=randomize:int:100000,200000'
+
+# MySQL target:  every row s = 32767   (exit 0, "migration complete", no WARN)
+# PG target:     loud refusal -- "143556 is greater than maximum value for int2"`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The redaction subsystem now runs a preflight at config-load time that compares each <code>randomize:int</code> rule's <code>LO,HI</code> range against the column's representable integer range and refuses loudly — before a single row is written — when the range can't fit. Both engines now fail the same way, up front, with an actionable message (widen the target type with <code>--type-override</code>, or choose a range within the column's bounds). A guarantee that used to depend on which engine you happened to target, and on whether strict mode happened to be on, is now enforced by sluice itself, identically, on every path.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A transform that carries a promise — anonymize this, never leak that — must have identical, verified semantics on every target it can run against. If your correctness is really being provided by a downstream engine's native validation, then the moment you touch that engine's session (relax a SQL mode, change a workload, switch drivers) you can silently void the promise on that engine and not the others. Enforce the invariant yourself, at the earliest point you can (config load), so it can't diverge by target — and so the failure is a refusal the operator sees, not a constant they discover in an audit.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sql-mode-strict">MySQL — Strict SQL Mode</a> — with <code>STRICT_TRANS_TABLES</code> off, out-of-range values are clamped and adjusted rather than rejected.</li>
+  <li><a href="https://www.postgresql.org/docs/current/datatype-numeric.html">PostgreSQL — Numeric Types</a> — an out-of-range <code>smallint</code>/<code>int2</code> is an error, not a clamp.</li>
+  <li>sluice's redaction strategies — <a href="/docs/redact-pii/">Redact PII</a>.</li>
 </ul>
 `,
   })

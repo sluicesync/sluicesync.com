@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Three clouds, three ways to return an ECDSA signature — sluice docs</title>
+<meta name="description" content="AWS and GCP hand back an ECDSA signature as ASN.1 DER; Azure returns raw r‖s. Only GCP signs Ed25519, and only GCP wants a CRC32C integrity handshake in both directions. Adding two clouds to a working KMS signer was not a copy-paste — it was normalizing three wire formats to one.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/field-notes/three-clouds-three-signatures/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="active" href="/field-notes/">Field Notes</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Field Notes</div><a class="lnk" href="/field-notes/">About these notes</a><a class="lnk" href="/field-notes/float-in-primary-key/"><span class="fn-date">2026-07-09</span>When the row's own identity gets rounded</a><a class="lnk" href="/field-notes/signed-manifest-chunk-binding/"><span class="fn-date">2026-07-09</span>A signature that verified green while restoring the wrong table's rows</a><a class="lnk active" href="/field-notes/three-clouds-three-signatures/"><span class="fn-date">2026-07-09</span>Three clouds, three ways to return an ECDSA signature</a><a class="lnk" href="/field-notes/vstream-float-precision/"><span class="fn-date">2026-07-09</span>Vitess copy phase rounds your FLOATs</a><a class="lnk" href="/field-notes/xid-wraparound-cdc/"><span class="fn-date">2026-07-08</span>Comparing 32-bit transaction ids breaks after four billion of them</a><a class="lnk" href="/field-notes/d1-not-local-sqlite/"><span class="fn-date">2026-06-30</span>Cloudflare D1 is not your local SQLite</a><a class="lnk" href="/field-notes/planetscale-grow-reparent/"><span class="fn-date">2026-06-29</span>When PlanetScale un-acked our rows</a><a class="lnk" href="/field-notes/int64-json-boundary/"><span class="fn-date">2026-06-29</span>2^53 is a database boundary now</a><a class="lnk" href="/field-notes/vitess-tx-killer-wan/"><span class="fn-date">2026-06-28</span>The 20-second guillotine over a WAN</a><a class="lnk" href="/field-notes/sqlite-wal-checkpoint-starvation/"><span class="fn-date">2026-06-28</span>One long-lived reader, 75 GB of WAL</a><a class="lnk" href="/field-notes/sqlite-decimal-affinity/"><span class="fn-date">2026-06-27</span>SQLite's DECIMAL is a suggestion</a><a class="lnk" href="/field-notes/zero-value-config-trap/"><span class="fn-date">2026-06-15</span>The zero value is a loaded gun</a><a class="lnk" href="/field-notes/vstream-throttle-blind/"><span class="fn-date">2026-06-13</span>vtgate erases the throttle signal</a><a class="lnk" href="/field-notes/binlog-comment-truncate/"><span class="fn-date">2026-06-13</span>A comment hid a TRUNCATE from CDC</a><a class="lnk" href="/field-notes/postgres-slot-leaks/"><span class="fn-date">2026-06-11</span>Replication slots don't die with your process</a><a class="lnk" href="/field-notes/olap-workload-truncation/"><span class="fn-date">2026-06-07</span>Setting workload=olap silently truncated our chunked reads</a><a class="lnk" href="/field-notes/mysql-enum-emoji/"><span class="fn-date">2026-05-30</span>MySQL turned our emoji into '?'</a><a class="lnk" href="/field-notes/redact-two-engines/"><span class="fn-date">2026-05-30</span>One redaction flag, two engines, two behaviors</a><a class="lnk" href="/field-notes/replica-identity-full-updates/"><span class="fn-date">2026-05-28</span>REPLICA IDENTITY FULL ate our UPDATEs</a><a class="lnk" href="/field-notes/numeric-array-flatten/"><span class="fn-date">2026-05-17</span>The pgx codec that flattened numeric[][]</a><a class="lnk" href="/field-notes/empty-object-vs-array/"><span class="fn-date">2026-05-10</span>{}: two characters, two types</a></aside>
+  <main class="content">
+    <h1>Three clouds, three ways to return an ECDSA signature</h1>
+    <p class="subtitle">AWS and GCP hand back an ECDSA signature as ASN.1 DER; Azure returns raw r‖s. Only GCP signs Ed25519, and only GCP wants a CRC32C integrity handshake in both directions. Adding two clouds to a working KMS signer was not a copy-paste — it was normalizing three wire formats to one.</p>
+    <p class="fn-landed">Landed in sluice · 2026-07-09 · Cross-cutting</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#what-happened">What happened</a></li><li><a href="#why">Why (the mechanism)</a></li><li><a href="#repro">The repro</a></li><li><a href="#what-sluice-does">What sluice does about it</a></li><li><a href="#lesson">The transferable lesson</a></li><li><a href="#sources">Primary sources</a></li></ul></nav>
+    
+<p class="fn-meta"><strong>Landed</strong> — KMS-backed backup-manifest signing, where the private key stays in the cloud HSM and verification is pure local crypto. AWS KMS came first; GCP KMS and Azure Key Vault completed the three-cloud matrix. Signing is opt-in.</p>
+
+<h2 id="what-happened">What happened <a class="hlink" href="#what-happened" aria-label="Permalink to this section">#</a></h2>
+<p>sluice can sign a backup manifest with a key that never leaves a cloud KMS: an <code>AsymmetricSign</code> / <code>Sign</code> call returns a signature, and a later restore verifies it locally against the operator's trusted public key. That worked cleanly with AWS. Extending it to GCP KMS and Azure Key Vault behind the <em>same</em> scheme — so a GCP- or Azure-signed chain verifies identically to an AWS one — turned out to be almost entirely about reconciling how each provider encodes what is, mathematically, the same signature.</p>
+
+<h2 id="why">Why (the mechanism) <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
+<p>An ECDSA signature is a pair of integers <code>(r, s)</code>. There are two common ways to put that on the wire, and the three clouds don't agree:</p>
+<ul>
+  <li><strong>AWS and GCP</strong> return ECDSA as <strong>ASN.1 DER</strong> — the <code>SEQUENCE { INTEGER r, INTEGER s }</code> encoding.</li>
+  <li><strong>Azure</strong> returns raw <strong><code>r‖s</code></strong> — the two integers concatenated as fixed-width big-endian, the IEEE&nbsp;P1363 form, no DER wrapper.</li>
+</ul>
+<p>That fixed width is where a specific trap lives: for P-521 each half is 66 bytes (521 bits rounds up to 66 bytes), an odd width that off-by-one conversions get wrong precisely because it isn't a clean power of two. Two more divergences: only <strong>GCP</strong> offers <strong>Ed25519</strong> signing (and Ed25519 signs the whole message with no client-side pre-digest, unlike the ECDSA/RSA-PSS digest-then-sign flow), and only GCP wraps its calls in a <strong>CRC32C</strong> wire-integrity handshake — the server echoes the CRC of the digest it received and returns a CRC of the signature it produced. Finally, the providers disagree on how they hand you the <em>public</em> key for verification: AWS and GCP export SPKI (the standard <code>SubjectPublicKeyInfo</code> DER), while Azure exports a <strong>JWK</strong> (a JSON object of base64url key parameters).</p>
+
+<h2 id="repro">The repro <a class="hlink" href="#repro" aria-label="Permalink to this section">#</a></h2>
+<p>Ask each provider to sign the same digest with a P-256 key and look at the bytes:</p>
+<pre><code># AWS KMS  -&gt; DER:      30 44 02 20 &lt;r...&gt; 02 20 &lt;s...&gt;
+# GCP KMS  -&gt; DER:      30 45 02 21 00 &lt;r...&gt; 02 20 &lt;s...&gt;
+# Azure KV -&gt; raw r||s: &lt;32 bytes r&gt;&lt;32 bytes s&gt;   (P-256; P-521 = 66+66)
+
+# A verifier that only speaks DER (ecdsa.VerifyASN1) accepts the first two
+# and rejects Azure's bytes outright -- they must be transcoded r||s -&gt; DER
+# BEFORE they reach the verifier. Get P-521's 66-byte half wrong and the
+# transcode silently produces a signature that never verifies.</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it <a class="hlink" href="#what-sluice-does" aria-label="Permalink to this section">#</a></h2>
+<p>The verifier stays single-form: it validates ECDSA as DER and never has to know which cloud produced the signature. The provider-specific work is pushed into the signer adapters. Azure's adapter converts <code>r‖s</code> to ASN.1 DER before returning — and that conversion is pinned across P-256, P-384, and P-521, with P-521's 66-byte half specifically covered, because a codec that dispatches on curve width has to be tested at every width, not one representative. GCP's CRC32C is checked in <em>both</em> directions and any mismatch is refused loudly rather than emitting a possibly-corrupted signature; its Ed25519 path is wired through the same scheme. Azure's JWK public key is rebuilt into a standard-library key (with the RSA exponent range-guarded). Critically, the <em>provider</em> is not recorded in the on-disk format at all — only the algorithm is — so an AWS-, GCP-, or Azure-signed chain all verify by exactly the same code path, and verification always anchors on the operator's supplied trusted key, never a key the manifest names.</p>
+
+<h2 id="lesson">The transferable lesson <a class="hlink" href="#lesson" aria-label="Permalink to this section">#</a></h2>
+<p>&ldquo;We support KMS signing&rdquo; hides a lie of composition: KMS signing is not one API, it is three (or more) APIs that happen to compute the same primitive and then disagree about how to hand it back — signature encoding, public-key export, integrity framing, which algorithms exist at all. If you're going to verify signatures across providers, do the normalization at the edge: convert every provider's native wire form to one canonical form as it enters, keep the verifier single-form, and pin the conversion at every parameter (every curve, every key size) the provider can emit — the P-521 odd-width half is exactly the case a single representative test will miss.</p>
+
+<h2 id="sources">Primary sources <a class="hlink" href="#sources" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="https://datatracker.ietf.org/doc/html/rfc8032">RFC 8032</a> — EdDSA / Ed25519 (signs the whole message, no pre-digest).</li>
+  <li><a href="https://datatracker.ietf.org/doc/html/rfc3279#section-2.2.3">RFC 3279 §2.2.3</a> — the ASN.1 DER <code>Ecdsa-Sig-Value SEQUENCE { r, s }</code> AWS and GCP return; contrast the raw fixed-width <code>r‖s</code> of IEEE&nbsp;P1363 that Azure returns.</li>
+  <li><a href="https://datatracker.ietf.org/doc/html/rfc7517">RFC 7517</a> — JSON Web Key (JWK), the form Azure Key Vault exports a public key in.</li>
+  <li><a href="https://cloud.google.com/kms/docs/data-integrity-guidelines">Google Cloud KMS — data-integrity guidelines</a> — the CRC32C request/response checksums.</li>
+  <li>The signature that verified the <em>wrong</em> data — <a href="/field-notes/signed-manifest-chunk-binding/">A signature that verified green while restoring the wrong table's rows</a>.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/field-notes/signed-manifest-chunk-binding/">← A signature that verified green while restoring the wrong table's rows</a><a class="next" href="/field-notes/vstream-float-precision/">Vitess copy phase rounds your FLOATs →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/field-notes/three-clouds-three-signatures/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
