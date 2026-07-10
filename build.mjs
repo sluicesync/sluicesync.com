@@ -140,10 +140,13 @@ function sidebar(activeSlug) {
 const FIELD_NOTES = [
   { slug: "mysql-json-where-cast", date: "2026-05-04", engine: "MySQL & Vitess", label: "MySQL won't match a JSON column by bind parameter", dek: "<code>WHERE json_col = ?</code> matches zero rows whether you bind the value as a string or as bytes &mdash; MySQL won't cast the parameter to JSON. On a CDC UPDATE, replay-idempotency tolerance turns the zero-row match into silent divergence." },
   { slug: "mysql-load-data-charset", date: "2026-05-05", engine: "MySQL & Vitess", label: "One LOAD DATA can't load a BLOB and a JSON column", dek: "A <code>BLOB</code> needs <code>CHARACTER SET binary</code> or the server rejects its first non-ASCII byte; a <code>JSON</code> column rejects its input <em>under</em> <code>CHARACTER SET binary</code>. One statement-level clause, two columns that demand opposite answers." },
+  { slug: "binlog-temporal-strings", date: "2026-05-05", engine: "MySQL & Vitess", label: "parseTime governs the query protocol, not the binlog", dek: "<code>parseTime=true</code> on the DSN makes the <em>query</em> driver return <code>time.Time</code> — but the replication stream hands temporal columns back as raw strings regardless. The first <code>TIMESTAMP</code> row killed the CDC pump, and the silent-channel-close looked exactly like a network stall for two release cycles." },
   { slug: "postgres-idle-slot-failover", date: "2026-05-07", engine: "Postgres", label: "Every HA knob on, and the slot still vanished at failover", dek: "Patroni slot-sync on, <code>sync_replication_slots</code> on, <code>hot_standby_feedback</code> on &mdash; and a logical slot that hadn't advanced during the sync window was still lost on promotion. The idle slot is the fragile one." },
+  { slug: "binlog-event-volume", date: "2026-05-08", engine: "MySQL & Vitess", label: "One INSERT is three binlog events (or four)", dek: "A single-row <code>INSERT</code> lands in the binlog as three events (BEGIN / WRITE_ROWS / XID), plus a spurious empty BEGIN/COMMIT per new connection. If you size a rollover bound by INSERT count, budget 4&times; &mdash; and Postgres counts differently again." },
   { slug: "empty-object-vs-array", date: "2026-05-10", engine: "Cross-cutting", label: "{}: two characters, two types", dek: "<code>{}</code> is an empty array in Postgres and an empty object in JSON; <code>[]byte(\"{}\")</code> is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way." },
   { slug: "batch-by-bytes-not-rows", date: "2026-05-15", engine: "Cross-cutting", label: "Count your bytes, not your rows", dek: "A batch size tuned for narrow OLTP rows &mdash; 5,000 rows, under 10&nbsp;MB &mdash; quietly pins hundreds of MB the moment the workload is MB-scale TEXT, BYTEA, JSON, or geometry. The streaming paths were fine; only the two accumulators blew up." },
   { slug: "numeric-array-flatten", date: "2026-05-17", engine: "Postgres", label: "The pgx codec that flattened numeric[][]", dek: "A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped <code>int[][]</code> perfectly." },
+  { slug: "mysql-bit-wire-bytes", date: "2026-05-20", engine: "Cross-cutting", label: "BIT crosses the wire as bytes, and the engines disagree on layout", dek: "MySQL hands <code>BIT(N)</code> back as <code>ceil(N/8)</code> right-justified big-endian bytes; Postgres surfaces <code>bit</code> as a <code>'0'</code>/<code>'1'</code> text string. Carry the raw bytes between them and the value is silently corrupted &mdash; the ASCII of the digits, not the bits." },
   { slug: "postgres-lsn-timeline-scoped", date: "2026-05-22", engine: "Postgres", label: "A Postgres LSN means nothing without its timeline", dek: "Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL gets this right for free with GTIDs; Postgres's raw LSN carries no provenance." },
   { slug: "pgoutput-streaming-abort", date: "2026-05-23", engine: "Postgres", label: "proto_version lets you parse streaming; only streaming='on' emits it", dek: "Two pgoutput knobs are easy to conflate, and the gap between them hides a silent-loss shape: if streaming ever activates and each chunk commits as its own transaction, a dropped StreamAbort leaves the pre-abort rows durably on the target &mdash; extra rows no checksum diff will catch." },
   { slug: "create-if-not-exists-race", date: "2026-05-24", engine: "Postgres", label: "CREATE IF NOT EXISTS is not a lock", dek: "<code>CREATE TABLE/TYPE … IF NOT EXISTS</code> does a catalog pre-check and then an insert, and the two steps aren't atomic. Race the same name from two connections and one gets a <code>unique_violation</code> on <code>pg_class</code> &mdash; from the statement that reads like it can't fail." },
@@ -153,7 +156,9 @@ const FIELD_NOTES = [
   { slug: "mysql-enum-emoji", date: "2026-05-30", engine: "MySQL & Vitess", label: "MySQL turned our emoji into '?'", dek: "MySQL substitutes <code>?</code> for 4-byte UTF-8 in ENUM/SET <em>labels</em> at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it." },
   { slug: "mysql-time-is-a-duration", date: "2026-05-31", engine: "MySQL & Vitess", label: "MySQL TIME is a duration, not a time of day", dek: "A MySQL <code>TIME</code> ranges <code>-838:59:59</code> to <code>838:59:59</code> and models elapsed duration, not clock time. Map it to Postgres <code>time</code> by name and any negative or over-24-hour value has nowhere to go &mdash; the target is <code>interval</code>." },
   { slug: "postgres-text-no-nul-byte", date: "2026-06-02", engine: "Postgres", label: "Postgres text can't hold a NUL byte", dek: "<code>text</code>/<code>varchar</code>/<code>char</code> reject an embedded <code>0x00</code> with SQLSTATE 22021; MySQL char/text store it fine. Over COPY the rejection surfaces far from the offending row and reads cryptically &mdash; and stripping the byte would be silent corruption." },
+  { slug: "snapshot-position-gap", date: "2026-06-03", engine: "MySQL & Vitess", label: "The transaction that lands in neither the snapshot nor the binlog", dek: "Capture the consistent snapshot and the binlog position as two separate statements, and a transaction committing between them falls into the gap &mdash; after the frozen read view, below the recorded offset. It's in neither the copy nor the CDC tail. FLUSH TABLES WITH READ LOCK closes the seam." },
   { slug: "olap-workload-truncation", date: "2026-06-07", engine: "MySQL & Vitess", label: "Setting workload=olap silently truncated our chunked reads", dek: "A one-line fix to lift vtgate's 100k-row cap set <code>workload=olap</code> session-wide; the parallel chunked reader inherited it and each chunk streamed only a prefix, so a 1.5M-row migrate copied 7,536 rows and exited 0 with <code>migration complete</code>." },
+  { slug: "bigint-unsigned-uint64", date: "2026-06-08", engine: "MySQL & Vitess", label: "BIGINT UNSIGNED overflows both bigint and int64", dek: "A MySQL <code>BIGINT UNSIGNED</code> reaches 2&sup6;&#8308;&minus;1, past Postgres <code>bigint</code>'s 2&sup6;&sup3;&minus;1 &mdash; and past Go's <code>int64</code>, so the driver hands it back as a <code>uint64</code> that a <code>[]byte</code>/<code>string</code>-only decoder can't route into a <code>numeric</code> or <code>text</code> target. Even the documented recovery was broken." },
   { slug: "vstream-snapshot-oom", date: "2026-06-09", engine: "MySQL & Vitess", label: "The cold-start that buffered a whole table into swap", dek: "A 13&nbsp;GB PlanetScale table drove the process to ~41&nbsp;GB of RAM and got OOM-killed with zero rows written &mdash; because the VStream snapshot reader held the entire copy phase in memory. The buffer wasn't laziness; three engine behaviors forced it." },
   { slug: "migrate-state-quadratic-blob", date: "2026-06-10", engine: "Cross-cutting", label: "One JSON blob in one row is a quadratic write", dek: "Storing all per-table progress as a single growing JSON blob, re-upserted on every checkpoint, is O(n&sup2;) &mdash; and on Postgres the amplification lands somewhere specific: a new tuple version plus a re-TOAST of the whole value, every time, on one hot row." },
   { slug: "backup-manifest-quadratic", date: "2026-06-11", engine: "Cross-cutting", label: "Rewriting the whole manifest, once per chunk", dek: "Every backup checkpoint re-wrote the entire manifest.json &mdash; and since the manifest grows with table count, the total work was quadratic: a measured ~78 hours at 100k tables. The fix's two obvious cousins are the same quadratic in disguise." },
@@ -4892,6 +4897,14 @@ COMMIT;                              -- blocks on A, then:
 <h2 id="what-sluice-does">What sluice does about it</h2>
 <p>sluice retries the failing statement — but only on the narrow, provably-benign shape: a <code>23505</code> whose constraint is a <em>catalog</em> index (<code>pg_class_relname_nsp_index</code> / <code>pg_type_typname_nsp_index</code>), which means "someone else just created this exact object" and the correct outcome (the object exists) has been reached. A <code>23505</code> on a <em>user</em> table's primary key or unique constraint is a genuine data conflict and stays loud — never swallowed by the retry. The same wrapper covers both the control-table setup and the concurrent index-build path.</p>
 
+<h2 id="enum-corollary">The sharper cousin: CREATE TYPE has no IF NOT EXISTS at all</h2>
+<p>The same "<code>IF NOT EXISTS</code> is not the safety you think" trap has an even sharper edge for Postgres <code>ENUM</code> types — because there the guard doesn't exist. <code>CREATE TYPE ... AS ENUM</code> has no <code>IF NOT EXISTS</code> form, so a cold-start that creates enum types and is then interrupted mid-copy re-enters its schema phase on resume and <strong>hard-fails with <code>SQLSTATE 42710 "type already exists"</code></strong> — turning every restart into a crash-loop with zero progress. It's especially nasty because the resume path deliberately skips the populated-target preflight on the assumption that the schema phase is fully idempotent — true for the <code>CREATE TABLE IF NOT EXISTS</code> sitting right next to it, false for the enum. Postgres's idempotent equivalent is a <code>DO</code> block that swallows <code>duplicate_object</code>:</p>
+<pre><code>${esc(`DO $$ BEGIN
+  CREATE TYPE status AS ENUM ('active','closed');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;`)}</code></pre>
+<p>And enum types <em>outlive</em> the columns that use them — drop the column and the type is orphaned, not cleaned up — so a re-create after a partial drop collides on the same <code>42710</code>. The generalization: on Postgres a first-class catalog object's "make it exist" step is neither atomic (the <code>pg_class</code>/<code>pg_type</code> race above) nor universally guarded (<code>CREATE TYPE</code> has no <code>IF NOT EXISTS</code>), so any resume-or-retry path that assumes "re-running CREATE is safe" has to earn that assumption per object type.</p>
+
 <h2 id="lesson">The transferable lesson</h2>
 <p><code>IF NOT EXISTS</code> (and <code>CREATE OR REPLACE</code>, and most "make it exist" DDL) is a convenience, not a concurrency primitive — it removes the error when <em>you</em> ran it twice in sequence, not when two workers run it at once. If your tool issues DDL in parallel, treat a catalog <code>23505</code> as an expected, retryable outcome of the race, and scope the retry tightly to the catalog constraint so a real user-data uniqueness violation still fails loudly. The tell that you have this bug is a "can't happen" duplicate-key error on a statement you thought was idempotent.</p>
 
@@ -5349,6 +5362,191 @@ write(
   <li>Object-store request cost &amp; latency (why per-tick GET counts matter) — <a href="https://aws.amazon.com/s3/pricing/">S3 request pricing</a>.</li>
   <li>Change-token / conditional-read patterns — <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Conditional_requests">HTTP conditional requests</a> (ETag/If-None-Match, the same idea applied to a cache key).</li>
   <li>sluice's backup chain &amp; broker — <a href="/docs/from-backup-sync/">Sync from a backup chain</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: binlog event volume ----------------------------------
+write(
+  "field-notes/binlog-event-volume",
+  page({
+    slug: "field-notes/binlog-event-volume",
+    title: "One INSERT is three binlog events (or four)",
+    subtitle: "The binlog is a log of events, not row changes. A single-row INSERT lands as three (BEGIN / WRITE_ROWS / XID), plus a spurious empty BEGIN/COMMIT per new connection — so if you size a rollover bound by INSERT count, budget 4×. Postgres counts differently again.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — sizing <code>sluice backup stream</code>'s <code>--rollover-max-changes</code> against expected INSERT counts on a MySQL source. See <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>An operator set an incremental-backup rollover bound against the number of INSERTs they expected to drive, and the windows closed 3&ndash;4&times; earlier than that — rows they thought would land in the <em>current</em> incremental spilled into the next one. The count the tool bounds on and the count in the operator's head were measuring different things.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The MySQL binlog records <strong>events</strong>, not user-visible row changes, and a change is wrapped in transaction framing. A single autocommit one-row <code>INSERT</code> is <strong>three</strong> events:</p>
+<pre><code>${esc(`1. BEGIN            (QueryEvent)
+2. WRITE_ROWS_EVENTv2   (the actual row)
+3. XID              (commit)`)}</code></pre>
+<p>A multi-row <code>INSERT ... VALUES (r1),(r2),...,(rN)</code> collapses the row events into one each, so it's <code>2 + N</code> (BEGIN + N row events + XID) — a 1,000-row multi-row insert is ~1,002 events, not 3,000. On top of the per-transaction framing there's a per-<em>connection</em> tax: many client sessions emit an <strong>empty BEGIN/COMMIT pair</strong> before their first DML, because the driver issues a session-setup statement (<code>SET autocommit</code>, <code>SET time_zone</code>, …) inside an implicit transaction that gets logged but carries no rows. So naive INSERT-counting under-counts binlog events by 3&ndash;4&times;. Postgres is different again: <code>pgoutput</code> delivers one countable change per row and surfaces transaction boundaries as separate <code>Begin</code>/<code>Commit</code> messages the consumer doesn't count as changes — so a PG operator can size by INSERT count directly, no multiplier.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The rule of thumb, documented for the flag: on a MySQL source, budget at least <strong>4&times;</strong> your expected INSERT count for <code>--rollover-max-changes</code> (the 3-event per-row shape plus headroom for the empty pair and other bookkeeping — heartbeats, rotate, format-description). Predictable bulk multi-row shapes can go tighter (the <code>2 + N</code> collapse). On Postgres, no multiplier.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>"Number of changes" is an engine-specific unit. MySQL's binlog is a log of <em>events</em> — row images plus the BEGIN/XID framing around every transaction, plus a per-connection empty pair — so it runs 3&ndash;4&times; ahead of the row count you're thinking of; Postgres's logical stream is closer to one-per-row. When you bound anything against a replication log (a rollover, a batch, an alert threshold), bound it against the log's own unit, and remember the same "count the changes" knob does not mean the same thing across engines.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL binlog event types — <a href="https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_replication.html">the replication event stream</a> (<code>QUERY_EVENT</code>, <code>WRITE_ROWS_EVENT</code>, <code>XID_EVENT</code>).</li>
+  <li>Postgres <code>pgoutput</code> per-row messages — <a href="https://www.postgresql.org/docs/current/protocol-logicalrep-message-formats.html">logical replication message formats</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: binlog temporal values are strings --------------------
+write(
+  "field-notes/binlog-temporal-strings",
+  page({
+    slug: "field-notes/binlog-temporal-strings",
+    title: "parseTime governs the query protocol, not the binlog",
+    subtitle: "parseTime=true on the DSN makes the query driver return time.Time. But the replication stream is a different code path, and it hands temporal columns back as raw strings regardless. The first TIMESTAMP row killed the CDC pump — and the silent channel-close looked exactly like a network stall for two release cycles.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL &rarr; target CDC on any table with a <code>TIMESTAMP</code> / <code>DATETIME</code> / <code>DATE</code> column. Internally Bug 12.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A MySQL CDC stream against any table with a temporal column silently applied <strong>zero</strong> events — the channel just went quiet, exactly like a stalled network connection. The mis-diagnosis chased port-forwarding and connectivity for two release cycles before the real cause surfaced: the very first temporal row event was killing the pump.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The DSN carried <code>parseTime=true</code>, which tells <code>go-sql-driver/mysql</code> to return <code>time.Time</code> for temporal columns — but that setting governs the <strong>query</strong> protocol (the result path of a normal <code>SELECT</code>). The binlog <strong>replication</strong> stream is a separate code path, and it hands temporal values back as their raw <em>string</em> form (<code>"2026-05-05 20:38:23"</code>) no matter what the DSN says. The row decoder accepted only a <code>time.Time</code>, so the first temporal row event raised <code>cannot decode string as time.Time (parseTime=true should be set)</code>. And the way that error surfaced is what turned a loud bug into a silent one: the pump reported it via a deferred <code>setErr</code> (visible only through a later <code>Err()</code> call, never logged at the point of failure), then closed the events channel. Downstream, the applier just saw the channel close with zero events — a fatal decode error wearing the costume of an idle stream.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- source: any table with a temporal column, CDC tailing it
+CREATE TABLE t (id INT PRIMARY KEY, ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+INSERT INTO t (id) VALUES (1);
+-- pre-fix: the binlog row event carries ts as the string "2026-05-05 20:38:23";
+--   the decoder rejects it, the pump setErr()s and closes the channel,
+--   the applier sees 0 events. Looks identical to a dead connection.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The binlog decoder now parses MySQL's canonical temporal string forms — second-precision, microsecond-precision, and date-only — plus their byte-slice equivalents and the <code>0000-00-00</code> zero-value sentinel, rather than assuming a pre-parsed <code>time.Time</code>. (Pinned end-to-end against a real <code>mysql:8.0</code>: pre-fix dropped 100% of CDC events on a temporal table, post-fix all flow.)</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A driver flag like <code>parseTime</code> tunes the <em>query</em> protocol, not the <em>replication</em> stream — they are different paths through the same driver, and the binlog hands you raw strings whatever the DSN claims. When a setting clearly "works" for your queries but CDC breaks on the exact type it should govern, suspect that the replication path never saw the flag. The companion lesson is about failure visibility: a fatal error routed only through a deferred <code>Err()</code> — not logged where it happens — is indistinguishable from a healthy-but-idle stream, and that ambiguity is what cost the two release cycles. Surface pump-fatal errors <em>loudly, at the point of failure</em>. (The binlog is not the query protocol in more ways than one — it also <a href="/field-notes/binlog-transaction-compression/">compresses whole transactions into a single event</a> a query-path reader never sees.)</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>go-sql-driver <code>parseTime</code> (a connection/query-path option) — <a href="https://github.com/go-sql-driver/mysql#parsetime">go-sql-driver/mysql parameters</a>.</li>
+  <li>MySQL binlog row images carry temporal values in their own encoding — <a href="https://dev.mysql.com/doc/dev/mysql-server/latest/classbinary__log_1_1Rows__event.html"><code>Rows_event</code></a>.</li>
+  <li>How sluice reads MySQL CDC — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: BIT crosses the wire as bytes -------------------------
+write(
+  "field-notes/mysql-bit-wire-bytes",
+  page({
+    slug: "field-notes/mysql-bit-wire-bytes",
+    title: "BIT crosses the wire as bytes, and the engines disagree on layout",
+    subtitle: "MySQL hands BIT(N) back as ceil(N/8) right-justified big-endian bytes; Postgres surfaces bit as a '0'/'1' text string. Carry the raw bytes between them through one []byte path and you silently store the ASCII of the digits, not the bits.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — migrating a <code>BIT</code> column between MySQL and Postgres. Internally catalog Bug 75.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Carrying a <code>BIT(N)</code> value between engines through a single <code>[]byte</code> IR path silently corrupted every value — it stored the ASCII bytes of the <code>'0'</code>/<code>'1'</code> digits and the writer then kept only the last one. A bit field that looked like a trivial "just move the bytes" column was the one that lost its data.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The two engines put <code>BIT</code> on the wire in completely different shapes, and a raw-bytes IR is ambiguous between them:</p>
+<ul>
+  <li><strong>MySQL</strong> hands <code>BIT(N)</code> back as <code>ceil(N/8)</code> big-endian bytes, right-justified — the value's bits <em>packed</em> into the minimum number of bytes. <code>BIT(14) = b'10110100110010'</code> is two packed bytes.</li>
+  <li><strong>Postgres</strong>'s <code>bit</code> / <code>bit varying</code> text I/O surfaces the value as a <code>'0'</code>/<code>'1'</code> <em>text string</em> already — the same form as the literal <code>B'1010'</code>.</li>
+</ul>
+<p>So "the bytes" means packed bits on one side and ASCII digit characters on the other. A pipeline that grabbed the driver's bytes and re-decoded them as if they were packed bits took Postgres's <code>"10110100110010"</code> (fourteen ASCII characters) and interpreted it as raw bit-bytes — storing garbage, then truncating to the last byte. Same code path, opposite meaning, silent loss.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Carry a single <strong>canonical form</strong>: a <code>'0'</code>/<code>'1'</code> text bit-string, most-significant bit first, exactly the column's declared bit-length (the same form Postgres's text I/O and <code>B'…'</code> literals use). It's engine-neutral and exact for any width. MySQL's packed bytes convert in via <code>BitBytesToString</code> (unpack <code>ceil(N/8)</code> right-justified big-endian bytes into the N-character string); the MySQL writer binds the <code>uint64</code> form, not the raw bytes, so the write side doesn't re-introduce the ambiguity either. The canonical string is the one representation that can't be misread between the packed and expanded layouts.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>"It's a bit field, just move the bytes" hides that two databases disagree on what "the bytes" <em>are</em>: MySQL packs the bits into <code>ceil(N/8)</code> big-endian bytes, Postgres's text protocol hands you the ASCII <code>'0'</code>/<code>'1'</code> expansion. A raw-<code>[]byte</code> intermediate is ambiguous between the packed and expanded forms, and the ambiguity resolves as silent corruption. When two engines encode the same logical value differently on the wire, don't pass the wire bytes through — pick a canonical representation that is unambiguous at every width and convert at each engine boundary.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL <code>BIT</code> storage &amp; retrieval — <a href="https://dev.mysql.com/doc/refman/8.0/en/bit-type.html">The <code>BIT</code> Type</a> and <a href="https://dev.mysql.com/doc/refman/8.0/en/bit-value-literals.html">bit-value literals</a>.</li>
+  <li>Postgres <code>bit</code> text I/O — <a href="https://www.postgresql.org/docs/current/datatype-bit.html">bit-string types</a>.</li>
+  <li>sluice's cross-engine value contract — <a href="/docs/type-mapping/">Type mapping</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: BIGINT UNSIGNED overflows int64 -----------------------
+write(
+  "field-notes/bigint-unsigned-uint64",
+  page({
+    slug: "field-notes/bigint-unsigned-uint64",
+    title: "BIGINT UNSIGNED overflows both bigint and int64",
+    subtitle: "A MySQL BIGINT UNSIGNED reaches 2⁶⁴−1, past Postgres bigint's 2⁶³−1 — and past Go's int64, so above that boundary the driver hands the value back as a uint64 a []byte/string-only decoder can't route. The type mismatch is known; the driver-representation switch is the sharp edge.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — migrating a MySQL <code>BIGINT UNSIGNED</code> column holding values above 2<sup>63</sup>&minus;1 to Postgres. A value-fidelity finding from the test rig.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A MySQL <code>BIGINT UNSIGNED</code> column carrying values above <code>2^63-1</code> had <strong>no working migration path</strong> to Postgres — and, worse, the loud error's <em>recommended recovery</em> didn't function either. This never silently lost data (it failed loudly), but it blocked a common migration and then lied about how to unblock it.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>Three boundaries stack up at the same value:</p>
+<ul>
+  <li><strong>The target type.</strong> <code>BIGINT UNSIGNED</code> reaches <code>2^64-1</code> (18,446,744,073,709,551,615); Postgres <code>bigint</code> tops out at <code>2^63-1</code>. So above the signed max it can't be a <code>bigint</code> at all — it needs <code>numeric</code> or <code>text</code>.</li>
+  <li><strong>The driver representation (the sharp edge).</strong> Above <code>int64</code>'s max, <code>go-sql-driver/mysql</code> stops returning a <code>[]byte</code>/<code>string</code> and returns a <strong><code>uint64</code></strong>. The value decoder's <code>decodeDecimal</code>/<code>decodeString</code> only handled <code>[]byte</code>/<code>string</code>, so even the explicit escape hatch <code>--type-override COL=decimal|text</code> failed with <code>cannot decode uint64 as {Decimal|string}</code>.</li>
+  <li><strong>The broken remediation.</strong> The unsigned-bigint notice told operators to use <code>--type-override TABLE.COL=numeric</code> — but <code>numeric</code> wasn't a recognized override token (only <code>decimal</code> is), and bare <code>decimal</code> defaulted to <code>numeric(10,0)</code>, far too few digits for a 20-digit value. The documented fix pointed at a flag that didn't parse and a type too small to hold the number.</li>
+</ul>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Add <code>uint64</code>/<code>int64</code> cases to the decimal and string decoders that carry the exact decimal text via <code>strconv.FormatUint</code>/<code>FormatInt</code>, so a <code>BIGINT UNSIGNED</code> migrates as an exact Postgres <code>numeric</code> or <code>text</code> value — no precision lost. And correct the remediation hint at every site it's surfaced (the notice, the schema-preview output, the doc comments) to the token that actually parses, with enough digits for the value.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>An unsigned 64-bit integer is a <em>triple</em> boundary: it overflows the target's signed <code>bigint</code>, it overflows the language's <code>int64</code>, and at that second overflow the driver quietly changes the Go type it hands you (<code>uint64</code>, not the <code>[]byte</code>/<code>string</code> your decoder was built for). A migration that maps the type but never sees the over-<code>int64max</code> representation fails on exactly the values that justified making the column unsigned. And the meta-lesson: <strong>a loud-failure remedy is code too.</strong> If the error names a flag token that doesn't exist or a type too narrow for the value, "we refuse loudly and tell you the fix" degrades into "we refuse loudly and mislead you" — so test your remediation strings through the real parser, the same way you'd test a feature. (This is one of a family of <a href="/field-notes/int64-json-boundary/">integer-boundary</a> hazards where the number outgrows the pipe carrying it.)</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL integer ranges — <a href="https://dev.mysql.com/doc/refman/8.0/en/integer-types.html">integer types</a> (<code>BIGINT UNSIGNED</code> = 0 … 2⁶⁴&minus;1).</li>
+  <li>Postgres numeric ranges — <a href="https://www.postgresql.org/docs/current/datatype-numeric.html"><code>bigint</code> vs <code>numeric</code></a>.</li>
+  <li>go-sql-driver returns <code>uint64</code> above <code>int64</code> max — <a href="https://github.com/go-sql-driver/mysql">go-sql-driver/mysql</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: snapshot/position boundary gap ------------------------
+write(
+  "field-notes/snapshot-position-gap",
+  page({
+    slug: "field-notes/snapshot-position-gap",
+    title: "The transaction that lands in neither the snapshot nor the binlog",
+    subtitle: "Capture the consistent snapshot and the binlog position as two separate statements, and a transaction committing between them falls into the gap: after the frozen read view, below the recorded offset. It's in neither the bulk copy nor the CDC tail. A global read lock across both closes the seam.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL cold-start: freezing a consistent snapshot for the bulk copy and recording the binlog position for the CDC handoff. Internally the FTWRL-freeze fix; caught by a concurrent-writes-during-cold-start test (2299/2300 rows under <code>-race</code>).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A MySQL cold-start — bulk-copy a consistent snapshot, then hand off to CDC from a recorded binlog position — intermittently lost a single row under concurrent writes. The row was in neither the snapshot copy nor the CDC tail, with no error. (It was first mis-diagnosed as a slow-apply flake and "fixed" by raising a catch-up ceiling; the row never arrived at any ceiling, because it was never in the stream at all.)</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The snapshot view and the start position were captured as <strong>two separate statements</strong>:</p>
+<pre><code>${esc(`START TRANSACTION WITH CONSISTENT SNAPSHOT;   -- freezes the read view (bulk copy)
+--   << any transaction committing HERE falls into the gap >>
+SHOW BINARY LOG STATUS;                        -- records the CDC start offset`)}</code></pre>
+<p>A transaction that commits in the window <em>between</em> those two statements lands in neither phase: it committed <strong>after</strong> the read view froze, so the snapshot bulk-copy doesn't see it; and its binlog offset is <strong>below</strong> the position recorded a moment later, so CDC starts after it and skips it. The row exists on the source and in the binlog, but above the snapshot's cut and below the stream's cut — a silent-loss boundary exactly one transaction wide.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Wrap the capture in <code>FLUSH TABLES WITH READ LOCK ... UNLOCK TABLES</code> — the mydumper/Debezium consistent-snapshot pattern — so the snapshot's read view and the recorded binlog position name the <em>exact same</em> logical cut, with no commit able to interleave between them. The open transaction keeps the snapshot alive after the lock is released, and writes that resume afterward are captured by CDC from the frozen position. <code>FLUSH TABLES WITH READ LOCK</code> needs the <code>RELOAD</code> privilege; without it, sluice warns and falls back to the prior lock-free capture rather than failing the run (a least-privilege single-DB user who never hits the window keeps working).</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When a cold-start hands off from a bulk snapshot to a change stream, the snapshot's consistency point and the stream's start position must be the <em>same instant</em> — capture them as two statements and the window between them is a silent-loss gap for any transaction that commits there (above the snapshot, below the position). The remedy is to make the two reads name one logical cut, classically by holding a global read lock across both so nothing can commit in between. This is the canonical consistent-snapshot dance — mydumper and Debezium do exactly this — and it's canonical precisely because everyone who builds snapshot-to-CDC handoff rediscovers the same one-transaction-wide hole, usually as a single mysteriously-missing row that looks like anything but a boundary bug.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL consistent snapshots &amp; <code>FLUSH TABLES WITH READ LOCK</code> — <a href="https://dev.mysql.com/doc/refman/8.0/en/flush.html"><code>FLUSH</code></a> and <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-consistent-read.html">InnoDB consistent reads</a>.</li>
+  <li>The pattern in the wild — <a href="https://debezium.io/documentation/reference/stable/connectors/mysql.html">Debezium MySQL connector snapshot</a> / mydumper's <code>--trx-consistency-only</code>.</li>
+  <li>How sluice cold-starts and hands off to CDC — <a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a>.</li>
 </ul>
 `,
   })

@@ -54,7 +54,11 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-06-09MySQL & Vitess The cold-start that buffered a whole table into swap — A 13 GB PlanetScale table drove the process to ~41 GB of RAM and got OOM-killed with zero rows written &mdash; because the VStream snapshot reader held the entire copy phase in memory. The buffer wasn't laziness; three engine behaviors forced it.
 
+- 2026-06-08MySQL & Vitess BIGINT UNSIGNED overflows both bigint and int64 — A MySQL BIGINT UNSIGNED reaches 2&sup6;&#8308;&minus;1, past Postgres bigint's 2&sup6;&sup3;&minus;1 &mdash; and past Go's int64, so the driver hands it back as a uint64 that a []byte/string-only decoder can't route into a numeric or text target. Even the documented recovery was broken.
+
 - 2026-06-07MySQL & Vitess Setting workload=olap silently truncated our chunked reads — A one-line fix to lift vtgate's 100k-row cap set workload=olap session-wide; the parallel chunked reader inherited it and each chunk streamed only a prefix, so a 1.5M-row migrate copied 7,536 rows and exited 0 with migration complete.
+
+- 2026-06-03MySQL & Vitess The transaction that lands in neither the snapshot nor the binlog — Capture the consistent snapshot and the binlog position as two separate statements, and a transaction committing between them falls into the gap &mdash; after the frozen read view, below the recorded offset. It's in neither the copy nor the CDC tail. FLUSH TABLES WITH READ LOCK closes the seam.
 
 - 2026-06-02Postgres Postgres text can't hold a NUL byte — text/varchar/char reject an embedded 0x00 with SQLSTATE 22021; MySQL char/text store it fine. Over COPY the rejection surfaces far from the offending row and reads cryptically &mdash; and stripping the byte would be silent corruption.
 
@@ -74,13 +78,19 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-05-22Postgres A Postgres LSN means nothing without its timeline — Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL gets this right for free with GTIDs; Postgres's raw LSN carries no provenance.
 
+- 2026-05-20Cross-cutting BIT crosses the wire as bytes, and the engines disagree on layout — MySQL hands BIT(N) back as ceil(N/8) right-justified big-endian bytes; Postgres surfaces bit as a '0'/'1' text string. Carry the raw bytes between them and the value is silently corrupted &mdash; the ASCII of the digits, not the bits.
+
 - 2026-05-17Postgres The pgx codec that flattened numeric[][] — A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped int[][] perfectly.
 
 - 2026-05-15Cross-cutting Count your bytes, not your rows — A batch size tuned for narrow OLTP rows &mdash; 5,000 rows, under 10 MB &mdash; quietly pins hundreds of MB the moment the workload is MB-scale TEXT, BYTEA, JSON, or geometry. The streaming paths were fine; only the two accumulators blew up.
 
 - 2026-05-10Cross-cutting {}: two characters, two types — {} is an empty array in Postgres and an empty object in JSON; []byte("{}") is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way.
 
+- 2026-05-08MySQL & Vitess One INSERT is three binlog events (or four) — A single-row INSERT lands in the binlog as three events (BEGIN / WRITE_ROWS / XID), plus a spurious empty BEGIN/COMMIT per new connection. If you size a rollover bound by INSERT count, budget 4&times; &mdash; and Postgres counts differently again.
+
 - 2026-05-07Postgres Every HA knob on, and the slot still vanished at failover — Patroni slot-sync on, sync_replication_slots on, hot_standby_feedback on &mdash; and a logical slot that hadn't advanced during the sync window was still lost on promotion. The idle slot is the fragile one.
+
+- 2026-05-05MySQL & Vitess parseTime governs the query protocol, not the binlog — parseTime=true on the DSN makes the query driver return time.Time — but the replication stream hands temporal columns back as raw strings regardless. The first TIMESTAMP row killed the CDC pump, and the silent-channel-close looked exactly like a network stall for two release cycles.
 
 - 2026-05-05MySQL & Vitess One LOAD DATA can't load a BLOB and a JSON column — A BLOB needs CHARACTER SET binary or the server rejects its first non-ASCII byte; a JSON column rejects its input under CHARACTER SET binary. One statement-level clause, two columns that demand opposite answers.
 
