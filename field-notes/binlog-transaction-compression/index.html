@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A whole transaction in one zstd binlog event — sluice docs</title>
+<meta name="description" content="MySQL 8.0.20+ can pack an entire transaction into a single compressed TRANSACTION_PAYLOAD_EVENT. A binlog reader without a handler for it applies nothing and freezes its position with no error — and the server zeroes the inner events' end_log_pos, so a naive resume restarts mid-payload and dies.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/field-notes/binlog-transaction-compression/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="active" href="/field-notes/">Field Notes</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Field Notes</div><a class="lnk" href="/field-notes/">About these notes</a><a class="lnk" href="/field-notes/float-in-primary-key/"><span class="fn-date">2026-07-09</span>When the row's own identity gets rounded</a><a class="lnk" href="/field-notes/signed-manifest-chunk-binding/"><span class="fn-date">2026-07-09</span>A signature that verified green while restoring the wrong table's rows</a><a class="lnk" href="/field-notes/three-clouds-three-signatures/"><span class="fn-date">2026-07-09</span>Three clouds, three ways to return an ECDSA signature</a><a class="lnk" href="/field-notes/vstream-float-precision/"><span class="fn-date">2026-07-09</span>Vitess copy phase rounds your FLOATs</a><a class="lnk" href="/field-notes/xid-wraparound-cdc/"><span class="fn-date">2026-07-08</span>Comparing 32-bit transaction ids breaks after four billion of them</a><a class="lnk" href="/field-notes/d1-not-local-sqlite/"><span class="fn-date">2026-06-30</span>Cloudflare D1 is not your local SQLite</a><a class="lnk" href="/field-notes/planetscale-grow-reparent/"><span class="fn-date">2026-06-29</span>When PlanetScale un-acked our rows</a><a class="lnk" href="/field-notes/int64-json-boundary/"><span class="fn-date">2026-06-29</span>2^53 is a database boundary now</a><a class="lnk" href="/field-notes/vitess-tx-killer-wan/"><span class="fn-date">2026-06-28</span>The 20-second guillotine over a WAN</a><a class="lnk" href="/field-notes/sqlite-wal-checkpoint-starvation/"><span class="fn-date">2026-06-28</span>One long-lived reader, 75 GB of WAL</a><a class="lnk" href="/field-notes/sqlite-decimal-affinity/"><span class="fn-date">2026-06-27</span>SQLite's DECIMAL is a suggestion</a><a class="lnk" href="/field-notes/mysql-enum-set-binlog-encoding/"><span class="fn-date">2026-06-20</span>ENUM is an ordinal and SET is a bitmask on the wire</a><a class="lnk" href="/field-notes/vitess-per-shard-primary-key/"><span class="fn-date">2026-06-18</span>Your primary key is only unique per shard</a><a class="lnk active" href="/field-notes/binlog-transaction-compression/"><span class="fn-date">2026-06-17</span>A whole transaction in one zstd binlog event</a><a class="lnk" href="/field-notes/zero-value-config-trap/"><span class="fn-date">2026-06-15</span>The zero value is a loaded gun</a><a class="lnk" href="/field-notes/vstream-throttle-blind/"><span class="fn-date">2026-06-13</span>vtgate erases the throttle signal</a><a class="lnk" href="/field-notes/binlog-comment-truncate/"><span class="fn-date">2026-06-13</span>A comment hid a TRUNCATE from CDC</a><a class="lnk" href="/field-notes/postgres-slot-leaks/"><span class="fn-date">2026-06-11</span>Replication slots don't die with your process</a><a class="lnk" href="/field-notes/olap-workload-truncation/"><span class="fn-date">2026-06-07</span>Setting workload=olap silently truncated our chunked reads</a><a class="lnk" href="/field-notes/postgres-text-no-nul-byte/"><span class="fn-date">2026-06-02</span>Postgres text can't hold a NUL byte</a><a class="lnk" href="/field-notes/mysql-time-is-a-duration/"><span class="fn-date">2026-05-31</span>MySQL TIME is a duration, not a time of day</a><a class="lnk" href="/field-notes/mysql-enum-emoji/"><span class="fn-date">2026-05-30</span>MySQL turned our emoji into '?'</a><a class="lnk" href="/field-notes/redact-two-engines/"><span class="fn-date">2026-05-30</span>One redaction flag, two engines, two behaviors</a><a class="lnk" href="/field-notes/replica-identity-full-updates/"><span class="fn-date">2026-05-28</span>REPLICA IDENTITY FULL ate our UPDATEs</a><a class="lnk" href="/field-notes/cdc-carries-no-default/"><span class="fn-date">2026-05-25</span>The replication stream never tells you the column default</a><a class="lnk" href="/field-notes/create-if-not-exists-race/"><span class="fn-date">2026-05-24</span>CREATE IF NOT EXISTS is not a lock</a><a class="lnk" href="/field-notes/pgoutput-streaming-abort/"><span class="fn-date">2026-05-23</span>proto_version lets you parse streaming; only streaming='on' emits it</a><a class="lnk" href="/field-notes/postgres-lsn-timeline-scoped/"><span class="fn-date">2026-05-22</span>A Postgres LSN means nothing without its timeline</a><a class="lnk" href="/field-notes/numeric-array-flatten/"><span class="fn-date">2026-05-17</span>The pgx codec that flattened numeric[][]</a><a class="lnk" href="/field-notes/empty-object-vs-array/"><span class="fn-date">2026-05-10</span>{}: two characters, two types</a><a class="lnk" href="/field-notes/postgres-idle-slot-failover/"><span class="fn-date">2026-05-07</span>Every HA knob on, and the slot still vanished at failover</a><a class="lnk" href="/field-notes/mysql-load-data-charset/"><span class="fn-date">2026-05-05</span>One LOAD DATA can't load a BLOB and a JSON column</a><a class="lnk" href="/field-notes/mysql-json-where-cast/"><span class="fn-date">2026-05-04</span>MySQL won't match a JSON column by bind parameter</a></aside>
+  <main class="content">
+    <h1>A whole transaction in one zstd binlog event</h1>
+    <p class="subtitle">MySQL 8.0.20+ can pack an entire transaction into a single compressed TRANSACTION_PAYLOAD_EVENT. A binlog reader without a handler for it applies nothing and freezes its position with no error — and the server zeroes the inner events' end_log_pos, so a naive resume restarts mid-payload and dies.</p>
+    <p class="fn-landed">Landed in sluice · 2026-06-17 · MySQL &amp; Vitess</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#what-happened">What happened</a></li><li><a href="#why">Why (the mechanism)</a></li><li><a href="#repro">The repro</a></li><li><a href="#what-sluice-does">What sluice does about it</a></li><li><a href="#lesson">The transferable lesson</a></li><li><a href="#sources">Primary sources</a></li></ul></nav>
+    
+<p class="fn-meta"><strong>Observed</strong> — MySQL &rarr; target CDC from a source with <code>binlog_transaction_compression = ON</code>. Internally the <code>TRANSACTION_PAYLOAD_EVENT</code> decode + resume-alignment fix.</p>
+
+<h2 id="what-happened">What happened <a class="hlink" href="#what-happened" aria-label="Permalink to this section">#</a></h2>
+<p>CDC from a MySQL 8.0.20+ source that had <code>binlog_transaction_compression</code> enabled (common for WAN replication and disk savings) silently applied nothing for compressed transactions: rows never landed, the stream position froze, and there was no error. Turning the setting off "fixed" it — which is the tell that the reader was missing an event type, not hitting a bug.</p>
+
+<h2 id="why">Why (the mechanism) <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
+<p>With <code>binlog_transaction_compression = ON</code>, the server packs a whole transaction — its <code>TABLE_MAP</code>, its <code>ROWS</code> events, its <code>XID</code> — into a single zstd-compressed <code>TRANSACTION_PAYLOAD_EVENT</code>. A binlog consumer that doesn't recognize that event type simply skips it: zero rows applied, position advanced past it, no error raised. Everything the transaction did is inside a payload the reader walked past.</p>
+<p>There is a second, sharper trap in the resume path. Inside the payload, the server <strong>zeroes the <code>end_log_pos</code> of the inner events</strong> (they no longer have a meaningful standalone file offset — they live inside the outer event). A resumer that stamps its checkpoint from an inner event's header therefore records position <code>0</code>, and on warm-resume restarts <em>inside</em> the payload — where it finds row events with no preceding table map and dies with <code>"no corresponding table map event."</code> The correct checkpoint is the <em>outer</em> <code>TRANSACTION_PAYLOAD_EVENT</code>'s <code>LogPos</code> (the transaction boundary). GTID-mode streams dodge this half, because the <code>GTIDEvent</code> precedes the payload and carries the resumable coordinate.</p>
+
+<h2 id="repro">The repro <a class="hlink" href="#repro" aria-label="Permalink to this section">#</a></h2>
+<pre><code>-- source (MySQL 8.0.20+):
+SET GLOBAL binlog_transaction_compression = ON;
+INSERT INTO t VALUES (1), (2), (3);   -- one compressed txn
+
+-- in the binlog, instead of TABLE_MAP + WRITE_ROWS + XID you now see:
+--   Transaction_payload   (compression: ZSTD)
+--     └─ TABLE_MAP / WRITE_ROWS / XID  (inner; end_log_pos = 0)
+-- a reader with no Transaction_payload handler applies 0 of the 3 rows,
+-- reports no error, and advances past it.</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it <a class="hlink" href="#what-sluice-does" aria-label="Permalink to this section">#</a></h2>
+<p>sluice decompresses the <code>TRANSACTION_PAYLOAD_EVENT</code> and dispatches its inner events as if they had arrived uncompressed, so a compressed source is transparent. For the resume half, it stamps its checkpoint from the <em>outer</em> payload event's <code>LogPos</code> (the transaction boundary), never an inner event's zeroed <code>end_log_pos</code> — so a warm-resume lands on a transaction boundary and never mid-payload. Both halves are pinned by regression tests, because the failure only appears with the setting on and a resume across a compressed transaction.</p>
+
+<h2 id="lesson">The transferable lesson <a class="hlink" href="#lesson" aria-label="Permalink to this section">#</a></h2>
+<p>A binlog reader's completeness is defined by the source settings it has <em>never seen</em>, not the ones it was tested against. <code>binlog_transaction_compression</code> is off by default, so a reader can pass every local test and silently drop every transaction the moment a DBA turns it on for bandwidth. Two lessons ride together: handle (or loudly refuse) every binlog event type the source <em>can</em> emit, not just the common ones; and when a container event rewrites its children's coordinates — here, zeroing inner <code>end_log_pos</code> — make sure your resume checkpoint comes from the coordinate that's still valid (the outer boundary), or your recovery path breaks exactly when you need it.</p>
+
+<h2 id="sources">Primary sources <a class="hlink" href="#sources" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li>MySQL binlog transaction compression — <a href="https://dev.mysql.com/doc/refman/8.0/en/binary-log-transaction-compression.html">binary log transaction compression</a> and the <a href="https://dev.mysql.com/doc/dev/mysql-server/latest/classbinary__log_1_1Transaction__payload__event.html"><code>Transaction_payload_event</code></a>.</li>
+  <li>sluice's MySQL CDC and resume model — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/field-notes/vitess-per-shard-primary-key/">← Your primary key is only unique per shard</a><a class="next" href="/field-notes/zero-value-config-trap/">The zero value is a loaded gun →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/field-notes/binlog-transaction-compression/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

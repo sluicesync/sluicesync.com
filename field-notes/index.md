@@ -32,6 +32,12 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-06-27SQLite & D1 SQLite's DECIMAL is a suggestion — Declare a column DECIMAL(10,2) and you get NUMERIC affinity, which stores 19.99 as 19.989999999999998. Not a rounding bug — an engine storage property, and the real predicate is dyadic representability.
 
+- 2026-06-20MySQL & Vitess ENUM is an ordinal and SET is a bitmask on the wire — In a raw binlog row event a MySQL ENUM is its 1-based ordinal and a SET is a numeric bitmask; the member-name list lives only in the table definition. Decode without the schema and SET('a','c') becomes "5". Snapshot and VStream hand you text, so it hides until raw CDC.
+
+- 2026-06-18MySQL & Vitess Your primary key is only unique per shard — vtgate merges every Vitess/PlanetScale shard into one logical stream, but per-shard id ranges mean the same primary-key value legitimately exists on several shards. Copy them into one target table and the collisions silently overwrite &mdash; exit 0, rows short.
+
+- 2026-06-17MySQL & Vitess A whole transaction in one zstd binlog event — MySQL 8.0.20+ can pack an entire transaction into a single compressed TRANSACTION_PAYLOAD_EVENT. A reader without a handler applies nothing and freezes its position with no error &mdash; and the server zeroes the inner events' end_log_pos, so a naive resume restarts mid-payload and dies.
+
 - 2026-06-15Cross-cutting The zero value is a loaded gun — A config field that &ldquo;defaults on&rdquo; silently defaults off for every caller that didn't go through the CLI, because in Go every unset field gets the zero value. Twice, with real database consequences.
 
 - 2026-06-13MySQL & Vitess vtgate erases the throttle signal — The one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one.
@@ -42,11 +48,23 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-06-07MySQL & Vitess Setting workload=olap silently truncated our chunked reads — A one-line fix to lift vtgate's 100k-row cap set workload=olap session-wide; the parallel chunked reader inherited it and each chunk streamed only a prefix, so a 1.5M-row migrate copied 7,536 rows and exited 0 with migration complete.
 
+- 2026-06-02Postgres Postgres text can't hold a NUL byte — text/varchar/char reject an embedded 0x00 with SQLSTATE 22021; MySQL char/text store it fine. Over COPY the rejection surfaces far from the offending row and reads cryptically &mdash; and stripping the byte would be silent corruption.
+
+- 2026-05-31MySQL & Vitess MySQL TIME is a duration, not a time of day — A MySQL TIME ranges -838:59:59 to 838:59:59 and models elapsed duration, not clock time. Map it to Postgres time by name and any negative or over-24-hour value has nowhere to go &mdash; the target is interval.
+
 - 2026-05-30MySQL & Vitess MySQL turned our emoji into '?' — MySQL substitutes ? for 4-byte UTF-8 in ENUM/SET labels at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it.
 
 - 2026-05-30Cross-cutting One redaction flag, two engines, two behaviors — --redact randomize:int:100000,200000 into a SMALLINT column loud-refused on a Postgres target and silently clamped every row to 32767 on a MySQL one &mdash; turning an anonymization rule into a constant, and a compliance guarantee into a compliance failure.
 
 - 2026-05-28Postgres REPLICA IDENTITY FULL ate our UPDATEs — Building an UPDATE's WHERE over every old column works forever on int/varchar, then a jsonb value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss.
+
+- 2026-05-25Cross-cutting The replication stream never tells you the column default — Neither pgoutput nor the MySQL binlog carries a column's DEFAULT. Forward an ADD COLUMN … DEFAULT now() over CDC and the target re-evaluates the default independently &mdash; so every pre-existing row gets a different value than the source's backfill.
+
+- 2026-05-24Postgres CREATE IF NOT EXISTS is not a lock — CREATE TABLE/TYPE … IF NOT EXISTS does a catalog pre-check and then an insert, and the two steps aren't atomic. Race the same name from two connections and one gets a unique_violation on pg_class &mdash; from the statement that reads like it can't fail.
+
+- 2026-05-23Postgres proto_version lets you parse streaming; only streaming='on' emits it — Two pgoutput knobs are easy to conflate, and the gap between them hides a silent-loss shape: if streaming ever activates and each chunk commits as its own transaction, a dropped StreamAbort leaves the pre-abort rows durably on the target &mdash; extra rows no checksum diff will catch.
+
+- 2026-05-22Postgres A Postgres LSN means nothing without its timeline — Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL gets this right for free with GTIDs; Postgres's raw LSN carries no provenance.
 
 - 2026-05-17Postgres The pgx codec that flattened numeric[][] — A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped int[][] perfectly.
 

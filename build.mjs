@@ -143,14 +143,23 @@ const FIELD_NOTES = [
   { slug: "postgres-idle-slot-failover", date: "2026-05-07", engine: "Postgres", label: "Every HA knob on, and the slot still vanished at failover", dek: "Patroni slot-sync on, <code>sync_replication_slots</code> on, <code>hot_standby_feedback</code> on &mdash; and a logical slot that hadn't advanced during the sync window was still lost on promotion. The idle slot is the fragile one." },
   { slug: "empty-object-vs-array", date: "2026-05-10", engine: "Cross-cutting", label: "{}: two characters, two types", dek: "<code>{}</code> is an empty array in Postgres and an empty object in JSON; <code>[]byte(\"{}\")</code> is genuinely ambiguous, and for nine releases the MySQL writer resolved it the wrong way." },
   { slug: "numeric-array-flatten", date: "2026-05-17", engine: "Postgres", label: "The pgx codec that flattened numeric[][]", dek: "A driver that selects its binary codec per target OID turned a 2&times;2 matrix into a flat four-element array, on byte-identical code that round-tripped <code>int[][]</code> perfectly." },
+  { slug: "postgres-lsn-timeline-scoped", date: "2026-05-22", engine: "Postgres", label: "A Postgres LSN means nothing without its timeline", dek: "Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL gets this right for free with GTIDs; Postgres's raw LSN carries no provenance." },
+  { slug: "pgoutput-streaming-abort", date: "2026-05-23", engine: "Postgres", label: "proto_version lets you parse streaming; only streaming='on' emits it", dek: "Two pgoutput knobs are easy to conflate, and the gap between them hides a silent-loss shape: if streaming ever activates and each chunk commits as its own transaction, a dropped StreamAbort leaves the pre-abort rows durably on the target &mdash; extra rows no checksum diff will catch." },
+  { slug: "create-if-not-exists-race", date: "2026-05-24", engine: "Postgres", label: "CREATE IF NOT EXISTS is not a lock", dek: "<code>CREATE TABLE/TYPE … IF NOT EXISTS</code> does a catalog pre-check and then an insert, and the two steps aren't atomic. Race the same name from two connections and one gets a <code>unique_violation</code> on <code>pg_class</code> &mdash; from the statement that reads like it can't fail." },
+  { slug: "cdc-carries-no-default", date: "2026-05-25", engine: "Cross-cutting", label: "The replication stream never tells you the column default", dek: "Neither pgoutput nor the MySQL binlog carries a column's DEFAULT. Forward an <code>ADD COLUMN … DEFAULT now()</code> over CDC and the target re-evaluates the default independently &mdash; so every pre-existing row gets a <em>different</em> value than the source's backfill." },
   { slug: "replica-identity-full-updates", date: "2026-05-28", engine: "Postgres", label: "REPLICA IDENTITY FULL ate our UPDATEs", dek: "Building an UPDATE's <code>WHERE</code> over every old column works forever on int/varchar, then a <code>jsonb</code> value fails the equality round-trip, the UPDATE matches zero rows, and idempotency tolerance swallows the miss." },
   { slug: "redact-two-engines", date: "2026-05-30", engine: "Cross-cutting", label: "One redaction flag, two engines, two behaviors", dek: "<code>--redact randomize:int:100000,200000</code> into a SMALLINT column loud-refused on a Postgres target and silently clamped <em>every</em> row to <code>32767</code> on a MySQL one &mdash; turning an anonymization rule into a constant, and a compliance guarantee into a compliance failure." },
   { slug: "mysql-enum-emoji", date: "2026-05-30", engine: "MySQL & Vitess", label: "MySQL turned our emoji into '?'", dek: "MySQL substitutes <code>?</code> for 4-byte UTF-8 in ENUM/SET <em>labels</em> at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it." },
+  { slug: "mysql-time-is-a-duration", date: "2026-05-31", engine: "MySQL & Vitess", label: "MySQL TIME is a duration, not a time of day", dek: "A MySQL <code>TIME</code> ranges <code>-838:59:59</code> to <code>838:59:59</code> and models elapsed duration, not clock time. Map it to Postgres <code>time</code> by name and any negative or over-24-hour value has nowhere to go &mdash; the target is <code>interval</code>." },
+  { slug: "postgres-text-no-nul-byte", date: "2026-06-02", engine: "Postgres", label: "Postgres text can't hold a NUL byte", dek: "<code>text</code>/<code>varchar</code>/<code>char</code> reject an embedded <code>0x00</code> with SQLSTATE 22021; MySQL char/text store it fine. Over COPY the rejection surfaces far from the offending row and reads cryptically &mdash; and stripping the byte would be silent corruption." },
   { slug: "olap-workload-truncation", date: "2026-06-07", engine: "MySQL & Vitess", label: "Setting workload=olap silently truncated our chunked reads", dek: "A one-line fix to lift vtgate's 100k-row cap set <code>workload=olap</code> session-wide; the parallel chunked reader inherited it and each chunk streamed only a prefix, so a 1.5M-row migrate copied 7,536 rows and exited 0 with <code>migration complete</code>." },
   { slug: "postgres-slot-leaks", date: "2026-06-11", engine: "Postgres", label: "Replication slots don't die with your process", dek: "A slot is a promise the server keeps until you drop it; a crashed backup, a refused cold-start, and a week-one leak each pinned WAL on the source until the disk filled." },
   { slug: "binlog-comment-truncate", date: "2026-06-13", engine: "MySQL & Vitess", label: "A comment hid a TRUNCATE from CDC", dek: "A leading <code>-- comment</code> on a <code>TRUNCATE</code> made a CDC reader miss it entirely; the source emptied, the target kept every row, forever." },
   { slug: "vstream-throttle-blind", date: "2026-06-13", engine: "MySQL & Vitess", label: "vtgate erases the throttle signal", dek: "The one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one." },
   { slug: "zero-value-config-trap", date: "2026-06-15", engine: "Cross-cutting", label: "The zero value is a loaded gun", dek: "A config field that &ldquo;defaults on&rdquo; silently defaults <em>off</em> for every caller that didn't go through the CLI, because in Go every unset field gets the zero value. Twice, with real database consequences." },
+  { slug: "binlog-transaction-compression", date: "2026-06-17", engine: "MySQL & Vitess", label: "A whole transaction in one zstd binlog event", dek: "MySQL 8.0.20+ can pack an entire transaction into a single compressed <code>TRANSACTION_PAYLOAD_EVENT</code>. A reader without a handler applies nothing and freezes its position with no error &mdash; and the server zeroes the inner events' <code>end_log_pos</code>, so a naive resume restarts mid-payload and dies." },
+  { slug: "vitess-per-shard-primary-key", date: "2026-06-18", engine: "MySQL & Vitess", label: "Your primary key is only unique per shard", dek: "vtgate merges every Vitess/PlanetScale shard into one logical stream, but per-shard id ranges mean the same primary-key value legitimately exists on several shards. Copy them into one target table and the collisions silently overwrite &mdash; exit 0, rows short." },
+  { slug: "mysql-enum-set-binlog-encoding", date: "2026-06-20", engine: "MySQL & Vitess", label: "ENUM is an ordinal and SET is a bitmask on the wire", dek: "In a raw binlog row event a MySQL <code>ENUM</code> is its 1-based ordinal and a <code>SET</code> is a numeric bitmask; the member-name list lives only in the table definition. Decode without the schema and <code>SET('a','c')</code> becomes <code>&quot;5&quot;</code>. Snapshot and VStream hand you text, so it hides until raw CDC." },
   { slug: "sqlite-decimal-affinity", date: "2026-06-27", engine: "SQLite & D1", label: "SQLite's DECIMAL is a suggestion", dek: "Declare a column <code>DECIMAL(10,2)</code> and you get NUMERIC affinity, which stores <code>19.99</code> as <code>19.989999999999998</code>. Not a rounding bug — an engine storage property, and the real predicate is dyadic representability." },
   { slug: "sqlite-wal-checkpoint-starvation", date: "2026-06-28", engine: "SQLite & D1", label: "One long-lived reader, 75 GB of WAL", dek: "A continuous-CDC run watched the <code>-wal</code> file grow to 75 GB in 52 minutes while the table it tracked stayed bounded; one idle reader's snapshot pinned every superseded page. Kill the process and it collapsed to ~0.6 GB." },
   { slug: "vitess-tx-killer-wan", date: "2026-06-28", engine: "MySQL & Vitess", label: "The 20-second guillotine over a WAN", dek: "With no statement pipelining, an N-row apply costs N round-trips; every batch big enough to be efficient overran Vitess's 20&nbsp;s timeout and every batch small enough to commit crawled. A self-tuning system converged to a stall." },
@@ -4738,6 +4747,419 @@ WHERE slot_type = 'logical';
   <li><code>pg_logical_emit_message</code> (a WAL write with no user-data change) — <a href="https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-DBOBJECT">logical decoding message functions</a>.</li>
   <li>Patroni permanent slots &amp; slot failover — <a href="https://patroni.readthedocs.io/en/latest/dynamic_configuration.html">Patroni dynamic configuration</a>.</li>
   <li>sluice's Postgres source prep and the idle-slot mitigations — <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: Postgres LSN is timeline-scoped -----------------------
+write(
+  "field-notes/postgres-lsn-timeline-scoped",
+  page({
+    slug: "field-notes/postgres-lsn-timeline-scoped",
+    title: "A Postgres LSN means nothing without its timeline",
+    subtitle: "A logical-replication LSN is only comparable within a (system_id, timeline) tuple. Resume after a PITR or a promotion and the same slot name and same stored LSN point into a different WAL reference frame — the source streams from it happily, and events are silently skipped or replayed.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — Postgres logical-replication (slot-based) source, resume after a source-side PITR / standby promotion / base-backup clone. Internally ADR-0051 (a severity-A finding from a Postgres-internals audit).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A CDC stream resumed against a source that had been point-in-time-restored, picked up from its persisted <code>(slot, lsn)</code> position, and silently diverged. No error, no gap in the logs. The slot still existed by name; the stored LSN was still a valid-looking number; the source streamed WAL from it without complaint. But the rows that landed were not the rows that should have.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>A Postgres LSN is not a global coordinate. It is only meaningful within a <code>(system_id, timeline)</code> tuple: the <code>system_id</code> identifies a specific cluster, the timeline identifies a specific branch of its WAL history. LSN values from one timeline are simply not comparable to LSN values from another. Three ordinary operational events change that reference frame out from under a stored position:</p>
+<ul>
+  <li>a <strong>standby promotion</strong> increments the timeline (same <code>system_id</code>, new timeline);</li>
+  <li>a <strong>PITR</strong> can produce a new timeline within the same cluster, or a fresh cluster from a base backup (new <code>system_id</code>);</li>
+  <li>pointing the tool at a <strong>different instance</strong> that happens to share the DSN host:port shape (a clone) — new <code>system_id</code> entirely.</li>
+</ul>
+<p>The replication protocol hands you the identity on a plate — <code>IDENTIFY_SYSTEM</code> returns <code>(systemid, timeline, xlogpos, dbname)</code> before <code>START_REPLICATION</code> — but it is easy to call it only on cold-start to read <code>xlogpos</code> and discard the rest. Do that, and on resume you send the old LSN into the new timeline's WAL and the server obliges. The divergence is silent because nothing on either side is looking at the mismatch.</p>
+<p>The sharp contrast is MySQL: a GTID set from a different <code>server_uuid</code> simply fails <code>GTID_SUBSET</code> against the new source's executed set, so the same class refuses itself for free. Postgres's raw LSN carries no such self-identifying provenance — you have to pin it yourself.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- capture the identity the LSN belongs to, before you trust the LSN:
+IDENTIFY_SYSTEM;
+--  systemid            | timeline | xlogpos   | dbname
+--  7382...             |        1 | 0/1A2B3C4 | app
+
+-- promote a standby (timeline -> 2), or PITR, then reconnect and:
+IDENTIFY_SYSTEM;
+--  systemid            | timeline | xlogpos   | dbname
+--  7382...             |        2 | 0/95F00A0 | app
+--            same slot name, same stored LSN 0/1A2B3C4 — but timeline 2's
+--            WAL frame. Streaming from it is silently wrong.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice pins <code>(SystemID, Timeline)</code> from <code>IDENTIFY_SYSTEM</code> onto the persisted position token and re-issues <code>IDENTIFY_SYSTEM</code> on every reconnect — <em>before</em> the slot-existence check, so a diverged source surfaces "source identity has changed" rather than a misleading "slot missing." On divergence it names both the old and new <code>(systemid, timeline)</code> so an operator can confirm the change matches their intended PITR/promotion, and refuses by wrapping the same <code>position-invalid</code> sentinel that routes a missing slot to a loud cold-start fall-through. There is deliberately no <code>--ignore-source-identity-change</code> flag: the old LSN is <em>by definition</em> meaningless against the new source, so "stay strict" is the only honest semantic. (Legacy tokens with no pin are accepted once, with an INFO line, then pinned going forward.)</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>If you persist a Postgres LSN, persist the <code>(system_id, timeline)</code> it belongs to alongside it, and compare on every reconnect. A stored replication position is a coordinate in a reference frame, not an absolute address — and the ordinary HA events you most want to survive (failover, restore) are exactly the ones that change the frame while leaving the slot name and the number looking valid. Unlike a GTID, a bare LSN won't catch its own staleness for you; that check is yours to write, and its absence is a silent-loss class.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres replication protocol — <a href="https://www.postgresql.org/docs/current/protocol-replication.html"><code>IDENTIFY_SYSTEM</code> and <code>START_REPLICATION</code></a> (the identity tuple returned before streaming).</li>
+  <li>Timelines and how promotion/PITR create them — <a href="https://www.postgresql.org/docs/current/continuous-archiving.html#BACKUP-TIMELINES">WAL timelines</a>.</li>
+  <li>sluice's Postgres source preparation — <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: pgoutput streaming parse vs emit ----------------------
+write(
+  "field-notes/pgoutput-streaming-abort",
+  page({
+    slug: "field-notes/pgoutput-streaming-abort",
+    title: "proto_version lets you parse streaming; only streaming='on' emits it",
+    subtitle: "Two pgoutput knobs are easy to conflate. The receiver flag equips you to parse streamed transactions; a separate publisher flag makes the server actually send them. The gap between them hides a silent-loss shape: a dropped StreamAbort leaves already-committed chunks on the target.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — Postgres logical replication via <code>pgoutput</code>, a defensive audit of the streaming-protocol dispatch. Internally ADR-0055 (finding F1 of a Postgres-internals audit).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A protocol audit found a <code>default:</code> branch in the WAL dispatcher that silently skipped <code>StreamAbortMessageV2</code>. Harmless in the tool's current configuration — but one config change away from durable, undetectable divergence. The interesting part is <em>why</em> it was latent, which is a pair of pgoutput knobs that look like one.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>pgoutput negotiates streaming through two independent capabilities on <code>START_REPLICATION</code>:</p>
+<ul>
+  <li><strong><code>proto_version</code> &ge; 2</strong> equips the <em>receiver</em> to parse the streaming frames — <code>StreamStart</code> / <code>StreamStop</code> / <code>StreamCommit</code> / <code>StreamAbortV2</code> — for transactions that exceed <code>logical_decoding_work_mem</code> (default 64&nbsp;MB) at the source.</li>
+  <li><strong><code>streaming = 'on'</code></strong> (PG&nbsp;14+) or <strong><code>'parallel'</code></strong> (PG&nbsp;16+) makes the <em>publisher</em> actually emit those frames. Pass <code>proto_version = 2</code> <em>without</em> it and an oversized transaction is buffered and spilled to disk server-side, then delivered as one ordinary begin / rows / commit unit after it fully decodes.</li>
+</ul>
+<p>Parsing capability and emission are separate switches. Now the trap: suppose streaming is enabled (a config drift, a future change) and a consumer maps each streamed chunk to its own target transaction — a reasonable "one boundary → one commit" design. Chunk 1 commits durably on the target. Chunk 2 commits. Chunk N commits. Then the source <em>rolls the transaction back</em> and emits <code>StreamAbortMessageV2</code>. Drop that message and the N chunks stay committed on the target while the source has no record of them. The target now carries rows the source rolled back.</p>
+<p>What makes it nasty is the <em>shape</em> of the loss. It is not a missing-rows gap that a row-count or checksum diff would catch — it is <em>extra</em> rows relative to the post-abort source, and nothing upstream is signalling their existence.</p>
+
+<h2 id="repro">The repro (the two knobs)</h2>
+<pre><code>${esc(`-- receiver equipped to PARSE streaming, but publisher not asked to EMIT it:
+START_REPLICATION SLOT s LOGICAL 0/0 (proto_version '2', publication_names 'p');
+--   a 200 MB transaction spills to pg_replslot/<slot>/ and arrives as ONE
+--   begin/rows/commit unit. No StreamStart ever appears.
+
+-- ask the publisher to emit it too:
+START_REPLICATION SLOT s LOGICAL 0/0
+  (proto_version '2', streaming 'on', publication_names 'p');
+--   now the same txn arrives as StreamStart / rows / StreamStop chunks,
+--   and a source ROLLBACK arrives as StreamAbortV2 — which a consumer
+--   MUST act on, not skip.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice runs <code>proto_version = 2</code> deliberately <em>without</em> <code>streaming</code>, so one source transaction maps to one target transaction (the alignment its batched apply depends on) and oversized transactions are the source's memory problem, not a target-consistency problem. The audit fix replaces the silent <code>default:</code> skip with an explicit <code>StreamAbortMessageV2</code> arm that refuses loudly if a streamed abort is ever seen — so a future flip of the publisher flag can't quietly resurrect the extra-rows class. (The spill it trades for is now observable too: PG&nbsp;14+ exposes <code>spill_txns</code> / <code>spill_bytes</code> in <code>pg_stat_replication_slots</code>.)</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When a protocol negotiates a capability from both ends, "I can parse it" and "you will send it" are different switches, and the interesting failures live in the gap. Enumerate the messages a capability <em>could</em> deliver even if your current config never triggers them, and make the ones you don't handle <strong>refuse loudly</strong> rather than fall through a silent <code>default:</code> — because the config that starts triggering them is one flag away, and a protocol message you drop is a decision you made without knowing it. Watch especially for loss that shows up as <em>extra</em> committed state rather than a gap: checksums and row counts are built to find gaps.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>pgoutput protocol &amp; the <code>streaming</code> option — <a href="https://www.postgresql.org/docs/current/protocol-logical-replication.html">logical streaming replication protocol</a> and <a href="https://www.postgresql.org/docs/current/sql-createsubscription.html"><code>streaming</code> subscription option</a>.</li>
+  <li>Streaming-of-in-progress-transactions &amp; the spill counters — <a href="https://www.postgresql.org/docs/current/view-pg-stat-replication-slots.html"><code>pg_stat_replication_slots</code></a>.</li>
+  <li>How sluice maps source transactions to target transactions — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: CREATE IF NOT EXISTS is not atomic --------------------
+write(
+  "field-notes/create-if-not-exists-race",
+  page({
+    slug: "field-notes/create-if-not-exists-race",
+    title: "CREATE IF NOT EXISTS is not a lock",
+    subtitle: "CREATE TABLE / TYPE … IF NOT EXISTS does a catalog pre-check and then an insert, and those two steps aren't atomic against a concurrent creation of the same name. Race it and one side gets a unique_violation on pg_class — from the statement that reads like it can't fail.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — Postgres target, parallel schema build / parallel restore creating objects concurrently. Internally the catalog-race retry wrapper (control table, then the index-build path — live-caught during a parallel restore).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Two connections ran <code>CREATE TABLE … IF NOT EXISTS</code> for the same name at nearly the same instant, and one of them failed with <code>ERROR: duplicate key value violates unique constraint "pg_class_relname_nsp_index" (SQLSTATE 23505)</code>. From the statement whose entire purpose is to be a safe no-op when the object already exists.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p><code>IF NOT EXISTS</code> is not a lock and not atomic. It is a two-step operation: check the system catalog (<code>pg_class</code> for a relation, <code>pg_type</code> for a type) for the name, and if absent, insert the catalog row. Two sessions can both pass the "absent" check before either inserts, and then the second insert collides on the catalog's own unique index — <code>pg_class_relname_nsp_index</code> for a table/index, <code>pg_type_typname_nsp_index</code> for a type — surfacing as SQLSTATE <code>23505 unique_violation</code>. The guard reads like idempotence; under concurrency it is a check-then-act race, and Postgres enforces name uniqueness at the catalog layer regardless of the friendly clause.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- two psql sessions, interleaved:
+-- session A                         -- session B
+BEGIN;
+                                     BEGIN;
+CREATE TABLE IF NOT EXISTS t (id int);
+                                     CREATE TABLE IF NOT EXISTS t (id int);
+COMMIT;                              -- blocks on A, then:
+                                     -- ERROR: duplicate key value violates
+                                     --   unique constraint
+                                     --   "pg_class_relname_nsp_index" (23505)`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice retries the failing statement — but only on the narrow, provably-benign shape: a <code>23505</code> whose constraint is a <em>catalog</em> index (<code>pg_class_relname_nsp_index</code> / <code>pg_type_typname_nsp_index</code>), which means "someone else just created this exact object" and the correct outcome (the object exists) has been reached. A <code>23505</code> on a <em>user</em> table's primary key or unique constraint is a genuine data conflict and stays loud — never swallowed by the retry. The same wrapper covers both the control-table setup and the concurrent index-build path.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p><code>IF NOT EXISTS</code> (and <code>CREATE OR REPLACE</code>, and most "make it exist" DDL) is a convenience, not a concurrency primitive — it removes the error when <em>you</em> ran it twice in sequence, not when two workers run it at once. If your tool issues DDL in parallel, treat a catalog <code>23505</code> as an expected, retryable outcome of the race, and scope the retry tightly to the catalog constraint so a real user-data uniqueness violation still fails loudly. The tell that you have this bug is a "can't happen" duplicate-key error on a statement you thought was idempotent.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres on the non-atomicity of <code>IF NOT EXISTS</code> — <a href="https://www.postgresql.org/docs/current/sql-createtable.html"><code>CREATE TABLE</code></a> (the <code>IF NOT EXISTS</code> note) and the <a href="https://www.postgresql.org/docs/current/errcodes-appendix.html">error-code appendix</a> (<code>23505 unique_violation</code>).</li>
+  <li>The system catalogs that enforce name uniqueness — <a href="https://www.postgresql.org/docs/current/catalog-pg-class.html"><code>pg_class</code></a> / <a href="https://www.postgresql.org/docs/current/catalog-pg-type.html"><code>pg_type</code></a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: CDC carries no column default -------------------------
+write(
+  "field-notes/cdc-carries-no-default",
+  page({
+    slug: "field-notes/cdc-carries-no-default",
+    title: "The replication stream never tells you the column default",
+    subtitle: "Neither pgoutput nor the MySQL binlog carries a column's DEFAULT. Forward an ADD COLUMN … DEFAULT now() over CDC and the target re-evaluates the default on its own — so every row that shipped before the ALTER gets a different value than the source's backfill.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — cross-engine CDC schema-change forwarding, an <code>ALTER TABLE … ADD COLUMN … DEFAULT &lt;volatile&gt;</code> on the source mid-stream. Internally ADR-0058 (online schema-change forwarding) + Bug 90 / Bug 91.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A source added a column with a default — <code>ALTER TABLE orders ADD COLUMN created_at timestamptz DEFAULT now()</code> — while CDC was tailing it. The DDL forwarded to the target and new rows looked fine. But every row that had <em>already</em> shipped to the target before the ALTER carried a different <code>created_at</code> than the same row on the source. Silent per-row divergence across the whole pre-existing table.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>Two facts combine. First, <strong>the replication wire format does not carry a column's DEFAULT.</strong> pgoutput's <code>RelationMessage</code> describes each column's name, type OID, and flags — there is no <code>attdefault</code> slot. MySQL's <code>TableMapEvent</code> describes column types and metadata — there is no <code>COLUMN_DEFAULT</code>. A CDC schema-forwarder literally cannot see the default in the stream; it only sees the DDL text (or the relation shape).</p>
+<p>Second, <strong>a volatile default is evaluated at ALTER time, per row.</strong> When the source runs <code>ADD COLUMN … DEFAULT now()</code> (or <code>random()</code>, <code>gen_random_uuid()</code>, MySQL <code>UUID()</code> / <code>RAND()</code>), it backfills every existing row with the default <em>evaluated then, on the source</em>. If the target only replays the DDL, it re-evaluates the default independently — a different <code>now()</code>, different random values, different UUIDs — for its own copy of those rows. The two backfills disagree, row by row. A <em>constant</em> default (<code>DEFAULT 0</code>, <code>DEFAULT 'active'</code>) is safe precisely because it evaluates identically on both sides; the failure dispatches on the default's <strong>volatility class</strong>, not on any one function.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- source, with CDC tailing and rows already replicated to the target:
+ALTER TABLE orders ADD COLUMN created_at timestamptz DEFAULT now();
+--   source backfills existing rows with the ALTER-time now(), e.g.
+--   2026-05-25 10:00:00+00 for every pre-existing row.
+
+-- target, replaying only the DDL:
+ALTER TABLE orders ADD COLUMN created_at timestamptz DEFAULT now();
+--   target backfills the SAME rows with ITS now(), e.g.
+--   2026-05-25 10:00:07+00 — 7 seconds off, every row, silently.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice classifies the default's volatility when it forwards an <code>ADD COLUMN</code>. A constant/immutable default is safe to replay as-is. A <em>volatile</em> default (time, random, UUID, sequence <code>nextval</code>) cannot be reconstructed identically from the DDL alone, so sluice does not let the target re-evaluate it — it forwards the column and drives an explicit, source-authoritative backfill of the already-shipped rows (or refuses loudly for the shapes it doesn't forward), rather than trusting two independent evaluations to agree. Sequence defaults get their own volatility classification (a <code>nextval</code> is as non-reproducible as <code>now()</code>).</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A replication stream carries <em>data changes</em>, not the schema's generative rules — the DEFAULT is metadata that lives in the catalog, and neither pgoutput nor the binlog puts it on the wire. So "replay the DDL on the target" is only correct when the default is a constant. The moment a default is volatile, the source's ALTER-time backfill and the target's replayed backfill are two independent evaluations of a non-deterministic expression, and they will not match. If you forward schema changes over CDC, classify default volatility explicitly and treat volatile defaults as data to be copied from the source, never as DDL to be re-run.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>pgoutput <code>RelationMessage</code> (no default field) — <a href="https://www.postgresql.org/docs/current/protocol-logicalrep-message-formats.html">logical replication message formats</a>.</li>
+  <li>Postgres function volatility categories — <a href="https://www.postgresql.org/docs/current/xfunc-volatility.html">function volatility</a>.</li>
+  <li>MySQL binlog <code>TABLE_MAP_EVENT</code> — <a href="https://dev.mysql.com/doc/dev/mysql-server/latest/classbinary__log_1_1Table__map__event.html">Table_map_event</a>.</li>
+  <li>How sluice handles source schema changes during a sync — <a href="/docs/schema-changes/">Schema changes during a sync</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: MySQL TIME is a duration ------------------------------
+write(
+  "field-notes/mysql-time-is-a-duration",
+  page({
+    slug: "field-notes/mysql-time-is-a-duration",
+    title: "MySQL TIME is a duration, not a time of day",
+    subtitle: "A MySQL TIME column ranges -838:59:59 to 838:59:59 and models elapsed duration, not clock time. Postgres time is a time-of-day, 00:00 to 24:00 — so any negative or over-24-hour MySQL TIME has no home there. The faithful target is interval.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL &rarr; Postgres migration of a <code>TIME</code> column. Internally the <code>TIME &rarr; ir.Interval</code> type mapping.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A MySQL-to-Postgres migration mapped a <code>TIME</code> column to Postgres <code>time</code> by name — the obvious pairing — and rows carrying values like <code>500:30:00</code> (a stopwatch total) or <code>-12:30:00</code> (a negative offset) had nowhere to land. The names match; the semantics do not.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>MySQL's <code>TIME</code> is a <strong>signed duration</strong>, documented range <code>-838:59:59</code> to <code>838:59:59</code> — roughly &plusmn;35 days. It is designed to hold elapsed time (a lap time, a total worked, a delta), which is why it goes negative and well past 24 hours. Postgres <code>time</code> is a <strong>time of day</strong>: <code>00:00:00</code> to <code>24:00:00</code>, a point on the clock, with no notion of negative or "more than a day." They share a name and a <code>HH:MM:SS</code> spelling, and diverge completely at the edges. Any MySQL <code>TIME</code> outside <code>[00:00, 24:00)</code> — negative, or over 24 hours — simply cannot be represented as a Postgres <code>time</code>. The correct Postgres home for a duration is <code>interval</code>, which is signed and unbounded in exactly the way <code>TIME</code> needs.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- MySQL: TIME holds durations, signed, well past 24h
+CREATE TABLE laps (id INT, elapsed TIME);
+INSERT INTO laps VALUES (1, '500:30:00'), (2, '-12:30:00');  -- both valid
+
+-- Postgres time is a clock reading — these have no representation:
+SELECT '500:30:00'::time;   -- ERROR: date/time field value out of range
+SELECT '-12:30:00'::time;   -- ERROR: invalid input syntax for type time
+-- the faithful target:
+SELECT '500:30:00'::interval;  -- 500:30:00
+SELECT '-12:30:00'::interval;  -- -12:30:00`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice maps MySQL <code>TIME</code> to the IR's <code>Interval</code> type, which lands on Postgres <code>interval</code> — so the full signed, &plusmn;838-hour range round-trips instead of clipping or erroring at the <code>time</code> boundary. The name-based <code>TIME &rarr; time</code> pairing is exactly the trap the IR exists to avoid: translation is by <em>semantics</em>, resolved in one place, not by matching type spellings across engines.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Two databases can give a type the same name and the same surface syntax and mean different things by it — MySQL <code>TIME</code> is a <em>duration type</em> wearing a time-of-day costume. When you translate types across engines, map on the value's <em>semantics and range</em>, not its name: the question isn't "does Postgres have a <code>time</code>?" but "what does MySQL let this column hold, and what's the Postgres type that holds all of it?" The answer for <code>TIME</code> is <code>interval</code>, and you only learn that by looking at the range, not the label.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL <code>TIME</code> range and duration semantics — <a href="https://dev.mysql.com/doc/refman/8.0/en/time.html">The <code>TIME</code> Type</a> (&minus;838:59:59 … 838:59:59).</li>
+  <li>Postgres <code>time</code> vs <code>interval</code> — <a href="https://www.postgresql.org/docs/current/datatype-datetime.html">date/time types</a>.</li>
+  <li>sluice's type-mapping policy — <a href="/docs/type-mapping/">Type mapping</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: Postgres text can't hold a NUL byte -------------------
+write(
+  "field-notes/postgres-text-no-nul-byte",
+  page({
+    slug: "field-notes/postgres-text-no-nul-byte",
+    title: "Postgres text can't hold a NUL byte",
+    subtitle: "text, varchar, and char reject an embedded 0x00 with SQLSTATE 22021; MySQL char/text store it without complaint. A cross-engine copy hits it, and because it fires inside the COPY protocol the error lands far from the offending row.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL &rarr; Postgres copy of a text column containing an embedded NUL byte. Internally the Postgres <code>prepareValue</code> NUL guard.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A cross-engine copy of a perfectly ordinary <code>VARCHAR</code> column failed on the Postgres side with a cryptic <code>invalid byte sequence for encoding "UTF8": 0x00</code> — and because it surfaced inside the bulk <code>COPY</code> stream, the error landed nowhere near the row that carried the byte. The source column held a string with an embedded <code>0x00</code> (a stray NUL from an upstream C string, a serialized blob mislabeled as text, a bad import), which MySQL had stored without objection.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>Postgres text types — <code>text</code>, <code>varchar</code>, <code>char</code> — <strong>cannot store a <code>0x00</code> byte</strong>. The NUL is reserved as a string terminator in the server's internal C representation, so an embedded one is rejected as an invalid byte sequence (SQLSTATE <code>22021</code>, character-not-in-repertoire). MySQL's <code>CHAR</code>/<code>VARCHAR</code>/<code>TEXT</code> have no such rule — they treat the NUL as an ordinary byte and store it. So the value is legal on one engine and illegal on the other, and a migration is exactly where the two meet. The diagnosis is made harder by <code>COPY</code>: the failure fires while streaming the bulk buffer, so the error message is detached from the individual offending row.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- MySQL stores an embedded NUL happily:
+CREATE TABLE t (id INT, s VARCHAR(64));
+INSERT INTO t VALUES (1, CONCAT('a', CHAR(0), 'b'));   -- OK, 3 bytes
+
+-- Postgres rejects the same bytes in a text type:
+SELECT E'a\\x00b'::text;
+--   ERROR: invalid byte sequence for encoding "UTF8": 0x00  (SQLSTATE 22021)
+-- bytea holds arbitrary bytes, NUL included:
+SELECT E'\\x610062'::bytea;   -- \\x610062, no complaint`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice refuses the value loudly with a coded error (<code>SLUICE-E-VALUE-NUL-BYTE</code>) that names the column and the constraint, rather than letting the opaque COPY-stream error surface far from the row — and rather than the tempting silent "fix" of stripping the NUL, which would quietly alter the data. The data-preserving path, when you genuinely need to carry those bytes, is to target <code>bytea</code>, which stores arbitrary binary including <code>0x00</code>. Loud refusal with the remedy named beats a cryptic wire error or a silent mutation.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>"It's a string column on both sides" is not the same as "the same bytes are legal on both sides." Postgres text is Unicode text with a hard rule — no <code>0x00</code> — that MySQL text does not share, so a value that lives happily in MySQL is a hard error in Postgres. When the two disagree about what bytes a type may hold, the honest options are to refuse loudly (naming the column and the fix) or to route the data to a type that can hold it (<code>bytea</code>); silently stripping the offending byte to make the insert succeed is data corruption wearing the disguise of a bug fix.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres on the NUL character in text — <a href="https://www.postgresql.org/docs/current/datatype-character.html">character types</a> and SQLSTATE <code>22021</code> in the <a href="https://www.postgresql.org/docs/current/errcodes-appendix.html">error-code appendix</a>.</li>
+  <li><code>bytea</code> for arbitrary bytes — <a href="https://www.postgresql.org/docs/current/datatype-binary.html">binary data types</a>.</li>
+  <li>sluice's value contract and coded refusals — <a href="/docs/error-codes/">Error &amp; exit codes</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: MySQL binlog transaction compression ------------------
+write(
+  "field-notes/binlog-transaction-compression",
+  page({
+    slug: "field-notes/binlog-transaction-compression",
+    title: "A whole transaction in one zstd binlog event",
+    subtitle: "MySQL 8.0.20+ can pack an entire transaction into a single compressed TRANSACTION_PAYLOAD_EVENT. A binlog reader without a handler for it applies nothing and freezes its position with no error — and the server zeroes the inner events' end_log_pos, so a naive resume restarts mid-payload and dies.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL &rarr; target CDC from a source with <code>binlog_transaction_compression = ON</code>. Internally the <code>TRANSACTION_PAYLOAD_EVENT</code> decode + resume-alignment fix.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>CDC from a MySQL 8.0.20+ source that had <code>binlog_transaction_compression</code> enabled (common for WAN replication and disk savings) silently applied nothing for compressed transactions: rows never landed, the stream position froze, and there was no error. Turning the setting off "fixed" it — which is the tell that the reader was missing an event type, not hitting a bug.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>With <code>binlog_transaction_compression = ON</code>, the server packs a whole transaction — its <code>TABLE_MAP</code>, its <code>ROWS</code> events, its <code>XID</code> — into a single zstd-compressed <code>TRANSACTION_PAYLOAD_EVENT</code>. A binlog consumer that doesn't recognize that event type simply skips it: zero rows applied, position advanced past it, no error raised. Everything the transaction did is inside a payload the reader walked past.</p>
+<p>There is a second, sharper trap in the resume path. Inside the payload, the server <strong>zeroes the <code>end_log_pos</code> of the inner events</strong> (they no longer have a meaningful standalone file offset — they live inside the outer event). A resumer that stamps its checkpoint from an inner event's header therefore records position <code>0</code>, and on warm-resume restarts <em>inside</em> the payload — where it finds row events with no preceding table map and dies with <code>"no corresponding table map event."</code> The correct checkpoint is the <em>outer</em> <code>TRANSACTION_PAYLOAD_EVENT</code>'s <code>LogPos</code> (the transaction boundary). GTID-mode streams dodge this half, because the <code>GTIDEvent</code> precedes the payload and carries the resumable coordinate.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- source (MySQL 8.0.20+):
+SET GLOBAL binlog_transaction_compression = ON;
+INSERT INTO t VALUES (1), (2), (3);   -- one compressed txn
+
+-- in the binlog, instead of TABLE_MAP + WRITE_ROWS + XID you now see:
+--   Transaction_payload   (compression: ZSTD)
+--     └─ TABLE_MAP / WRITE_ROWS / XID  (inner; end_log_pos = 0)
+-- a reader with no Transaction_payload handler applies 0 of the 3 rows,
+-- reports no error, and advances past it.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice decompresses the <code>TRANSACTION_PAYLOAD_EVENT</code> and dispatches its inner events as if they had arrived uncompressed, so a compressed source is transparent. For the resume half, it stamps its checkpoint from the <em>outer</em> payload event's <code>LogPos</code> (the transaction boundary), never an inner event's zeroed <code>end_log_pos</code> — so a warm-resume lands on a transaction boundary and never mid-payload. Both halves are pinned by regression tests, because the failure only appears with the setting on and a resume across a compressed transaction.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A binlog reader's completeness is defined by the source settings it has <em>never seen</em>, not the ones it was tested against. <code>binlog_transaction_compression</code> is off by default, so a reader can pass every local test and silently drop every transaction the moment a DBA turns it on for bandwidth. Two lessons ride together: handle (or loudly refuse) every binlog event type the source <em>can</em> emit, not just the common ones; and when a container event rewrites its children's coordinates — here, zeroing inner <code>end_log_pos</code> — make sure your resume checkpoint comes from the coordinate that's still valid (the outer boundary), or your recovery path breaks exactly when you need it.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL binlog transaction compression — <a href="https://dev.mysql.com/doc/refman/8.0/en/binary-log-transaction-compression.html">binary log transaction compression</a> and the <a href="https://dev.mysql.com/doc/dev/mysql-server/latest/classbinary__log_1_1Transaction__payload__event.html"><code>Transaction_payload_event</code></a>.</li>
+  <li>sluice's MySQL CDC and resume model — <a href="/docs/how-sluice-copies/">How sluice copies your data</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: Vitess per-shard primary key --------------------------
+write(
+  "field-notes/vitess-per-shard-primary-key",
+  page({
+    slug: "field-notes/vitess-per-shard-primary-key",
+    title: "Your primary key is only unique per shard",
+    subtitle: "vtgate merges every Vitess/PlanetScale shard into one logical stream, but per-shard id ranges mean the same primary-key value legitimately exists on several shards. Copy them into one target table with that key and the collisions silently overwrite — exit 0, rows short.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — sharded Vitess / PlanetScale keyspace consolidated into a single target table. Internally Bug 152 + ADR-0048 (<code>--inject-shard-column</code>).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Consolidating a sharded Vitess keyspace into one target table finished clean — exit 0 — with fewer rows on the target than the sum of the shards. No error, no duplicate-key complaint. Rows from different shards that shared a primary-key value had silently overwritten each other.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>A sharded keyspace behind vtgate presents as <em>one</em> logical database, so it is natural to treat it as one source and copy it into one target table. But uniqueness in Vitess is <strong>per shard</strong>, not global: each shard runs its own MySQL with its own auto-increment range, and tenant-local or hash-partitioned ids mean primary-key value <code>42</code> can legitimately exist on shard <code>-80</code> and again on shard <code>80-</code>, as two entirely different rows. Merge those into a single target table whose primary key is that id, and the second insert of <code>42</code> collides with the first. If the copy uses an upsert/replace, the collisions silently overwrite; if it uses plain inserts, the target's own PK rejects them — either way the consolidated table is short, and unless you are diffing counts per shard it looks like a clean run.</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`-- vtgate presents one stream; the shards each own id 42:
+mysql> SHOW VITESS_SHARDS;
+--  customer/-80
+--  customer/80-
+-- shard -80: (id=42, name='alice')   shard 80-: (id=42, name='bob')
+
+-- consolidate into one target with id as PK:
+--   INSERT (42,'alice')  -> ok
+--   INSERT (42,'bob')    -> duplicate key / or REPLACE overwrites alice
+-- result: one row for id=42, one tenant silently lost.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice makes the shard identity part of the target key. With <code>--inject-shard-column NAME=VALUE</code> it adds a discriminator column carrying each source's shard identity and folds it into the target's primary/unique key, so <code>(shard, id)</code> is globally unique and no row is overwritten. The consolidation preflight discovers the shard set (via <code>SHOW VITESS_SHARDS</code>) and — critically — <strong>fails closed</strong> if it can't establish that the merged keys will be unique, rather than proceeding into a silent overwrite. (If your ids are already provably global — Vitess sequences, or UUIDs — you don't need the discriminator, but that has to be true, not assumed.)</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>"One connection endpoint" does not mean "one key space." A sharded database presented through a single proxy still enforces uniqueness at the shard, so any primary key that isn't provably global — anything backed by per-shard auto-increment or per-tenant numbering — collides the moment you consolidate. Before merging N sources into one table, prove the key is globally unique or make it so (add the shard discriminator to the key), and make the check fail <em>closed</em> — because the failure mode is silent overwrite, and a row-count that's merely "smaller than expected" is easy to rationalize away.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Vitess sharding &amp; per-shard uniqueness — <a href="https://vitess.io/docs/reference/features/sharding/">Vitess sharding</a> and <a href="https://vitess.io/docs/reference/features/vitess-sequences/">Vitess sequences</a> (the global-id escape hatch).</li>
+  <li>sluice multi-source consolidation — <a href="/docs/multi-database/">Migrate many databases or schemas</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: MySQL ENUM ordinal / SET bitmask on the wire ----------
+write(
+  "field-notes/mysql-enum-set-binlog-encoding",
+  page({
+    slug: "field-notes/mysql-enum-set-binlog-encoding",
+    title: "ENUM is an ordinal and SET is a bitmask on the wire",
+    subtitle: "In a raw binlog row event a MySQL ENUM cell is its 1-based ordinal and a SET cell is a numeric bitmask; the member-name list lives only in the table definition, never in the event. Decode without the schema and SET('a','c') becomes \"5\". Snapshot and VStream hand you text, so it hides until raw CDC.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — MySQL raw-binlog CDC of <code>ENUM</code> / <code>SET</code> columns. Internally Bug 145 (ENUM ordinal) + Bug 148 (SET bitmask).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A MySQL CDC stream delivered an <code>ENUM('small','medium','large')</code> value as <code>2</code> and a <code>SET('a','b','c')</code> value as <code>5</code> instead of <code>'medium'</code> and <code>'a,c'</code>. The same columns had round-tripped perfectly during the bulk-copy snapshot — the divergence appeared only once the raw binlog took over.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>MySQL stores <code>ENUM</code> and <code>SET</code> as integers and puts those integers, not the labels, on the binlog wire:</p>
+<ul>
+  <li>an <code>ENUM</code> cell in a <code>RowsEvent</code> is its <strong>1-based ordinal</strong> (<code>'medium'</code> &rarr; <code>2</code>);</li>
+  <li>a <code>SET</code> cell is a <strong>numeric bitmask</strong> (bit <em>i</em> &rarr; the <em>i</em>-th member; <code>'a','c'</code> &rarr; <code>0b101</code> = <code>5</code>), sized to the storage width.</li>
+</ul>
+<p>The mapping from those integers back to label strings lives <em>only</em> in the table definition — it is never in the row event. A CDC reader that doesn't join the event against the schema decodes the raw integer and emits <code>"2"</code> / <code>"5"</code>. What hides the bug is that the two <em>other</em> ways of reading the same data both resolve the labels for you: a snapshot via <code>database/sql</code> returns the text, and Vitess VStream returns the text — so everything looks correct until you hit the raw binlog path, where the integers are all you get. (And a bit set beyond the declared members must be an error, not silently dropped.)</p>
+
+<h2 id="repro">The repro</h2>
+<pre><code>${esc(`CREATE TABLE t (id INT, size ENUM('small','medium','large'), tags SET('a','b','c'));
+INSERT INTO t VALUES (1, 'medium', 'a,c');
+
+-- a snapshot query resolves the labels:
+SELECT size, tags FROM t;           -- 'medium', 'a,c'
+
+-- the raw binlog RowsEvent carries the integers:
+--   size = 2         (1-based ordinal of 'medium')
+--   tags = 5         (bitmask 0b101 = 'a' | 'c')
+-- decode without the ENUM/SET member list and you store "2" and "5".`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice carries the <code>ENUM</code>/<code>SET</code> member lists from the table's schema into the binlog decoder, so an ordinal is resolved back to its label and a bitmask is expanded to the comma-joined member set — matching exactly what the snapshot and VStream paths produce, so the two halves of a cold-start-then-CDC migration agree. A bitmask bit or ordinal outside the declared members is refused loudly rather than dropped, because a value the schema can't explain is a signal, not a row to guess at. This is a companion to a different <code>ENUM</code>/<code>SET</code> trap — <a href="/field-notes/mysql-enum-emoji/">MySQL substituting <code>?</code> for a 4-byte-UTF-8 label at <code>CREATE TABLE</code></a> — two independent ways these "simple" types are sneakier than they look.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p><code>ENUM</code> and <code>SET</code> are integers in a trenchcoat: an ordinal and a bitmask on disk and on the binlog wire, with the crucial integer&rarr;label dictionary held only in the table definition. Any decoder that reads the raw replication stream must join it against the schema to recover meaning — and the danger is that the easy paths (query results, VStream) do that join for you, so the raw-binlog path is the one place the abstraction leaks, and it leaks silently as plausible-looking numbers. When a value's meaning lives in metadata separate from the value, make sure every read path has that metadata in hand.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL <code>ENUM</code> and <code>SET</code> storage (ordinal / bitmask) — <a href="https://dev.mysql.com/doc/refman/8.0/en/enum.html">The <code>ENUM</code> Type</a> and <a href="https://dev.mysql.com/doc/refman/8.0/en/set.html">The <code>SET</code> Type</a>.</li>
+  <li>Binlog row images — <a href="https://dev.mysql.com/doc/dev/mysql-server/latest/classbinary__log_1_1Rows__event.html"><code>Rows_event</code></a>.</li>
+  <li>sluice's cross-engine value contract — <a href="/docs/type-mapping/">Type mapping</a>.</li>
 </ul>
 `,
   })
