@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rewriting the whole manifest, once per chunk — sluice docs</title>
+<meta name="description" content="Every backup checkpoint re-wrote the entire manifest.json, schema included. Since the manifest grows with table count, the total was quadratic — a measured ~78 hours of pure manifest rewriting at 100k tables. And the two obvious ways to fix it are the same quadratic in disguise.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/field-notes/backup-manifest-quadratic/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="active" href="/field-notes/">Field Notes</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Field Notes</div><a class="lnk" href="/field-notes/">About these notes</a><a class="lnk" href="/field-notes/float-in-primary-key/"><span class="fn-date">2026-07-09</span>When the row's own identity gets rounded</a><a class="lnk" href="/field-notes/signed-manifest-chunk-binding/"><span class="fn-date">2026-07-09</span>A signature that verified green while restoring the wrong table's rows</a><a class="lnk" href="/field-notes/three-clouds-three-signatures/"><span class="fn-date">2026-07-09</span>Three clouds, three ways to return an ECDSA signature</a><a class="lnk" href="/field-notes/vstream-float-precision/"><span class="fn-date">2026-07-09</span>Vitess copy phase rounds your FLOATs</a><a class="lnk" href="/field-notes/xid-wraparound-cdc/"><span class="fn-date">2026-07-08</span>Comparing 32-bit transaction ids breaks after four billion of them</a><a class="lnk" href="/field-notes/d1-not-local-sqlite/"><span class="fn-date">2026-06-30</span>Cloudflare D1 is not your local SQLite</a><a class="lnk" href="/field-notes/planetscale-grow-reparent/"><span class="fn-date">2026-06-29</span>When PlanetScale un-acked our rows</a><a class="lnk" href="/field-notes/int64-json-boundary/"><span class="fn-date">2026-06-29</span>2^53 is a database boundary now</a><a class="lnk" href="/field-notes/vitess-tx-killer-wan/"><span class="fn-date">2026-06-28</span>The 20-second guillotine over a WAN</a><a class="lnk" href="/field-notes/sqlite-wal-checkpoint-starvation/"><span class="fn-date">2026-06-28</span>One long-lived reader, 75 GB of WAL</a><a class="lnk" href="/field-notes/sqlite-decimal-affinity/"><span class="fn-date">2026-06-27</span>SQLite's DECIMAL is a suggestion</a><a class="lnk" href="/field-notes/mysql-enum-set-binlog-encoding/"><span class="fn-date">2026-06-20</span>ENUM is an ordinal and SET is a bitmask on the wire</a><a class="lnk" href="/field-notes/vitess-per-shard-primary-key/"><span class="fn-date">2026-06-18</span>Your primary key is only unique per shard</a><a class="lnk" href="/field-notes/binlog-transaction-compression/"><span class="fn-date">2026-06-17</span>A whole transaction in one zstd binlog event</a><a class="lnk" href="/field-notes/zero-value-config-trap/"><span class="fn-date">2026-06-15</span>The zero value is a loaded gun</a><a class="lnk" href="/field-notes/vstream-throttle-blind/"><span class="fn-date">2026-06-13</span>vtgate erases the throttle signal</a><a class="lnk" href="/field-notes/binlog-comment-truncate/"><span class="fn-date">2026-06-13</span>A comment hid a TRUNCATE from CDC</a><a class="lnk" href="/field-notes/postgres-slot-leaks/"><span class="fn-date">2026-06-11</span>Replication slots don't die with your process</a><a class="lnk active" href="/field-notes/backup-manifest-quadratic/"><span class="fn-date">2026-06-11</span>Rewriting the whole manifest, once per chunk</a><a class="lnk" href="/field-notes/migrate-state-quadratic-blob/"><span class="fn-date">2026-06-10</span>One JSON blob in one row is a quadratic write</a><a class="lnk" href="/field-notes/vstream-snapshot-oom/"><span class="fn-date">2026-06-09</span>The cold-start that buffered a whole table into swap</a><a class="lnk" href="/field-notes/olap-workload-truncation/"><span class="fn-date">2026-06-07</span>Setting workload=olap silently truncated our chunked reads</a><a class="lnk" href="/field-notes/postgres-text-no-nul-byte/"><span class="fn-date">2026-06-02</span>Postgres text can't hold a NUL byte</a><a class="lnk" href="/field-notes/mysql-time-is-a-duration/"><span class="fn-date">2026-05-31</span>MySQL TIME is a duration, not a time of day</a><a class="lnk" href="/field-notes/mysql-enum-emoji/"><span class="fn-date">2026-05-30</span>MySQL turned our emoji into '?'</a><a class="lnk" href="/field-notes/redact-two-engines/"><span class="fn-date">2026-05-30</span>One redaction flag, two engines, two behaviors</a><a class="lnk" href="/field-notes/replica-identity-full-updates/"><span class="fn-date">2026-05-28</span>REPLICA IDENTITY FULL ate our UPDATEs</a><a class="lnk" href="/field-notes/cdc-carries-no-default/"><span class="fn-date">2026-05-25</span>The replication stream never tells you the column default</a><a class="lnk" href="/field-notes/create-if-not-exists-race/"><span class="fn-date">2026-05-24</span>CREATE IF NOT EXISTS is not a lock</a><a class="lnk" href="/field-notes/pgoutput-streaming-abort/"><span class="fn-date">2026-05-23</span>proto_version lets you parse streaming; only streaming='on' emits it</a><a class="lnk" href="/field-notes/postgres-lsn-timeline-scoped/"><span class="fn-date">2026-05-22</span>A Postgres LSN means nothing without its timeline</a><a class="lnk" href="/field-notes/numeric-array-flatten/"><span class="fn-date">2026-05-17</span>The pgx codec that flattened numeric[][]</a><a class="lnk" href="/field-notes/empty-object-vs-array/"><span class="fn-date">2026-05-10</span>{}: two characters, two types</a><a class="lnk" href="/field-notes/postgres-idle-slot-failover/"><span class="fn-date">2026-05-07</span>Every HA knob on, and the slot still vanished at failover</a><a class="lnk" href="/field-notes/mysql-load-data-charset/"><span class="fn-date">2026-05-05</span>One LOAD DATA can't load a BLOB and a JSON column</a><a class="lnk" href="/field-notes/mysql-json-where-cast/"><span class="fn-date">2026-05-04</span>MySQL won't match a JSON column by bind parameter</a></aside>
+  <main class="content">
+    <h1>Rewriting the whole manifest, once per chunk</h1>
+    <p class="subtitle">Every backup checkpoint re-wrote the entire manifest.json, schema included. Since the manifest grows with table count, the total was quadratic — a measured ~78 hours of pure manifest rewriting at 100k tables. And the two obvious ways to fix it are the same quadratic in disguise.</p>
+    <p class="fn-landed">Landed in sluice · 2026-06-11 · Cross-cutting</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#what-happened">What happened</a></li><li><a href="#why">Why (the mechanism)</a></li><li><a href="#what-sluice-does">What sluice does about it</a></li><li><a href="#lesson">The transferable lesson</a></li><li><a href="#sources">Primary sources</a></li></ul></nav>
+    
+<p class="fn-meta"><strong>Observed</strong> — <code>sluice backup full</code> of a many-table database; per-chunk and per-table checkpoints. Internally ADR-0086.</p>
+
+<h2 id="what-happened">What happened <a class="hlink" href="#what-happened" aria-label="Permalink to this section">#</a></h2>
+<p>Every per-chunk and per-table checkpoint during a backup re-marshaled the <em>entire</em> manifest — the full embedded schema along with it — and re-wrote the whole <code>manifest.json</code>. The manifest grows linearly with table count, and it was rewritten a number of times that also grows with table count, so the total checkpoint work was quadratic. A scale probe put a number on it: roughly <code>0.018·N + 2.77e-5·N²</code> seconds over N tables — about <strong>78 hours of pure manifest rewriting at 100,000 tables, ~322 days at a million</strong>. Every other part of the backup path is linear; this was the one super-linear wall.</p>
+
+<h2 id="why">Why (the mechanism) <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
+<p>It is the textbook <code>O(grows with N) × (done N times) = O(N²)</code>, hiding in plain sight because it is invisible at small scale: a backup of a few dozen tables rewrites a small file a few dozen times and finishes instantly, so nothing in local testing flags it. The checkpoints themselves can't just be thinned out — the crash contract (a crash leaves at most <code>tableParallelism</code> tables to redo) and the content-addressed upload-skip both depend on durable per-event progress. The work is load-bearing; the <em>full rewrite per event</em> is the waste.</p>
+
+<h2 id="what-sluice-does">What sluice does about it <a class="hlink" href="#what-sluice-does" aria-label="Permalink to this section">#</a></h2>
+<p>Split the in-progress manifest into a <strong>base written once</strong> (schema, anchor, encryption header, the pre-staged table entries — the heavy immutable parts) plus an <strong>append-only <code>manifest.progress.jsonl</code> sidecar</strong> — one compact JSON line per checkpoint, O(1) per event — folded back into a byte-identical self-contained <code>manifest.json</code> at success. That's the easy half. The instructive half is what they <em>didn't</em> do:</p>
+<ul>
+  <li>The sidecar append is a single <code>O_APPEND</code> write plus fsync — <strong>deliberately not the usual write-to-temp-then-rename</strong>. Append-then-rename re-copies the whole growing file on every call: the exact quadratic being removed, wearing the costume of a safe atomic write.</li>
+  <li>Object stores (S3/GCS/Azure) have no append primitive, and emulating one with read-modify-write re-copies the object every call — <strong>quadratic again</strong>. So the blob-store path keeps the legacy full-rewrite behavior, as a named, WARN-logged wart rather than a silent one.</li>
+</ul>
+
+<h2 id="lesson">The transferable lesson <a class="hlink" href="#lesson" aria-label="Permalink to this section">#</a></h2>
+<p>A metadata object that grows with your work and is rewritten once per unit of progress is silently O(n&sup2;), and it will pass every test you run at small scale and only surface as <em>days</em> at 100k. The fix is append-only rather than rewrite — but the trap has a second floor: the two most natural ways to make an append "safe" (write-to-tmp-and-rename, or read-modify-write on a store with no native append) each re-copy the whole file per call and quietly reintroduce the exact quadratic you set out to kill. When you replace an O(n&sup2;) rewrite, verify the replacement is genuinely O(1) per step and not an O(n) copy in disguise — and where the substrate can't give you a true append (object storage), say so out loud instead of shipping the quadratic silently. The same "stop rewriting the whole growing thing per checkpoint" lesson bit this project's <a href="/field-notes/migrate-state-quadratic-blob/">migration state store</a> too, there through MVCC and TOAST.</p>
+
+<h2 id="sources">Primary sources <a class="hlink" href="#sources" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li>POSIX <code>O_APPEND</code> atomic appends — <a href="https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html"><code>open()</code></a>.</li>
+  <li>Why object stores aren't append-friendly — <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#BasicsObjects">S3 objects are immutable (replace-whole-object)</a>.</li>
+  <li>sluice's backup format &amp; checkpoints — <a href="/docs/encrypted-backups/">Take encrypted backups</a>.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/field-notes/postgres-slot-leaks/">← Replication slots don't die with your process</a><a class="next" href="/field-notes/migrate-state-quadratic-blob/">One JSON blob in one row is a quadratic write →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/field-notes/backup-manifest-quadratic/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
