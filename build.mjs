@@ -153,6 +153,9 @@ const FIELD_NOTES = [
   { slug: "mysql-time-is-a-duration", date: "2026-05-31", engine: "MySQL & Vitess", label: "MySQL TIME is a duration, not a time of day", dek: "A MySQL <code>TIME</code> ranges <code>-838:59:59</code> to <code>838:59:59</code> and models elapsed duration, not clock time. Map it to Postgres <code>time</code> by name and any negative or over-24-hour value has nowhere to go &mdash; the target is <code>interval</code>." },
   { slug: "postgres-text-no-nul-byte", date: "2026-06-02", engine: "Postgres", label: "Postgres text can't hold a NUL byte", dek: "<code>text</code>/<code>varchar</code>/<code>char</code> reject an embedded <code>0x00</code> with SQLSTATE 22021; MySQL char/text store it fine. Over COPY the rejection surfaces far from the offending row and reads cryptically &mdash; and stripping the byte would be silent corruption." },
   { slug: "olap-workload-truncation", date: "2026-06-07", engine: "MySQL & Vitess", label: "Setting workload=olap silently truncated our chunked reads", dek: "A one-line fix to lift vtgate's 100k-row cap set <code>workload=olap</code> session-wide; the parallel chunked reader inherited it and each chunk streamed only a prefix, so a 1.5M-row migrate copied 7,536 rows and exited 0 with <code>migration complete</code>." },
+  { slug: "vstream-snapshot-oom", date: "2026-06-09", engine: "MySQL & Vitess", label: "The cold-start that buffered a whole table into swap", dek: "A 13&nbsp;GB PlanetScale table drove the process to ~41&nbsp;GB of RAM and got OOM-killed with zero rows written &mdash; because the VStream snapshot reader held the entire copy phase in memory. The buffer wasn't laziness; three engine behaviors forced it." },
+  { slug: "migrate-state-quadratic-blob", date: "2026-06-10", engine: "Cross-cutting", label: "One JSON blob in one row is a quadratic write", dek: "Storing all per-table progress as a single growing JSON blob, re-upserted on every checkpoint, is O(n&sup2;) &mdash; and on Postgres the amplification lands somewhere specific: a new tuple version plus a re-TOAST of the whole value, every time, on one hot row." },
+  { slug: "backup-manifest-quadratic", date: "2026-06-11", engine: "Cross-cutting", label: "Rewriting the whole manifest, once per chunk", dek: "Every backup checkpoint re-wrote the entire manifest.json &mdash; and since the manifest grows with table count, the total work was quadratic: a measured ~78 hours at 100k tables. The fix's two obvious cousins are the same quadratic in disguise." },
   { slug: "postgres-slot-leaks", date: "2026-06-11", engine: "Postgres", label: "Replication slots don't die with your process", dek: "A slot is a promise the server keeps until you drop it; a crashed backup, a refused cold-start, and a week-one leak each pinned WAL on the source until the disk filled." },
   { slug: "binlog-comment-truncate", date: "2026-06-13", engine: "MySQL & Vitess", label: "A comment hid a TRUNCATE from CDC", dek: "A leading <code>-- comment</code> on a <code>TRUNCATE</code> made a CDC reader miss it entirely; the source emptied, the target kept every row, forever." },
   { slug: "vstream-throttle-blind", date: "2026-06-13", engine: "MySQL & Vitess", label: "vtgate erases the throttle signal", dek: "The one in-band flag that says &ldquo;this stream is throttled, wait&rdquo; is deleted before any gRPC client can see it, so a throttled stream is indistinguishable from a hung one." },
@@ -5160,6 +5163,118 @@ SELECT size, tags FROM t;           -- 'medium', 'a,c'
   <li>MySQL <code>ENUM</code> and <code>SET</code> storage (ordinal / bitmask) — <a href="https://dev.mysql.com/doc/refman/8.0/en/enum.html">The <code>ENUM</code> Type</a> and <a href="https://dev.mysql.com/doc/refman/8.0/en/set.html">The <code>SET</code> Type</a>.</li>
   <li>Binlog row images — <a href="https://dev.mysql.com/doc/dev/mysql-server/latest/classbinary__log_1_1Rows__event.html"><code>Rows_event</code></a>.</li>
   <li>sluice's cross-engine value contract — <a href="/docs/type-mapping/">Type mapping</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: VStream snapshot bounded memory -----------------------
+write(
+  "field-notes/vstream-snapshot-oom",
+  page({
+    slug: "field-notes/vstream-snapshot-oom",
+    title: "The cold-start that buffered a whole table into swap",
+    subtitle: "A 13 GB PlanetScale table drove the process to ~41 GB of RAM and got OOM-killed with zero rows written — the VStream snapshot reader held the entire copy phase in memory before a single row reached the target. The buffer wasn't laziness; three engine behaviors forced it.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — PlanetScale / Vitess cold-start (VStream COPY snapshot) of one large table. Internally ADR-0071 (extends the ADR-0028 memory-bounded-streaming audit, which never reached this reader).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A cold-start snapshot of a ~13 GB, ~19M-row PlanetScale table walked the process's RSS up 28 &rarr; 38 &rarr; ~41 GB on a 32 GB host, into swap, until the OOM killer reaped it — and <strong>not one row had been written to the target</strong> the entire time. The most ordinary cold-start shape there is (one big table) was an unbounded-memory failure.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The VStream snapshot reader drained the <em>entire</em> COPY phase into an in-memory <code>map[table][]Row</code> before it returned the stream — it only completed after the <em>global</em> <code>COPY_COMPLETED</code> event, and only then did bulk-copy to the target begin. So peak memory was the whole snapshot, and target writes couldn't start until the buffer was full.</p>
+<p>The uncomfortable part is that the buffer wasn't sloppiness — three VStream behaviors <em>force</em> a receiver to buffer, and a naive "just stream it straight through" rewrite breaks all three:</p>
+<ul>
+  <li><strong>Order decoupling.</strong> VStream emits COPY rows in <em>its</em> order; the orchestrator consumes table-by-table in <em>its</em> order. Something has to hold the rows whose turn hasn't come.</li>
+  <li><strong>Multi-shard fan-in.</strong> One logical table's rows arrive interleaved from N shards; they're merged by unqualified table name, which means collecting across the whole stream.</li>
+  <li><strong>Inline dedup.</strong> Vitess re-emits rows already behind its scan cursor during COPY (binlog catch-up); those duplicate PKs are dropped as events arrive, which needs the stream in hand.</li>
+</ul>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Two changes, shipped together. First, a correctness floor: the buffer is now accounted in bytes and <strong>refuses loudly</strong> over a cap (naming the table and the <code>--max-buffer-bytes</code> guidance) instead of growing into swap — a silent OOM becomes a bounded, diagnosable error. Second, the real fix: stop draining to completion. After capturing field metadata and the initial position, the reader returns immediately and pumps the gRPC stream from a background goroutine <em>under the byte cap</em>, emitting each table's rows as they arrive. A slow target backpressures the channel, which backpressures the <code>Recv</code>, which backpressures Vitess — so memory stays constant and target writes start right away. All three forcing invariants are preserved inside the bounded pump: dedup stays inline, shard fan-in still merges by name, and the snapshot position still finalizes at <code>COPY_COMPLETED</code>.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When a snapshot or CDC wire protocol <em>decouples the order it emits from the order you consume</em> — and especially when it also fans in from multiple shards and expects you to dedup inline — it has quietly made you a buffering system, and the buffer is unbounded by default until one large table walks you into swap. The fix is not to remove the buffer (those invariants are real) but to <strong>bound it by bytes and backpressure the source</strong>: pump under a cap so a slow consumer slows the producer, and refuse loudly rather than silently at the ceiling. The tell for this bug is a process that sits at growing RSS with zero output — it isn't slow, it's buffering the world before it starts.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Vitess VStream COPY / catch-up semantics — <a href="https://vitess.io/docs/reference/vreplication/vstream/">VStream</a>.</li>
+  <li>gRPC flow control / backpressure — <a href="https://grpc.io/docs/what-is-grpc/core-concepts/">gRPC core concepts</a>.</li>
+  <li>How sluice cold-starts a sync — <a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: migrate-state quadratic JSON blob ---------------------
+write(
+  "field-notes/migrate-state-quadratic-blob",
+  page({
+    slug: "field-notes/migrate-state-quadratic-blob",
+    title: "One JSON blob in one row is a quadratic write",
+    subtitle: "Storing all per-table progress as a single growing JSON blob and re-upserting it on every checkpoint is O(n²) work. On Postgres the amplification lands somewhere specific: a new tuple version plus a re-TOAST of the whole value, every time, on one hot row — while the clone runs inside the lock your workers are waiting on.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — the resumable-migration state store under a high-frequency checkpoint loop across many tables. Internally ADR-0082 (a HIGH-rated P1 audit finding).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Sluice's resumable-migration progress lived as one JSON blob — the whole <code>map[table]TableProgress</code> — in a single database row, re-written on every checkpoint. At the 10,000-table scale the parallel copy pool targets, that one row was re-encoded and re-upserted <strong>≥20,000 times</strong> per migration (two breadcrumbs per table, plus a resume cursor every 5,000 rows, plus a checkpoint per chunk), each write carrying the whole ~0.86 MB blob. It worked fine at ten tables and quietly became a performance wall at ten thousand.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>There are two costs stacked on top of each other. The first is the obvious quadratic: the blob grows linearly with table count, and it's rewritten a number of times that also grows with table count, so total work is O(n&sup2;). The second is where it hurts on a real database — <strong>Postgres MVCC and TOAST</strong>:</p>
+<ul>
+  <li>An <code>UPDATE</code> in Postgres doesn't overwrite in place; it writes a <em>new tuple version</em> and marks the old one dead (to be reclaimed by vacuum later). Rewriting one row 20,000 times creates 20,000 dead versions of that row.</li>
+  <li>A ~0.86 MB value is far past the ~2 KB inline threshold, so it lives in <strong>TOAST</strong> (the out-of-line storage for oversized values). Each update re-TOASTs the whole value into fresh chunks. The measured write amplification was ~17 GB — for a progress log.</li>
+  <li>And the whole-map deep clone that precedes the encode ran <em>inside the state mutex</em>, so every checkpoint serialized against all the parallel copy workers — the O(n) clone was also a contention point.</li>
+</ul>
+<p>The row count you think you're bounded by (tables) is not the row count that bites (tuple versions of one hot row).</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Split the single blob into a <strong>header row plus one row per table</strong>, and give the store an O(1) per-table write. A checkpoint now upserts a single small progress row instead of re-encoding the whole map, so total work drops to O(n) and the TOAST re-write is per-table, not per-everything. The concurrency win comes for free: because workers now write <em>different</em> rows, the state mutex stops serializing them. (An additive <code>state_format</code> column lets an in-flight legacy blob upgrade in place, once.)</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>"Just keep the state as one JSON column and upsert it" is an O(n&sup2;) amplifier the moment the state grows and the checkpoints are frequent — and on an MVCC database the cost is not merely re-serialization: every write is a new tuple version plus a re-TOAST of the entire oversized value, all concentrated on one hot row that also becomes a lock. Give any growing state map an O(1) per-key write surface (a row per key), and you fix the algorithmic cost, the storage amplification, and the write contention in one move. The same shape shows up in this project's <a href="/field-notes/backup-manifest-quadratic/">backup manifest</a> — a growing metadata object rewritten once per unit of progress is the pattern to watch for.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres MVCC (an UPDATE writes a new row version) — <a href="https://www.postgresql.org/docs/current/mvcc-intro.html">concurrency control intro</a> and <a href="https://www.postgresql.org/docs/current/routine-vacuuming.html">routine vacuuming</a>.</li>
+  <li>TOAST (out-of-line storage for large values) — <a href="https://www.postgresql.org/docs/current/storage-toast.html">TOAST</a>.</li>
+  <li>sluice's resumable migration model — <a href="/docs/preview-and-validate/">Preview &amp; validate</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: O(n^2) backup manifest --------------------------------
+write(
+  "field-notes/backup-manifest-quadratic",
+  page({
+    slug: "field-notes/backup-manifest-quadratic",
+    title: "Rewriting the whole manifest, once per chunk",
+    subtitle: "Every backup checkpoint re-wrote the entire manifest.json, schema included. Since the manifest grows with table count, the total was quadratic — a measured ~78 hours of pure manifest rewriting at 100k tables. And the two obvious ways to fix it are the same quadratic in disguise.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — <code>sluice backup full</code> of a many-table database; per-chunk and per-table checkpoints. Internally ADR-0086.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Every per-chunk and per-table checkpoint during a backup re-marshaled the <em>entire</em> manifest — the full embedded schema along with it — and re-wrote the whole <code>manifest.json</code>. The manifest grows linearly with table count, and it was rewritten a number of times that also grows with table count, so the total checkpoint work was quadratic. A scale probe put a number on it: roughly <code>0.018·N + 2.77e-5·N²</code> seconds over N tables — about <strong>78 hours of pure manifest rewriting at 100,000 tables, ~322 days at a million</strong>. Every other part of the backup path is linear; this was the one super-linear wall.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>It is the textbook <code>O(grows with N) × (done N times) = O(N²)</code>, hiding in plain sight because it is invisible at small scale: a backup of a few dozen tables rewrites a small file a few dozen times and finishes instantly, so nothing in local testing flags it. The checkpoints themselves can't just be thinned out — the crash contract (a crash leaves at most <code>tableParallelism</code> tables to redo) and the content-addressed upload-skip both depend on durable per-event progress. The work is load-bearing; the <em>full rewrite per event</em> is the waste.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Split the in-progress manifest into a <strong>base written once</strong> (schema, anchor, encryption header, the pre-staged table entries — the heavy immutable parts) plus an <strong>append-only <code>manifest.progress.jsonl</code> sidecar</strong> — one compact JSON line per checkpoint, O(1) per event — folded back into a byte-identical self-contained <code>manifest.json</code> at success. That's the easy half. The instructive half is what they <em>didn't</em> do:</p>
+<ul>
+  <li>The sidecar append is a single <code>O_APPEND</code> write plus fsync — <strong>deliberately not the usual write-to-temp-then-rename</strong>. Append-then-rename re-copies the whole growing file on every call: the exact quadratic being removed, wearing the costume of a safe atomic write.</li>
+  <li>Object stores (S3/GCS/Azure) have no append primitive, and emulating one with read-modify-write re-copies the object every call — <strong>quadratic again</strong>. So the blob-store path keeps the legacy full-rewrite behavior, as a named, WARN-logged wart rather than a silent one.</li>
+</ul>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A metadata object that grows with your work and is rewritten once per unit of progress is silently O(n&sup2;), and it will pass every test you run at small scale and only surface as <em>days</em> at 100k. The fix is append-only rather than rewrite — but the trap has a second floor: the two most natural ways to make an append "safe" (write-to-tmp-and-rename, or read-modify-write on a store with no native append) each re-copy the whole file per call and quietly reintroduce the exact quadratic you set out to kill. When you replace an O(n&sup2;) rewrite, verify the replacement is genuinely O(1) per step and not an O(n) copy in disguise — and where the substrate can't give you a true append (object storage), say so out loud instead of shipping the quadratic silently. The same "stop rewriting the whole growing thing per checkpoint" lesson bit this project's <a href="/field-notes/migrate-state-quadratic-blob/">migration state store</a> too, there through MVCC and TOAST.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>POSIX <code>O_APPEND</code> atomic appends — <a href="https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html"><code>open()</code></a>.</li>
+  <li>Why object stores aren't append-friendly — <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#BasicsObjects">S3 objects are immutable (replace-whole-object)</a>.</li>
+  <li>sluice's backup format &amp; checkpoints — <a href="/docs/encrypted-backups/">Take encrypted backups</a>.</li>
 </ul>
 `,
   })

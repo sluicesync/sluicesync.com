@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The cold-start that buffered a whole table into swap — sluice docs</title>
+<meta name="description" content="A 13 GB PlanetScale table drove the process to ~41 GB of RAM and got OOM-killed with zero rows written — the VStream snapshot reader held the entire copy phase in memory before a single row reached the target. The buffer wasn't laziness; three engine behaviors forced it.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/field-notes/vstream-snapshot-oom/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="active" href="/field-notes/">Field Notes</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Field Notes</div><a class="lnk" href="/field-notes/">About these notes</a><a class="lnk" href="/field-notes/float-in-primary-key/"><span class="fn-date">2026-07-09</span>When the row's own identity gets rounded</a><a class="lnk" href="/field-notes/signed-manifest-chunk-binding/"><span class="fn-date">2026-07-09</span>A signature that verified green while restoring the wrong table's rows</a><a class="lnk" href="/field-notes/three-clouds-three-signatures/"><span class="fn-date">2026-07-09</span>Three clouds, three ways to return an ECDSA signature</a><a class="lnk" href="/field-notes/vstream-float-precision/"><span class="fn-date">2026-07-09</span>Vitess copy phase rounds your FLOATs</a><a class="lnk" href="/field-notes/xid-wraparound-cdc/"><span class="fn-date">2026-07-08</span>Comparing 32-bit transaction ids breaks after four billion of them</a><a class="lnk" href="/field-notes/d1-not-local-sqlite/"><span class="fn-date">2026-06-30</span>Cloudflare D1 is not your local SQLite</a><a class="lnk" href="/field-notes/planetscale-grow-reparent/"><span class="fn-date">2026-06-29</span>When PlanetScale un-acked our rows</a><a class="lnk" href="/field-notes/int64-json-boundary/"><span class="fn-date">2026-06-29</span>2^53 is a database boundary now</a><a class="lnk" href="/field-notes/vitess-tx-killer-wan/"><span class="fn-date">2026-06-28</span>The 20-second guillotine over a WAN</a><a class="lnk" href="/field-notes/sqlite-wal-checkpoint-starvation/"><span class="fn-date">2026-06-28</span>One long-lived reader, 75 GB of WAL</a><a class="lnk" href="/field-notes/sqlite-decimal-affinity/"><span class="fn-date">2026-06-27</span>SQLite's DECIMAL is a suggestion</a><a class="lnk" href="/field-notes/mysql-enum-set-binlog-encoding/"><span class="fn-date">2026-06-20</span>ENUM is an ordinal and SET is a bitmask on the wire</a><a class="lnk" href="/field-notes/vitess-per-shard-primary-key/"><span class="fn-date">2026-06-18</span>Your primary key is only unique per shard</a><a class="lnk" href="/field-notes/binlog-transaction-compression/"><span class="fn-date">2026-06-17</span>A whole transaction in one zstd binlog event</a><a class="lnk" href="/field-notes/zero-value-config-trap/"><span class="fn-date">2026-06-15</span>The zero value is a loaded gun</a><a class="lnk" href="/field-notes/vstream-throttle-blind/"><span class="fn-date">2026-06-13</span>vtgate erases the throttle signal</a><a class="lnk" href="/field-notes/binlog-comment-truncate/"><span class="fn-date">2026-06-13</span>A comment hid a TRUNCATE from CDC</a><a class="lnk" href="/field-notes/postgres-slot-leaks/"><span class="fn-date">2026-06-11</span>Replication slots don't die with your process</a><a class="lnk" href="/field-notes/backup-manifest-quadratic/"><span class="fn-date">2026-06-11</span>Rewriting the whole manifest, once per chunk</a><a class="lnk" href="/field-notes/migrate-state-quadratic-blob/"><span class="fn-date">2026-06-10</span>One JSON blob in one row is a quadratic write</a><a class="lnk active" href="/field-notes/vstream-snapshot-oom/"><span class="fn-date">2026-06-09</span>The cold-start that buffered a whole table into swap</a><a class="lnk" href="/field-notes/olap-workload-truncation/"><span class="fn-date">2026-06-07</span>Setting workload=olap silently truncated our chunked reads</a><a class="lnk" href="/field-notes/postgres-text-no-nul-byte/"><span class="fn-date">2026-06-02</span>Postgres text can't hold a NUL byte</a><a class="lnk" href="/field-notes/mysql-time-is-a-duration/"><span class="fn-date">2026-05-31</span>MySQL TIME is a duration, not a time of day</a><a class="lnk" href="/field-notes/mysql-enum-emoji/"><span class="fn-date">2026-05-30</span>MySQL turned our emoji into '?'</a><a class="lnk" href="/field-notes/redact-two-engines/"><span class="fn-date">2026-05-30</span>One redaction flag, two engines, two behaviors</a><a class="lnk" href="/field-notes/replica-identity-full-updates/"><span class="fn-date">2026-05-28</span>REPLICA IDENTITY FULL ate our UPDATEs</a><a class="lnk" href="/field-notes/cdc-carries-no-default/"><span class="fn-date">2026-05-25</span>The replication stream never tells you the column default</a><a class="lnk" href="/field-notes/create-if-not-exists-race/"><span class="fn-date">2026-05-24</span>CREATE IF NOT EXISTS is not a lock</a><a class="lnk" href="/field-notes/pgoutput-streaming-abort/"><span class="fn-date">2026-05-23</span>proto_version lets you parse streaming; only streaming='on' emits it</a><a class="lnk" href="/field-notes/postgres-lsn-timeline-scoped/"><span class="fn-date">2026-05-22</span>A Postgres LSN means nothing without its timeline</a><a class="lnk" href="/field-notes/numeric-array-flatten/"><span class="fn-date">2026-05-17</span>The pgx codec that flattened numeric[][]</a><a class="lnk" href="/field-notes/empty-object-vs-array/"><span class="fn-date">2026-05-10</span>{}: two characters, two types</a><a class="lnk" href="/field-notes/postgres-idle-slot-failover/"><span class="fn-date">2026-05-07</span>Every HA knob on, and the slot still vanished at failover</a><a class="lnk" href="/field-notes/mysql-load-data-charset/"><span class="fn-date">2026-05-05</span>One LOAD DATA can't load a BLOB and a JSON column</a><a class="lnk" href="/field-notes/mysql-json-where-cast/"><span class="fn-date">2026-05-04</span>MySQL won't match a JSON column by bind parameter</a></aside>
+  <main class="content">
+    <h1>The cold-start that buffered a whole table into swap</h1>
+    <p class="subtitle">A 13 GB PlanetScale table drove the process to ~41 GB of RAM and got OOM-killed with zero rows written — the VStream snapshot reader held the entire copy phase in memory before a single row reached the target. The buffer wasn't laziness; three engine behaviors forced it.</p>
+    <p class="fn-landed">Landed in sluice · 2026-06-09 · MySQL &amp; Vitess</p>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#what-happened">What happened</a></li><li><a href="#why">Why (the mechanism)</a></li><li><a href="#what-sluice-does">What sluice does about it</a></li><li><a href="#lesson">The transferable lesson</a></li><li><a href="#sources">Primary sources</a></li></ul></nav>
+    
+<p class="fn-meta"><strong>Observed</strong> — PlanetScale / Vitess cold-start (VStream COPY snapshot) of one large table. Internally ADR-0071 (extends the ADR-0028 memory-bounded-streaming audit, which never reached this reader).</p>
+
+<h2 id="what-happened">What happened <a class="hlink" href="#what-happened" aria-label="Permalink to this section">#</a></h2>
+<p>A cold-start snapshot of a ~13 GB, ~19M-row PlanetScale table walked the process's RSS up 28 &rarr; 38 &rarr; ~41 GB on a 32 GB host, into swap, until the OOM killer reaped it — and <strong>not one row had been written to the target</strong> the entire time. The most ordinary cold-start shape there is (one big table) was an unbounded-memory failure.</p>
+
+<h2 id="why">Why (the mechanism) <a class="hlink" href="#why" aria-label="Permalink to this section">#</a></h2>
+<p>The VStream snapshot reader drained the <em>entire</em> COPY phase into an in-memory <code>map[table][]Row</code> before it returned the stream — it only completed after the <em>global</em> <code>COPY_COMPLETED</code> event, and only then did bulk-copy to the target begin. So peak memory was the whole snapshot, and target writes couldn't start until the buffer was full.</p>
+<p>The uncomfortable part is that the buffer wasn't sloppiness — three VStream behaviors <em>force</em> a receiver to buffer, and a naive "just stream it straight through" rewrite breaks all three:</p>
+<ul>
+  <li><strong>Order decoupling.</strong> VStream emits COPY rows in <em>its</em> order; the orchestrator consumes table-by-table in <em>its</em> order. Something has to hold the rows whose turn hasn't come.</li>
+  <li><strong>Multi-shard fan-in.</strong> One logical table's rows arrive interleaved from N shards; they're merged by unqualified table name, which means collecting across the whole stream.</li>
+  <li><strong>Inline dedup.</strong> Vitess re-emits rows already behind its scan cursor during COPY (binlog catch-up); those duplicate PKs are dropped as events arrive, which needs the stream in hand.</li>
+</ul>
+
+<h2 id="what-sluice-does">What sluice does about it <a class="hlink" href="#what-sluice-does" aria-label="Permalink to this section">#</a></h2>
+<p>Two changes, shipped together. First, a correctness floor: the buffer is now accounted in bytes and <strong>refuses loudly</strong> over a cap (naming the table and the <code>--max-buffer-bytes</code> guidance) instead of growing into swap — a silent OOM becomes a bounded, diagnosable error. Second, the real fix: stop draining to completion. After capturing field metadata and the initial position, the reader returns immediately and pumps the gRPC stream from a background goroutine <em>under the byte cap</em>, emitting each table's rows as they arrive. A slow target backpressures the channel, which backpressures the <code>Recv</code>, which backpressures Vitess — so memory stays constant and target writes start right away. All three forcing invariants are preserved inside the bounded pump: dedup stays inline, shard fan-in still merges by name, and the snapshot position still finalizes at <code>COPY_COMPLETED</code>.</p>
+
+<h2 id="lesson">The transferable lesson <a class="hlink" href="#lesson" aria-label="Permalink to this section">#</a></h2>
+<p>When a snapshot or CDC wire protocol <em>decouples the order it emits from the order you consume</em> — and especially when it also fans in from multiple shards and expects you to dedup inline — it has quietly made you a buffering system, and the buffer is unbounded by default until one large table walks you into swap. The fix is not to remove the buffer (those invariants are real) but to <strong>bound it by bytes and backpressure the source</strong>: pump under a cap so a slow consumer slows the producer, and refuse loudly rather than silently at the ceiling. The tell for this bug is a process that sits at growing RSS with zero output — it isn't slow, it's buffering the world before it starts.</p>
+
+<h2 id="sources">Primary sources <a class="hlink" href="#sources" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li>Vitess VStream COPY / catch-up semantics — <a href="https://vitess.io/docs/reference/vreplication/vstream/">VStream</a>.</li>
+  <li>gRPC flow control / backpressure — <a href="https://grpc.io/docs/what-is-grpc/core-concepts/">gRPC core concepts</a>.</li>
+  <li>How sluice cold-starts a sync — <a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a>.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/field-notes/migrate-state-quadratic-blob/">← One JSON blob in one row is a quadratic write</a><a class="next" href="/field-notes/olap-workload-truncation/">Setting workload=olap silently truncated our chunked reads →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/field-notes/vstream-snapshot-oom/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
