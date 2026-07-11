@@ -181,6 +181,7 @@ const FIELD_NOTES = [
   { slug: "three-clouds-three-signatures", date: "2026-07-09", engine: "Cross-cutting", label: "Three clouds, three ways to return an ECDSA signature", dek: "AWS and GCP hand back an ECDSA signature as ASN.1 DER; Azure returns raw <code>r&#8214;s</code>. Only GCP signs Ed25519, and only GCP wants a CRC32C integrity handshake in both directions. &ldquo;KMS signing&rdquo; is not one API." },
   { slug: "signed-manifest-chunk-binding", date: "2026-07-09", engine: "Cross-cutting", label: "A signature that verified green while restoring the wrong table's rows", dek: "A signed backup flattened every table's row chunks into one file-sorted list with no parent-table token, so swapping two same-column-set tables' chunk lists produced byte-identical signed bytes &mdash; every guard green, and table B's rows restored into table A." },
   { slug: "float-in-primary-key", date: "2026-07-09", engine: "MySQL & Vitess", label: "When the row's own identity gets rounded", dek: "The VStream FLOAT repair re-reads exactly and matches by primary key &mdash; but when the FLOAT is <em>in</em> the key, the target's identity is itself rounded, so the match never lands, the repair silently no-ops, and <code>--strict-float</code> exits 0 with a rounded archive." },
+  { slug: "cdc-position-leads-or-trails", date: "2026-07-10", engine: "Cross-cutting", label: "A CDC position can lead or trail the rows it covers", dek: "Postgres and MySQL put a schema/DDL position <em>before</em> the rows it introduces; Vitess stamps its VGTID <em>after</em> the rows the commit covers, so a snapshot and its transaction's rows can share one token. A &ldquo;did we reach the boundary?&rdquo; check that's sound on one engine silently false-negatives on the other." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -5547,6 +5548,45 @@ SHOW BINARY LOG STATUS;                        -- records the CDC start offset`)
   <li>MySQL consistent snapshots &amp; <code>FLUSH TABLES WITH READ LOCK</code> — <a href="https://dev.mysql.com/doc/refman/8.0/en/flush.html"><code>FLUSH</code></a> and <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-consistent-read.html">InnoDB consistent reads</a>.</li>
   <li>The pattern in the wild — <a href="https://debezium.io/documentation/reference/stable/connectors/mysql.html">Debezium MySQL connector snapshot</a> / mydumper's <code>--trx-consistency-only</code>.</li>
   <li>How sluice cold-starts and hands off to CDC — <a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a>.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: a CDC position can lead or trail its rows --------------
+write(
+  "field-notes/cdc-position-leads-or-trails",
+  page({
+    slug: "field-notes/cdc-position-leads-or-trails",
+    title: "A CDC position isn't a universal coordinate",
+    subtitle: "A change-stream gives you a position token to resume from and to reason about order — but engines disagree, non-obviously, on whether that token sits before or after the rows it names. Postgres and MySQL put a schema/DDL position ahead of the rows it introduces; Vitess stamps its commit token after them. Any “did we reach the boundary?” check written against one engine silently false-negatives on the other.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — hardening logical-backup restore against a manifest-tamper silent-loss. The completeness guard asked “was this incremental's data fully applied?” by testing whether a schema-history snapshot was anchored exactly at the window's end position — sound on Postgres and MySQL-binlog, a false negative on Vitess/PlanetScale.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A backup incremental records an <code>end_position</code> — the change-stream coordinate its replay must reach — and a list of change chunks carrying the row events. To catch a store-level adversary who deletes the chunks (an unsigned backup), restore asserts the replay actually <em>reaches</em> <code>end_position</code>: either the last replayed change lands exactly there, <em>or</em> a schema-history snapshot is anchored exactly there. That second clause exists for a legitimate DDL-only window (a schema change, no row writes) — such a window advances <code>end_position</code> to the schema snapshot's own position, so a snapshot sitting at the boundary means “nothing was dropped, this window was always schema-only.”</p>
+<p>On Postgres and MySQL that reasoning holds. On Vitess it is a silent false negative: an <em>emptied</em> data window — chunks deleted, rows lost — whose final transaction happened to first-touch a table leaves that table's routine schema snapshot sitting exactly at <code>end_position</code>, so the guard reads “boundary reached” and waves the data loss through.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The three engines stamp their positions on <em>different sides</em> of the same rows:</p>
+<ul>
+  <li><strong>Postgres logical replication</strong> — a <code>RelationMessage</code> (the schema/relation descriptor) carries its own WAL position, and that <code>WALStart</code> strictly precedes the LSNs of the rows it introduces. The schema anchor <em>leads</em> the rows.</li>
+  <li><strong>MySQL binlog</strong> — a DDL <code>Query</code> event's log position precedes the row events that follow it. Again the schema/DDL position <em>leads</em> the rows.</li>
+  <li><strong>Vitess / PlanetScale VStream</strong> — the resumable coordinate is the <code>VGTID</code>, and VStream emits it <em>per transaction commit, after</em> the rows the commit covers. The token <em>trails</em> its rows. So a table's first-touch schema snapshot and the row changes in the <em>same</em> transaction are handed to you carrying one and the same position.</li>
+</ul>
+<p>Because Postgres and MySQL put the schema anchor before the rows, a routine data-window snapshot is always anchored <em>below</em> the window's last row — so a snapshot found <em>at</em> the end position can only be a genuine DDL-only window, and the heuristic is exact. On Vitess the snapshot and the rows share a position, so “snapshot at the end position” no longer distinguishes “schema-only window” from “data window whose rows were deleted.” Same code, same manifest shape — a different answer purely because the engine writes the coordinate on the other side of the rows.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice records the source engine's ordering as a capability, <code>CDCPositionCommitsAfterRows</code> (declared for the VStream flavors), and stamps it on every incremental manifest at backup time. When restore or the live broker sees it set, it refuses to treat a schema anchor at the boundary as proof of applied data — on those engines <em>only</em> an actually-replayed change-chunk tail counts, so an emptied-data window is refused loudly instead of restored short. Postgres and MySQL-binlog, whose anchor strictly precedes its rows, keep trusting the anchor, so a legitimate schema-only window still restores. The trust decision is gated on a declared property of the engine, not hard-coded per engine name.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A CDC position is <em>not</em> a universal coordinate. Whether the commit/GTID/LSN token an engine hands you sits <em>before</em> or <em>after</em> the rows it's associated with is an engine-specific property of the wire protocol — Postgres and MySQL lead with the schema position, Vitess trails with the commit token — and any “did we reach the boundary?” or event-ordering assumption you write against one engine is silently unsound the moment you point it at another. If a completeness or ordering check compares a position to “where the rows are,” it has to know which side of the rows <em>that</em> engine stamps the position on; anything else passes its tests on the engine you wrote it against and false-negatives on the one you didn't.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres logical replication protocol — the <a href="https://www.postgresql.org/docs/current/protocol-logicalrep-message-formats.html">Relation message</a> and its position, ahead of the row messages it describes.</li>
+  <li>Vitess VStream / VGTID — the <a href="https://vitess.io/docs/reference/vreplication/vstream/">VStream API</a> delivers a <code>VGTID</code> at each transaction boundary, after the row events it covers.</li>
+  <li>How sluice replays a backup chain and its recorded positions — <a href="/docs/from-backup-sync/">Sync from a backup chain</a>.</li>
 </ul>
 `,
   })

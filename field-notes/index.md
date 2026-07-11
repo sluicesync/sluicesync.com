@@ -10,6 +10,8 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
+- 2026-07-10Cross-cutting A CDC position can lead or trail the rows it covers — Postgres and MySQL put a schema/DDL position before the rows it introduces; Vitess stamps its VGTID after the rows the commit covers, so a snapshot and its transaction's rows can share one token. A &ldquo;did we reach the boundary?&rdquo; check that's sound on one engine silently false-negatives on the other.
+
 - 2026-07-09MySQL & Vitess When the row's own identity gets rounded — The VStream FLOAT repair re-reads exactly and matches by primary key &mdash; but when the FLOAT is in the key, the target's identity is itself rounded, so the match never lands, the repair silently no-ops, and --strict-float exits 0 with a rounded archive.
 
 - 2026-07-09Cross-cutting A signature that verified green while restoring the wrong table's rows — A signed backup flattened every table's row chunks into one file-sorted list with no parent-table token, so swapping two same-column-set tables' chunk lists produced byte-identical signed bytes &mdash; every guard green, and table B's rows restored into table A.
