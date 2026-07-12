@@ -38,5 +38,7 @@ A CDC position is not a universal coordinate. Whether the commit/GTID/LSN token 
 
 - How sluice replays a backup chain and its recorded positions — Sync from a backup chain.
 
+- Companion note — An ALTER with no rows behind it is invisible to Postgres CDC (whether a schema change is even visible, vs. this note's which side of the rows the position sits on).
+
 ---
 Canonical page: https://sluicesync.com/field-notes/cdc-position-leads-or-trails/ · Full docs index: https://sluicesync.com/llms.txt

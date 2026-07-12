@@ -10,6 +10,8 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
+- 2026-07-12Cross-cutting An ALTER with no rows behind it is invisible to Postgres CDC — Postgres pgoutput never streams DDL &mdash; a schema change surfaces only as a RelationMessage, emitted lazily right before the first row for that table. So an ALTER &hellip; ADD COLUMN with no following writes leaves nothing in the stream. MySQL's binlog logs the same DDL as a first-class event at its own position, whether or not a row ever follows.
+
 - 2026-07-10Cross-cutting A CDC position can lead or trail the rows it covers — Postgres and MySQL put a schema/DDL position before the rows it introduces; Vitess stamps its VGTID after the rows the commit covers, so a snapshot and its transaction's rows can share one token. A &ldquo;did we reach the boundary?&rdquo; check that's sound on one engine silently false-negatives on the other.
 
 - 2026-07-09MySQL & Vitess When the row's own identity gets rounded — The VStream FLOAT repair re-reads exactly and matches by primary key &mdash; but when the FLOAT is in the key, the target's identity is itself rounded, so the match never lands, the repair silently no-ops, and --strict-float exits 0 with a rounded archive.
