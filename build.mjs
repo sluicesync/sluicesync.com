@@ -182,6 +182,7 @@ const FIELD_NOTES = [
   { slug: "signed-manifest-chunk-binding", date: "2026-07-09", engine: "Cross-cutting", label: "A signature that verified green while restoring the wrong table's rows", dek: "A signed backup flattened every table's row chunks into one file-sorted list with no parent-table token, so swapping two same-column-set tables' chunk lists produced byte-identical signed bytes &mdash; every guard green, and table B's rows restored into table A." },
   { slug: "float-in-primary-key", date: "2026-07-09", engine: "MySQL & Vitess", label: "When the row's own identity gets rounded", dek: "The VStream FLOAT repair re-reads exactly and matches by primary key &mdash; but when the FLOAT is <em>in</em> the key, the target's identity is itself rounded, so the match never lands, the repair silently no-ops, and <code>--strict-float</code> exits 0 with a rounded archive." },
   { slug: "cdc-position-leads-or-trails", date: "2026-07-10", engine: "Cross-cutting", label: "A CDC position can lead or trail the rows it covers", dek: "Postgres and MySQL put a schema/DDL position <em>before</em> the rows it introduces; Vitess stamps its VGTID <em>after</em> the rows the commit covers, so a snapshot and its transaction's rows can share one token. A &ldquo;did we reach the boundary?&rdquo; check that's sound on one engine silently false-negatives on the other." },
+  { slug: "ddl-invisible-without-rows", date: "2026-07-12", engine: "Cross-cutting", label: "An ALTER with no rows behind it is invisible to Postgres CDC", dek: "Postgres pgoutput never streams DDL &mdash; a schema change surfaces only as a <code>RelationMessage</code>, emitted lazily right before the <em>first row</em> for that table. So an <code>ALTER &hellip; ADD COLUMN</code> with no following writes leaves <em>nothing</em> in the stream. MySQL's binlog logs the same DDL as a first-class event at its own position, whether or not a row ever follows." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -5593,6 +5594,45 @@ write(
   <li>Postgres logical replication protocol — the <a href="https://www.postgresql.org/docs/current/protocol-logicalrep-message-formats.html">Relation message</a> and its position, ahead of the row messages it describes.</li>
   <li>Vitess VStream / VGTID — the <a href="https://vitess.io/docs/reference/vreplication/vstream/">VStream API</a> delivers a <code>VGTID</code> at each transaction boundary, after the row events it covers.</li>
   <li>How sluice replays a backup chain and its recorded positions — <a href="/docs/from-backup-sync/">Sync from a backup chain</a>.</li>
+  <li>Companion note — <a href="/field-notes/ddl-invisible-without-rows/">An ALTER with no rows behind it is invisible to Postgres CDC</a> (whether a schema change is even visible, vs. this note's which side of the rows the position sits on).</li>
+</ul>
+`,
+  })
+);
+
+write(
+  "field-notes/ddl-invisible-without-rows",
+  page({
+    slug: "field-notes/ddl-invisible-without-rows",
+    title: "An ALTER with no rows behind it is invisible to Postgres CDC",
+    subtitle: "Change-data-capture tools quietly assume a schema change leaves a mark in the replication stream. It does on MySQL and it does not on Postgres, and the divergence is sharp: pgoutput never streams DDL at all — a schema change surfaces only as a RelationMessage, and only right before the first row that follows it. A pure ALTER with no writes behind it produces nothing.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — establishing ground truth across four DDL shapes on real Postgres and MySQL while closing a backup-completeness hole. On Postgres a pure <code>ADD COLUMN</code> window closed with an <em>empty</em> end position and no schema anchor; the identical window on MySQL anchored a schema snapshot at the DDL event's own position.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>We were probing how a schema-only change window looks in each engine's change stream — specifically whether an <code>ALTER TABLE … ADD COLUMN</code> with no following <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> advances the stream position and leaves a schema marker. The intuition, carried over from MySQL, was that a DDL is an event like any other: it happens at some position, so a schema-only window should advance the position to that DDL and record a schema snapshot there.</p>
+<p>On MySQL that is what happens. On Postgres it is not: a pure <code>ADD COLUMN</code> with no row behind it produced <em>nothing</em> in the logical stream — no relation message, no position advance, no snapshot. The new column's shape only appeared once a row for that table finally flowed. The same window, the same intent, two engines, and one of them treats a bare schema change as a non-event.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The two engines carry DDL in fundamentally different ways:</p>
+<ul>
+  <li><strong>Postgres — pgoutput never streams DDL.</strong> Logical decoding emits <em>data</em> changes and the schema descriptors needed to interpret them; it does not emit <code>ALTER TABLE</code>. A schema change surfaces only indirectly, as an updated <code>RelationMessage</code> — and pgoutput sends that <em>lazily</em>: right before the <em>first row change</em> for that relation after the schema changed. No row change, no <code>RelationMessage</code>. So an <code>ALTER … ADD COLUMN</code> that isn't followed by any DML to that table leaves the stream untouched; the altered shape is invisible until data moves behind it.</li>
+  <li><strong>MySQL — the binlog logs DDL as a first-class statement.</strong> An <code>ALTER TABLE</code> is written to the binlog as a text <code>Query</code> event at its own position, immediately, whether or not any row ever follows. A reader sees the DDL the moment it happens.</li>
+</ul>
+<p>So a &ldquo;DDL-only window&rdquo; is not one shape across engines. On MySQL it has a concrete position and a visible statement. On Postgres, until a row flows, it has neither — the change is real in the catalog but absent from the stream.</p>
+
+<h2 id="what-sluice-does">Where it bit us</h2>
+<p>sluice's logical-backup restore has a completeness check: it refuses a backup incremental whose recorded change chunks were deleted (a store-level tamper) by asserting the replay reaches the window's recorded end position — either via the last replayed change, or via a schema-history snapshot anchored exactly there (the legitimate schema-only-window case). We were hardening that check against a forged anchor, and needed to know: what does a <em>real</em> schema-only window actually look like?</p>
+<p>The ground truth settled it. On Postgres a pure DDL-only window has no snapshot and an empty end position, so it never even reaches the anchor branch — it's applied from the recorded schema delta and skipped by the completeness guard entirely. A snapshot that <em>does</em> sit at the end position, on either engine, only arises when a real column-changing DDL produced a schema delta (which the diff always records) or when data followed the DDL and the snapshot is anchored <em>before</em> those rows. So the guard now trusts an anchor at the boundary only when the window also carries a schema delta — an emptied-data window's forged anchor, which has none, is refused. The engine-visibility divergence is exactly why the naive &ldquo;a schema-only window advances the position to its snapshot&rdquo; assumption — true on MySQL, false on Postgres — had to be replaced with something derived from what the stream actually produces.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A schema change is not guaranteed to leave a trace in a CDC stream. On the MySQL binlog it does — a DDL is a logged statement at a known position. On Postgres logical replication it does not: pgoutput carries no DDL, and the relation descriptor that reveals the new shape is emitted only ahead of the first row that uses it, so a bare <code>ALTER</code> with nothing behind it is invisible until data moves. Any completeness check, boundary test, schema-drift detector, or &ldquo;did this DDL replicate yet?&rdquo; probe that assumes the schema change left a mark is unsound the moment you point it at pgoutput — it will pass on the engine you wrote it against and quietly miss the change on the one you didn't. This is a sibling of <a href="/field-notes/cdc-position-leads-or-trails/">a CDC position isn't a universal coordinate</a>: that note is about which <em>side</em> of the rows the position sits on; this one is about whether the schema change is even <em>visible</em> without rows behind it. Both are the same warning — a change stream tells you less, and less portably, than it looks like it does.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres logical replication protocol — the <a href="https://www.postgresql.org/docs/current/protocol-logicalrep-message-formats.html">Relation message</a>, sent before the first change to a relation whose row descriptor the subscriber hasn't seen; pgoutput carries no DDL statements.</li>
+  <li>MySQL binlog — a DDL <a href="https://dev.mysql.com/doc/internals/en/query-event.html"><code>QUERY_EVENT</code></a> records the statement text at its own log position.</li>
+  <li>Companion note — <a href="/field-notes/cdc-position-leads-or-trails/">A CDC position isn't a universal coordinate</a>.</li>
 </ul>
 `,
   })
