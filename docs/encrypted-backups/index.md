@@ -89,7 +89,15 @@ Every chain-root manifest carries a FormatVersion. It exists to prevent one spec
 
 - FormatVersion=4 — the schema carries one or more standalone sequences (v0.99.175+). An older binary would silently restore the target without the sequence object — its custom START/INCREMENT options and nextval() topology gone — so it refuses loudly at preflight instead.
 
-FormatVersion=3 is a special case: it marks an in-progress full backup in the sidecar-checkpoint layout (v0.99.39+) and is never stamped on a finalized manifest, so a completed backup you restore is only ever 1, 2, or 4. It exists so an older binary refuses to resume an in-progress backup it can't account for, rather than mis-resuming off a base manifest that under-reports progress.
+- FormatVersion=5 — an encrypted manifest (--encrypt, v0.99.202+). Its row chunks are AES-256-GCM ciphertext; an older binary that predates encryption refuses rather than mis-reading them.
+
+- FormatVersion=6 — a signed encrypted manifest (--sign, v0.99.208+). The manifest carries a signature over its canonical bytes; a binary that can't verify it refuses rather than restoring an unverified signed chain.
+
+- FormatVersion=7 — an encrypted manifest whose row chunks additionally bind their parent table into the GCM associated data (v0.99.214 signed / v0.99.219 unsigned), closing a store-adversary chunk-reassignment attack between two same-column-set tables.
+
+- FormatVersion=8 — a CDC-segment manifest (incremental / streaming) from a VStream source (PlanetScale/Vitess) that folds its position-semantics flag into the deterministic BackupID (v0.99.228+). Only VStream CDC segments are stamped 8; full backups and non-VStream segments keep their feature-minimum version. An older binary refuses a v8 manifest at preflight rather than recompute-mismatching its id.
+
+FormatVersion=3 is a special case: it marks an in-progress full backup in the sidecar-checkpoint layout (v0.99.39+) and is never stamped on a finalized manifest. A finalized manifest carries the minimum version safe for its contents: a plaintext full is 1, 2, or 4 by schema; an encrypted/signed/table-bound chain rises to 5–7; and a VStream CDC segment is 8. It exists so an older binary refuses to resume an in-progress backup it can't account for, rather than mis-resuming off a base manifest that under-reports progress.
 
 The rule is proportional: a manifest gets the minimum version safe for its actual contents, so a typical CRUD database with no RLS, no EXCLUDE constraints, and no standalone sequences stays at FormatVersion=1 and cross-version restore behaves exactly as before. The value is derived from the schema — there's no flag to set. Audit it with jq .format_version manifest.json.
 

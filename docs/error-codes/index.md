@@ -64,5 +64,9 @@ SLUICE-E-CONFIRMATION-REQUIRED · refusal · A destructive command was run witho
 
 SLUICE-E-DRIVER-HOST-MISMATCH · refusal · The chosen driver cannot drive the DSN's host — today: the vanilla mysql driver pointed at a PlanetScale endpoint (*.connect.psdb.cloud), whose binlog CDC and LOAD DATA cold-copy Vitess blocks. Caught up front, before any connection. · Pass --source-driver planetscale / --target-driver planetscale for the PlanetScale endpoint. ·
 
+SLUICE-E-VALUE-UNREPRESENTABLE · refusal · A source value has no representable target-type equivalent, so sluice refuses before the driver rather than corrupt it or retry-loop on a misleading server error — today: a NaN/±Infinity float into a MySQL FLOAT/DOUBLE (MySQL has no non-finite floats), or an infinity/pre-Gregorian (BC) Postgres timestamp into a fixed-width target. · Filter or transform the source value (e.g. NULLIF / CASE on the source query). ·
+
+SLUICE-E-BACKUP-MANIFEST-INVALID · refusal · At restore or broker apply, a manifest's recorded BackupID does not match the id recomputed from its content (created_at/source_engine/kind/EndPosition, plus the CDC-position flag on FormatVersion 8) — a corrupt or lazily-edited manifest, caught before any data lands. A corruption backstop, not tamper-proofing; sign chains for that. · Restore from an untampered copy, or sign the chain (--sign + --require-signature). ·
+
 ---
 Canonical page: https://sluicesync.com/docs/error-codes/ · Full docs index: https://sluicesync.com/llms.txt

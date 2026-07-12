@@ -28,7 +28,7 @@ TINYINT / SMALLINT / MEDIUMINT / INT / BIGINT · smallint / smallint / integer /
 
 DECIMAL(p,s) / NUMERIC · numeric(p,s) · Carried as a string end-to-end; precision is lossless. A bare Postgres numeric (no p/s) is arbitrary-precision — PG→PG round-trips it bare; PG→MySQL widens to DECIMAL(65,30) (MySQL's max) with a loud widening notice. ·
 
-FLOAT / DOUBLE · real / double precision · IEEE special floats (NaN, ±Inf) ride through exactly. ·
+FLOAT / DOUBLE · real / double precision · Finite values ride through exactly. NaN/±Inf are Postgres-only, so PG→MySQL refuses them loudly with SLUICE-E-VALUE-UNREPRESENTABLE (MySQL has no non-finite floats) rather than coerce them; MySQL→PG never produces one. ·
 
 CHAR(n) / VARCHAR(n) / TINY..LONGTEXT · char(n) / varchar(n) / text · A PG varchar(N) above MySQL's representable cap down-maps to the smallest MySQL TEXT-family type, with a loud advisory. Charset/collation are carried same-engine, dropped-with-WARN cross-engine (collation names aren't portable). ·
 
