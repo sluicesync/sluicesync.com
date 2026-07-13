@@ -170,12 +170,12 @@
       "kind": "single",
       "tape": "tapes/metrics-watch.tape",
       "scenario": "scenarios/planetscale.sh",
-      "tagline": "Live PlanetScale target metrics — storage, CPU, replica lag — sampled and alerted on.",
+      "tagline": "Live PlanetScale target metrics as a status panel — CPU, memory, storage, lag, and connections, sampled on a cadence, with threshold breaches surfaced as live events.",
       "frames": [
         {
           "file": "metrics-watch.png",
-          "step": "Sampling",
-          "caption": "Live CPU, memory, storage, and connection metrics — sampled on a cadence, with threshold alerts."
+          "step": "Watching",
+          "caption": "The live metrics panel; breaches appear in the events region."
         }
       ]
     },
