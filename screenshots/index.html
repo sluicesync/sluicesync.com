@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screenshots — sluice</title>
+<meta name="description" content="See sluice in action: every command's live terminal view, from a one-shot migration to a continuous-sync stream — real runs of the released binary.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<style>
+  .shots-hero{max-width:1160px;margin:0 auto;padding:52px 22px 8px;text-align:center}
+  .shots-hero h1{font-size:clamp(30px,4vw,44px);line-height:1.08;margin:0 0 12px;letter-spacing:-.5px;text-wrap:balance;color:var(--ink)}
+  .shots-hero h1 .g{color:var(--orange)}
+  .shots-hero .lede{max-width:60ch;margin:0 auto 26px;color:var(--muted);font-size:18px}
+  .demo{max-width:920px;margin:0 auto;border-radius:14px;overflow:hidden;border:1px solid var(--line);box-shadow:0 18px 50px -20px rgba(13,27,34,.45),0 2px 8px rgba(13,27,34,.08)}
+  .demo video,.demo img{display:block;width:100%}
+  .demo-cap{max-width:920px;margin:12px auto 0;color:var(--muted);font-size:13.5px;text-align:center}
+  .demo-cap code{font-size:12.5px}
+  .shots-main{max-width:1160px;margin:0 auto;padding:12px 22px 40px}
+  .cmd-shot{padding:38px 0;border-top:1px solid var(--line)}
+  .cmd-shot:first-child{border-top:none}
+  .cmd-shot .head h2{margin:0 0 3px;font-size:15px}
+  .cmd-shot .head h2 code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:19px;font-weight:700;color:var(--ink);background:none;padding:0;border:none}
+  .cmd-shot .head h2 code::before{content:"sluice ";color:var(--orange)}
+  .cmd-shot .head p{margin:0 0 20px;color:var(--muted);font-size:15.5px;max-width:70ch}
+  .grid{display:grid;gap:18px}
+  .grid.n3{grid-template-columns:repeat(3,1fr)}
+  .grid.n2{grid-template-columns:repeat(2,1fr)}
+  .grid.n1{grid-template-columns:minmax(0,860px)}
+  figure.shot{margin:0;display:flex;flex-direction:column;gap:9px}
+  .frame{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--dark);box-shadow:0 6px 20px -12px rgba(13,27,34,.3)}
+  .frame img{display:block;width:100%}
+  figcaption{font-size:13px;color:var(--muted);line-height:1.5}
+  figcaption .step{display:block;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--orange-dk);margin-bottom:2px}
+  .shots-foot{max-width:1160px;margin:0 auto;padding:22px 22px 60px;color:var(--muted);font-size:13px;border-top:1px solid var(--line)}
+  @media(max-width:860px){.grid.n3,.grid.n2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <a href="/docs/">Docs</a>
+      <a href="/field-notes/">Field Notes</a>
+      <a class="active" href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="shots-hero">
+  <h1>See sluice <span class="g">in action</span></h1>
+  <p class="lede">Every command shows a clean, legible view at the terminal — from a one-shot migration to a live continuous-sync stream. Here's what each one looks like as it runs. Piped or scripted, the output stays the plain structured logs; the views below appear only at an interactive terminal.</p>
+  <div class="demo">
+    <video autoplay loop muted playsinline poster="/assets/screenshots/sync-mid.png">
+      <source src="/assets/screenshots/sync-demo.webm" type="video/webm">
+      <source src="/assets/screenshots/sync-demo.mp4" type="video/mp4">
+      <img src="/assets/screenshots/sync-demo.gif" alt="sluice sync start live panel">
+    </video>
+  </div>
+  <p class="demo-cap"><code>sluice sync start</code> — MySQL → Postgres: a consistent snapshot, then live CDC with position, freshness, rows applied, and throughput.</p>
+</div>
+
+<main class="shots-main">
+
+  <section class="cmd-shot">
+    <div class="head"><h2><code>sync start</code></h2><p>A continuous-sync stream, presented as a live status panel for the life of the process — mode, position, freshness, rows applied, throughput, health, and recent events.</p></div>
+    <div class="grid n3">
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/sync-begin.png" alt="sync start — CDC engaged" loading="lazy"></div><figcaption><span class="step">CDC engaged</span>Snapshot done; streaming live changes, position advancing.</figcaption></figure>
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/sync-mid.png" alt="sync start — applying" loading="lazy"></div><figcaption><span class="step">Applying</span>Rows applied and throughput climb as source changes arrive.</figcaption></figure>
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/sync-end.png" alt="sync start — drain and stop" loading="lazy"></div><figcaption><span class="step">Drain &amp; stop</span><code>q</code> / ctrl+c drains in-flight changes, then exits cleanly.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="cmd-shot">
+    <div class="head"><h2><code>migrate</code></h2><p>A one-shot schema-and-data copy with a live phase checklist — tables, then a per-table bulk-copy bar, then deferred indexes and constraints.</p></div>
+    <div class="grid n3">
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/migrate-begin.png" alt="migrate — phases" loading="lazy"></div><figcaption><span class="step">Phases</span>Tables created; bulk copy begins, indexes and constraints deferred.</figcaption></figure>
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/migrate-mid.png" alt="migrate — bulk copy" loading="lazy"></div><figcaption><span class="step">Bulk copy</span>The per-table bar reads <code>100%+</code> once InnoDB's row estimate is passed.</figcaption></figure>
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/migrate-end.png" alt="migrate — complete" loading="lazy"></div><figcaption><span class="step">Complete</span>Summary panel: tables, rows, duration, and any warnings.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="cmd-shot">
+    <div class="head"><h2><code>verify</code></h2><p>Reconcile the target against the source, row-for-row (or by count), and report exactly what matched.</p></div>
+    <div class="grid n2">
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/verify-begin.png" alt="verify — checking" loading="lazy"></div><figcaption><span class="step">Checking</span>Schema compared, then the data comparison runs.</figcaption></figure>
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/verify-end.png" alt="verify — clean" loading="lazy"></div><figcaption><span class="step">Clean</span>Tables checked / clean / mismatched / skipped.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="cmd-shot">
+    <div class="head"><h2><code>backup full</code></h2><p>A chunked, optionally encrypted and signed logical backup — with an EndPosition so a later incremental picks up exactly where it left off.</p></div>
+    <div class="grid n2">
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/backup-begin.png" alt="backup — copying" loading="lazy"></div><figcaption><span class="step">Copying</span>Schema captured; rows stream out in size-bounded chunks.</figcaption></figure>
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/backup-end.png" alt="backup — complete" loading="lazy"></div><figcaption><span class="step">Complete</span>Tables, rows, chunks, encrypted?, signed?, EndPosition.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="cmd-shot">
+    <div class="head"><h2><code>restore</code></h2><p>Replay a backup chain into a fresh target — schema, data, then constraints.</p></div>
+    <div class="grid n2">
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/restore-begin.png" alt="restore — applying" loading="lazy"></div><figcaption><span class="step">Applying</span>Schema restored; data replayed, constraints deferred.</figcaption></figure>
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/restore-end.png" alt="restore — complete" loading="lazy"></div><figcaption><span class="step">Complete</span>Tables and rows restored.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="cmd-shot">
+    <div class="head"><h2><code>cutover</code></h2><p>Prime the target's sequences and AUTO_INCREMENT columns past the migrated data, so the application can write safely after the switch. Runs in milliseconds — here's the result panel.</p></div>
+    <div class="grid n1">
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/cutover.png" alt="cutover — sequences primed" loading="lazy"></div><figcaption><span class="step">Sequences primed</span>Per-engine rollup: primed / noop / skipped / refused.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="cmd-shot">
+    <div class="head"><h2><code>matview refresh</code></h2><p>Refresh the target's materialized views after a load or a sync catch-up.</p></div>
+    <div class="grid n1">
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/matview.png" alt="matview refresh — refreshed" loading="lazy"></div><figcaption><span class="step">Refreshed</span>Views refreshed / skipped.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="cmd-shot">
+    <div class="head"><h2><code>trigger setup</code></h2><p>Install the trigger-based CDC capture on a source that has no native replication stream — reporting exactly what DDL it applied.</p></div>
+    <div class="grid n1">
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/trigger.png" alt="trigger setup — installed" loading="lazy"></div><figcaption><span class="step">Installed</span>Statements applied, DDL-detection mode, server version.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="cmd-shot">
+    <div class="head"><h2><code>slot list</code></h2><p>List the logical-replication slots on a Postgres source — the ACTIVE column shows at a glance which have a live consumer.</p></div>
+    <div class="grid n1">
+      <figure class="shot"><div class="frame"><img src="/assets/screenshots/slot.png" alt="slot list — replication slots" loading="lazy"></div><figcaption><span class="step">Slots</span>Name, plugin, active, WAL status, and LSNs — mirroring <code>pg_replication_slots</code>.</figcaption></figure>
+    </div>
+  </section>
+
+</main>
+
+<footer class="shots-foot">Every frame is a real run of the released <code>sluice</code> binary. Piped output, CI, and <code>--log-format=json</code> emit the same structured logs they always have — these views are additive at a TTY. · <a href="/docs/">Docs</a> · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a></footer>
+</body>
+</html>

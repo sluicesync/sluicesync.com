@@ -50,6 +50,12 @@
   .install code{color:var(--cream);min-width:0;overflow-wrap:anywhere}
   .install .dollar{color:#5f7681;user-select:none}
   .cta{margin-top:26px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .hero-demo{margin:40px auto 0;max-width:860px}
+  .hero-demo video{display:block;width:100%;border-radius:12px;border:1px solid #294049;
+    box-shadow:0 20px 60px -24px rgba(0,0,0,.6)}
+  .hero-demo-cap{font-size:13.5px;color:#8ea0a8;margin:14px 0 0}
+  .hero-demo-cap code{color:var(--cream);background:none;padding:0}
+  .hero-demo-cap a{color:var(--orange);font-weight:600}
   .btn{display:inline-block;padding:11px 20px;border-radius:9px;font-weight:600;font-size:15px}
   .btn.primary{background:var(--orange);color:#fff}
   .btn.primary:hover{background:#ff6a2c;text-decoration:none}
@@ -101,6 +107,7 @@
     </span>
     <nav>
       <a href="/docs/">Docs</a>
+      <a href="/screenshots/">Screenshots</a>
       <a href="#features">Features</a>
       <a href="https://github.com/sluicesync/sluice">GitHub</a>
     </nav>
@@ -122,6 +129,14 @@
     <div class="cta">
       <a class="btn primary" href="/docs/getting-started/">Get started</a>
       <a class="btn ghost" href="/docs/">Documentation</a>
+    </div>
+    <div class="hero-demo">
+      <video autoplay loop muted playsinline poster="/assets/screenshots/sync-mid.png">
+        <source src="/assets/screenshots/sync-demo.webm" type="video/webm">
+        <source src="/assets/screenshots/sync-demo.mp4" type="video/mp4">
+        <img src="/assets/screenshots/sync-demo.gif" alt="sluice sync start live panel">
+      </video>
+      <p class="hero-demo-cap"><code>sluice sync start</code> — MySQL → Postgres, live. <a href="/screenshots/">See every command in action →</a></p>
     </div>
   </div>
 </div>

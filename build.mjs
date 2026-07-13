@@ -308,7 +308,8 @@ function page({ slug, title, subtitle, body, prev, next }) {
   if (fieldNote) ({ prev, next } = fnPager(slug));
   const top =
     '<a class="' + (docsActive ? "active" : "") + '" href="/docs/">Docs</a>' +
-    '<a class="' + (fieldNote ? "active" : "") + '" href="/field-notes/">Field Notes</a>';
+    '<a class="' + (fieldNote ? "active" : "") + '" href="/field-notes/">Field Notes</a>' +
+    '<a href="/screenshots/">Screenshots</a>';
   // A dated "landed" line under the dek on each note page (not the landing).
   const landedLine = fieldNote && fnBySlug.has(slug) ? '<p class="fn-landed">Landed in sluice · ' + fnBySlug.get(slug).date + " · " + esc(fnBySlug.get(slug).engine) + "</p>" : "";
   let pager = "";
