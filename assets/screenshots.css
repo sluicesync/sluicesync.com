@@ -34,3 +34,11 @@ figcaption .step{display:block;font-family:ui-monospace,Menlo,Consolas,monospace
 .lb-close{position:absolute;top:16px;right:22px;background:none;border:none;color:#cdd8dc;font-size:34px;line-height:1;cursor:pointer;padding:6px 12px;border-radius:8px}
 .lb-close:hover,.lb-close:focus-visible{background:rgba(255,255,255,.08);color:#fff;outline:2px solid var(--orange)}
 @media(max-width:860px){.grid.n3,.grid.n2{grid-template-columns:1fr}}
+/* More-demos strip (animated GIFs) */
+.demos-strip{padding:44px 0 10px;border-top:1px solid var(--line)}
+.demos-strip h2{font-size:22px;margin:0 0 20px;color:var(--ink);letter-spacing:-.3px}
+.demos-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.demo-card{margin:0;display:flex;flex-direction:column;gap:10px}
+.demo-card figcaption{font-size:13.5px;color:var(--muted);line-height:1.5}
+.demo-card figcaption strong{display:block;color:var(--ink);font-size:14.5px;margin-bottom:2px}
+@media(max-width:860px){.demos-grid{grid-template-columns:1fr}}

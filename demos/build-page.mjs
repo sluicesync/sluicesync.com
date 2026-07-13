@@ -33,6 +33,21 @@ const shown = m.sections.filter(ready);
 const skipped = m.sections.filter((s) => !ready(s)).map((s) => s.id);
 if (skipped.length) console.log("skipped (no frames yet):", skipped.join(", "));
 
+// Optional "More demos" strip of animated GIFs (only the ones present on disk).
+const demos = (m.demos || []).filter((d) => existsSync(diskAsset(d.file)));
+const demosStrip = demos.length
+  ? `<section class="demos-strip">
+    <h2>More demos</h2>
+    <div class="demos-grid">${demos
+      .map(
+        (d) =>
+          `<figure class="demo-card"><div class="frame"><img src="${A}/${d.file}" alt="${esc(d.title)}" loading="lazy"></div>` +
+          `<figcaption><strong>${esc(d.title)}</strong>${esc(d.caption)}</figcaption></figure>`,
+      )
+      .join("")}</div>
+  </section>`
+  : "";
+
 const heroVideo = m.hero.video;
 const heroHtml = `<div class="shots-hero">
   <h1>See sluice <span class="g">in action</span></h1>
@@ -76,6 +91,7 @@ const page = `<!DOCTYPE html>
 ${heroHtml}
 <main class="shots-main">
 ${shown.map(section).join("\n")}
+${demosStrip}
 </main>
 <footer class="shots-foot">Every frame is a real run of the released <code>sluice</code> binary · click any frame to enlarge · piped output, CI, and <code>--log-format=json</code> emit the same structured logs they always have — these views are additive. · <a href="/docs/">Docs</a> · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a></footer>
 <div class="lb" id="lightbox" role="dialog" aria-modal="true" aria-label="Enlarged screenshot"><button class="lb-close" id="lbClose" aria-label="Close">&times;</button><img id="lbImg" src="" alt=""></div>

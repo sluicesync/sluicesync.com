@@ -58,8 +58,16 @@
     <div class="grid n2"><figure class="shot"><div class="frame"><img src="/assets/screenshots/restore-begin.png" alt="Applying" loading="lazy"></div><figcaption><span class="step">Applying</span>Schema restored; data replayed, constraints deferred.</figcaption></figure><figure class="shot"><div class="frame"><img src="/assets/screenshots/restore-end.png" alt="Complete" loading="lazy"></div><figcaption><span class="step">Complete</span>Tables and rows restored.</figcaption></figure></div>
   </section>
   <section class="cmd-shot">
+    <div class="head"><h2><code>sync tui</code></h2><p>The fleet dashboard in your terminal — every stream's state, restarts, and time-in-state, with a detail pane for the selected stream.</p></div>
+    <div class="grid n1"><figure class="shot"><div class="frame"><img src="/assets/screenshots/sync-tui.png" alt="Fleet" loading="lazy"></div><figcaption><span class="step">Fleet</span>Live fleet status; select any stream for its detail.</figcaption></figure></div>
+  </section>
+  <section class="cmd-shot">
     <div class="head"><h2><code>sync run --dashboard-listen</code></h2><p>The same fleet status as a browser dashboard, served on a local port — no terminal required.</p></div>
     <div class="grid n1"><figure class="shot"><div class="frame"><img src="/assets/screenshots/dashboard.png" alt="Web view" loading="lazy"></div><figcaption><span class="step">Web view</span>The embedded HTML dashboard at --dashboard-listen.</figcaption></figure></div>
+  </section>
+  <section class="cmd-shot">
+    <div class="head"><h2><code>sync health</code></h2><p>A scriptable per-stream health probe — freshness, position, lag, and spill — exit-code and JSON friendly for cron and CI.</p></div>
+    <div class="grid n1"><figure class="shot"><div class="frame"><img src="/assets/screenshots/sync-health.png" alt="Probe" loading="lazy"></div><figcaption><span class="step">Probe</span>Per-stream state, seconds-since-apply, lag, and spill.</figcaption></figure></div>
   </section>
   <section class="cmd-shot">
     <div class="head"><h2><code>notifications</code></h2><p>Threshold-breach alerts as a rendered HTML email (or Slack / webhook) — advisory, failure-isolated, never affecting the sync.</p></div>
@@ -80,6 +88,10 @@
   <section class="cmd-shot">
     <div class="head"><h2><code>slot list</code></h2><p>List the logical-replication slots on a Postgres source — the ACTIVE column shows at a glance which have a live consumer.</p></div>
     <div class="grid n1"><figure class="shot"><div class="frame"><img src="/assets/screenshots/slot.png" alt="Slots" loading="lazy"></div><figcaption><span class="step">Slots</span>Name, plugin, active, WAL status, and LSNs — mirroring pg_replication_slots.</figcaption></figure></div>
+  </section>
+<section class="demos-strip">
+    <h2>More demos</h2>
+    <div class="demos-grid"><figure class="demo-card"><div class="frame"><img src="/assets/screenshots/demo-migrate.gif" alt="Migrate in motion" loading="lazy"></div><figcaption><strong>Migrate in motion</strong>A full MySQL → Postgres migration: phases, bulk-copy bar, summary.</figcaption></figure><figure class="demo-card"><div class="frame"><img src="/assets/screenshots/demo-roundtrip.gif" alt="Encrypted backup → restore" loading="lazy"></div><figcaption><strong>Encrypted backup → restore</strong>Take an encrypted backup, then restore it into a fresh target — the safe roundtrip.</figcaption></figure><figure class="demo-card"><div class="frame"><img src="/assets/screenshots/demo-drift.gif" alt="Schema drift, refused" loading="lazy"></div><figcaption><strong>Schema drift, refused</strong>sluice catches a hand-edited target and refuses loudly with a per-column diff and copy-paste DDL.</figcaption></figure></div>
   </section>
 </main>
 <footer class="shots-foot">Every frame is a real run of the released <code>sluice</code> binary · click any frame to enlarge · piped output, CI, and <code>--log-format=json</code> emit the same structured logs they always have — these views are additive. · <a href="/docs/">Docs</a> · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a></footer>

@@ -123,15 +123,14 @@
       "id": "sync-tui",
       "command": "sync tui",
       "kind": "single",
-      "pending": true,
       "tape": "tapes/sync-tui.tape",
       "scenario": "scenarios/fleet.sh",
-      "tagline": "The fleet dashboard — every stream's mode, freshness, lag, and restarts in one multi-stream view.",
+      "tagline": "The fleet dashboard in your terminal — every stream's state, restarts, and time-in-state, with a detail pane for the selected stream.",
       "frames": [
         {
           "file": "sync-tui.png",
           "step": "Fleet",
-          "caption": "Live status for every stream, sorted by health."
+          "caption": "Live fleet status; select any stream for its detail."
         }
       ]
     },
@@ -154,15 +153,14 @@
       "id": "sync-health",
       "command": "sync health",
       "kind": "single",
-      "pending": true,
       "tape": "tapes/sync-health.tape",
       "scenario": "scenarios/fleet.sh",
-      "tagline": "A scriptable health check — exit-code and JSON friendly, for cron and CI.",
+      "tagline": "A scriptable per-stream health probe — freshness, position, lag, and spill — exit-code and JSON friendly for cron and CI.",
       "frames": [
         {
           "file": "sync-health.png",
-          "step": "Health",
-          "caption": "Per-stream health with an aggregate exit code."
+          "step": "Probe",
+          "caption": "Per-stream state, seconds-since-apply, lag, and spill."
         }
       ]
     },
@@ -256,6 +254,23 @@
           "caption": "Name, plugin, active, WAL status, and LSNs — mirroring pg_replication_slots."
         }
       ]
+    }
+  ],
+  "demos": [
+    {
+      "file": "demo-migrate.gif",
+      "title": "Migrate in motion",
+      "caption": "A full MySQL → Postgres migration: phases, bulk-copy bar, summary."
+    },
+    {
+      "file": "demo-roundtrip.gif",
+      "title": "Encrypted backup → restore",
+      "caption": "Take an encrypted backup, then restore it into a fresh target — the safe roundtrip."
+    },
+    {
+      "file": "demo-drift.gif",
+      "title": "Schema drift, refused",
+      "caption": "sluice catches a hand-edited target and refuses loudly with a per-column diff and copy-paste DDL."
     }
   ]
 }
