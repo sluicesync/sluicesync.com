@@ -168,15 +168,14 @@
       "id": "metrics-watch",
       "command": "metrics-watch",
       "kind": "single",
-      "pending": true,
       "tape": "tapes/metrics-watch.tape",
       "scenario": "scenarios/planetscale.sh",
       "tagline": "Live PlanetScale target metrics — storage, CPU, replica lag — sampled and alerted on.",
       "frames": [
         {
           "file": "metrics-watch.png",
-          "step": "Metrics",
-          "caption": "Sampled target utilisation with threshold alerts."
+          "step": "Sampling",
+          "caption": "Live CPU, memory, storage, and connection metrics — sampled on a cadence, with threshold alerts."
         }
       ]
     },
