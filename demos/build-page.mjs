@@ -1,0 +1,90 @@
+// Generates /screenshots/index.html from demos/manifest.json — the single
+// source of truth. Run after the capture harness updates frames:
+//     node demos/build-page.mjs
+// A section marked "pending" is skipped until its frame files exist on disk,
+// so partially-captured surfaces never render a broken image.
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const m = JSON.parse(readFileSync(join(ROOT, "demos", "manifest.json"), "utf8"));
+const A = "/" + m.assetsDir; // web path, e.g. /assets/screenshots
+const diskAsset = (f) => join(ROOT, m.assetsDir, f);
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// A section renders only if every one of its frame files is on disk. This lets
+// the manifest declare surfaces before they're captured without breaking the page.
+const ready = (s) => s.frames.every((f) => existsSync(diskAsset(f.file)));
+
+const figure = (f) =>
+  `<figure class="shot"><div class="frame"><img src="${A}/${f.file}" alt="${esc(f.step)}" loading="lazy"></div>` +
+  `<figcaption><span class="step">${esc(f.step)}</span>${esc(f.caption)}</figcaption></figure>`;
+
+const section = (s) => {
+  const n = s.frames.length;
+  return `  <section class="cmd-shot">
+    <div class="head"><h2><code>${esc(s.command)}</code></h2><p>${esc(s.tagline)}</p></div>
+    <div class="grid n${n}">${s.frames.map(figure).join("")}</div>
+  </section>`;
+};
+
+const shown = m.sections.filter(ready);
+const skipped = m.sections.filter((s) => !ready(s)).map((s) => s.id);
+if (skipped.length) console.log("skipped (no frames yet):", skipped.join(", "));
+
+const heroVideo = m.hero.video;
+const heroHtml = `<div class="shots-hero">
+  <h1>See sluice <span class="g">in action</span></h1>
+  <p class="lede">Every command and surface shows a clean, legible view — from a one-shot migration to a live continuous-sync stream, a fleet dashboard, and even the alert emails. Piped or scripted, the output stays the plain structured logs; these views appear only at an interactive terminal or in a browser.</p>
+  <div class="demo">
+    <video autoplay loop muted playsinline poster="${A}/${m.hero.poster}">
+      <source src="${A}/${heroVideo}.webm" type="video/webm">
+      <source src="${A}/${heroVideo}.mp4" type="video/mp4">
+      <img src="${A}/${heroVideo}.gif" alt="sluice sync start live panel">
+    </video>
+  </div>
+  <p class="demo-cap"><code>${esc(m.hero.command)}</code> — ${esc(m.hero.caption)}</p>
+</div>`;
+
+const page = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screenshots — sluice</title>
+<meta name="description" content="See sluice in action: every command and surface's live view, from a one-shot migration to continuous sync, the fleet dashboard, and alert emails — real runs of the released binary.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="stylesheet" href="/assets/screenshots.css">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <a href="/docs/">Docs</a>
+      <a href="/field-notes/">Field Notes</a>
+      <a class="active" href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+${heroHtml}
+<main class="shots-main">
+${shown.map(section).join("\n")}
+</main>
+<footer class="shots-foot">Every frame is a real run of the released <code>sluice</code> binary · click any frame to enlarge · piped output, CI, and <code>--log-format=json</code> emit the same structured logs they always have — these views are additive. · <a href="/docs/">Docs</a> · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a></footer>
+<div class="lb" id="lightbox" role="dialog" aria-modal="true" aria-label="Enlarged screenshot"><button class="lb-close" id="lbClose" aria-label="Close">&times;</button><img id="lbImg" src="" alt=""></div>
+<script>
+(function(){var lb=document.getElementById('lightbox'),img=document.getElementById('lbImg'),c=document.getElementById('lbClose');function o(s,a){img.src=s;img.alt=a||'';lb.classList.add('open');c.focus();}function s(){lb.classList.remove('open');img.src='';}document.querySelectorAll('.frame img').forEach(function(el){el.addEventListener('click',function(){o(el.currentSrc||el.src,el.alt);});});lb.addEventListener('click',function(e){if(e.target!==img)s();});c.addEventListener('click',s);document.addEventListener('keydown',function(e){if(e.key==='Escape'&&lb.classList.contains('open'))s();});})();
+</script>
+</body>
+</html>
+`;
+
+writeFileSync(join(ROOT, "screenshots", "index.html"), page);
+console.log(`wrote screenshots/index.html — ${shown.length} sections rendered`);
