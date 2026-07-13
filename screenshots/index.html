@@ -58,6 +58,14 @@
     <div class="grid n2"><figure class="shot"><div class="frame"><img src="/assets/screenshots/restore-begin.png" alt="Applying" loading="lazy"></div><figcaption><span class="step">Applying</span>Schema restored; data replayed, constraints deferred.</figcaption></figure><figure class="shot"><div class="frame"><img src="/assets/screenshots/restore-end.png" alt="Complete" loading="lazy"></div><figcaption><span class="step">Complete</span>Tables and rows restored.</figcaption></figure></div>
   </section>
   <section class="cmd-shot">
+    <div class="head"><h2><code>sync run --dashboard-listen</code></h2><p>The same fleet status as a browser dashboard, served on a local port — no terminal required.</p></div>
+    <div class="grid n1"><figure class="shot"><div class="frame"><img src="/assets/screenshots/dashboard.png" alt="Web view" loading="lazy"></div><figcaption><span class="step">Web view</span>The embedded HTML dashboard at --dashboard-listen.</figcaption></figure></div>
+  </section>
+  <section class="cmd-shot">
+    <div class="head"><h2><code>notifications</code></h2><p>Threshold-breach alerts as a rendered HTML email (or Slack / webhook) — advisory, failure-isolated, never affecting the sync.</p></div>
+    <div class="grid n1"><figure class="shot"><div class="frame"><img src="/assets/screenshots/notify-email.png" alt="Email alert" loading="lazy"></div><figcaption><span class="step">Email alert</span>The HTML email template for a storage-utilisation breach.</figcaption></figure></div>
+  </section>
+  <section class="cmd-shot">
     <div class="head"><h2><code>cutover</code></h2><p>Prime the target's sequences and AUTO_INCREMENT columns past the migrated data so the app can write safely after the switch. Runs in milliseconds — here's the result panel.</p></div>
     <div class="grid n1"><figure class="shot"><div class="frame"><img src="/assets/screenshots/cutover.png" alt="Sequences primed" loading="lazy"></div><figcaption><span class="step">Sequences primed</span>Per-engine rollup: primed / noop / skipped / refused.</figcaption></figure></div>
   </section>

@@ -10,122 +10,251 @@
   },
   "sections": [
     {
-      "id": "sync-start", "command": "sync start", "kind": "triptych",
-      "tape": "tapes/sync-start.tape", "scenario": "scenarios/sync-cdc.sh",
+      "id": "sync-start",
+      "command": "sync start",
+      "kind": "triptych",
+      "tape": "tapes/sync-start.tape",
+      "scenario": "scenarios/sync-cdc.sh",
       "tagline": "A continuous-sync stream as a live status panel — mode, position, freshness, rows applied, throughput, health, and recent events.",
       "frames": [
-        {"file": "sync-begin.png", "step": "CDC engaged", "caption": "Snapshot done; streaming live changes, position advancing."},
-        {"file": "sync-mid.png", "step": "Applying", "caption": "Rows applied and throughput climb as source changes arrive."},
-        {"file": "sync-end.png", "step": "Drain & stop", "caption": "q / ctrl+c drains in-flight changes, then exits cleanly."}
+        {
+          "file": "sync-begin.png",
+          "step": "CDC engaged",
+          "caption": "Snapshot done; streaming live changes, position advancing."
+        },
+        {
+          "file": "sync-mid.png",
+          "step": "Applying",
+          "caption": "Rows applied and throughput climb as source changes arrive."
+        },
+        {
+          "file": "sync-end.png",
+          "step": "Drain & stop",
+          "caption": "q / ctrl+c drains in-flight changes, then exits cleanly."
+        }
       ]
     },
     {
-      "id": "migrate", "command": "migrate", "kind": "triptych",
-      "tape": "tapes/migrate.tape", "scenario": "scenarios/migrate.sh",
+      "id": "migrate",
+      "command": "migrate",
+      "kind": "triptych",
+      "tape": "tapes/migrate.tape",
+      "scenario": "scenarios/migrate.sh",
       "tagline": "A one-shot schema-and-data copy with a live phase checklist — tables, a per-table bulk-copy bar, then deferred indexes and constraints.",
       "frames": [
-        {"file": "migrate-begin.png", "step": "Phases", "caption": "Tables created; bulk copy begins, indexes and constraints deferred."},
-        {"file": "migrate-mid.png", "step": "Bulk copy", "caption": "The per-table bar reads 100%+ once InnoDB's row estimate is passed."},
-        {"file": "migrate-end.png", "step": "Complete", "caption": "Summary panel: tables, rows, duration, and any warnings."}
+        {
+          "file": "migrate-begin.png",
+          "step": "Phases",
+          "caption": "Tables created; bulk copy begins, indexes and constraints deferred."
+        },
+        {
+          "file": "migrate-mid.png",
+          "step": "Bulk copy",
+          "caption": "The per-table bar reads 100%+ once InnoDB's row estimate is passed."
+        },
+        {
+          "file": "migrate-end.png",
+          "step": "Complete",
+          "caption": "Summary panel: tables, rows, duration, and any warnings."
+        }
       ]
     },
     {
-      "id": "verify", "command": "verify", "kind": "duo",
-      "tape": "tapes/verify.tape", "scenario": "scenarios/migrate.sh",
+      "id": "verify",
+      "command": "verify",
+      "kind": "duo",
+      "tape": "tapes/verify.tape",
+      "scenario": "scenarios/migrate.sh",
       "tagline": "Reconcile the target against the source, row-for-row (or by count), and report exactly what matched.",
       "frames": [
-        {"file": "verify-begin.png", "step": "Checking", "caption": "Schema compared, then the data comparison runs."},
-        {"file": "verify-end.png", "step": "Clean", "caption": "Tables checked / clean / mismatched / skipped."}
+        {
+          "file": "verify-begin.png",
+          "step": "Checking",
+          "caption": "Schema compared, then the data comparison runs."
+        },
+        {
+          "file": "verify-end.png",
+          "step": "Clean",
+          "caption": "Tables checked / clean / mismatched / skipped."
+        }
       ]
     },
     {
-      "id": "backup", "command": "backup full", "kind": "duo",
-      "tape": "tapes/backup.tape", "scenario": "scenarios/migrate.sh",
+      "id": "backup",
+      "command": "backup full",
+      "kind": "duo",
+      "tape": "tapes/backup.tape",
+      "scenario": "scenarios/migrate.sh",
       "tagline": "A chunked, optionally encrypted and signed logical backup — with an EndPosition so a later incremental resumes exactly where it left off.",
       "frames": [
-        {"file": "backup-begin.png", "step": "Copying", "caption": "Schema captured; rows stream out in size-bounded chunks."},
-        {"file": "backup-end.png", "step": "Complete", "caption": "Tables, rows, chunks, encrypted?, signed?, EndPosition."}
+        {
+          "file": "backup-begin.png",
+          "step": "Copying",
+          "caption": "Schema captured; rows stream out in size-bounded chunks."
+        },
+        {
+          "file": "backup-end.png",
+          "step": "Complete",
+          "caption": "Tables, rows, chunks, encrypted?, signed?, EndPosition."
+        }
       ]
     },
     {
-      "id": "restore", "command": "restore", "kind": "duo",
-      "tape": "tapes/restore.tape", "scenario": "scenarios/backup-restore.sh",
+      "id": "restore",
+      "command": "restore",
+      "kind": "duo",
+      "tape": "tapes/restore.tape",
+      "scenario": "scenarios/backup-restore.sh",
       "tagline": "Replay a backup chain into a fresh target — schema, data, then constraints.",
       "frames": [
-        {"file": "restore-begin.png", "step": "Applying", "caption": "Schema restored; data replayed, constraints deferred."},
-        {"file": "restore-end.png", "step": "Complete", "caption": "Tables and rows restored."}
+        {
+          "file": "restore-begin.png",
+          "step": "Applying",
+          "caption": "Schema restored; data replayed, constraints deferred."
+        },
+        {
+          "file": "restore-end.png",
+          "step": "Complete",
+          "caption": "Tables and rows restored."
+        }
       ]
     },
     {
-      "id": "sync-tui", "command": "sync tui", "kind": "single", "pending": true,
-      "tape": "tapes/sync-tui.tape", "scenario": "scenarios/fleet.sh",
+      "id": "sync-tui",
+      "command": "sync tui",
+      "kind": "single",
+      "pending": true,
+      "tape": "tapes/sync-tui.tape",
+      "scenario": "scenarios/fleet.sh",
       "tagline": "The fleet dashboard — every stream's mode, freshness, lag, and restarts in one multi-stream view.",
       "frames": [
-        {"file": "sync-tui.png", "step": "Fleet", "caption": "Live status for every stream, sorted by health."}
+        {
+          "file": "sync-tui.png",
+          "step": "Fleet",
+          "caption": "Live status for every stream, sorted by health."
+        }
       ]
     },
     {
-      "id": "dashboard", "command": "sync run --dashboard-listen", "kind": "htmlframe", "pending": true,
-      "render": "render/dashboard.mjs", "scenario": "scenarios/fleet.sh",
+      "id": "dashboard",
+      "command": "sync run --dashboard-listen",
+      "kind": "htmlframe",
+      "render": "render/dashboard.mjs",
+      "scenario": "scenarios/fleet.sh",
       "tagline": "The same fleet status as a browser dashboard, served on a local port — no terminal required.",
       "frames": [
-        {"file": "dashboard.png", "step": "Web view", "caption": "The embedded HTML dashboard at --dashboard-listen."}
+        {
+          "file": "dashboard.png",
+          "step": "Web view",
+          "caption": "The embedded HTML dashboard at --dashboard-listen."
+        }
       ]
     },
     {
-      "id": "sync-health", "command": "sync health", "kind": "single", "pending": true,
-      "tape": "tapes/sync-health.tape", "scenario": "scenarios/fleet.sh",
+      "id": "sync-health",
+      "command": "sync health",
+      "kind": "single",
+      "pending": true,
+      "tape": "tapes/sync-health.tape",
+      "scenario": "scenarios/fleet.sh",
       "tagline": "A scriptable health check — exit-code and JSON friendly, for cron and CI.",
       "frames": [
-        {"file": "sync-health.png", "step": "Health", "caption": "Per-stream health with an aggregate exit code."}
+        {
+          "file": "sync-health.png",
+          "step": "Health",
+          "caption": "Per-stream health with an aggregate exit code."
+        }
       ]
     },
     {
-      "id": "metrics-watch", "command": "metrics-watch", "kind": "single", "pending": true,
-      "tape": "tapes/metrics-watch.tape", "scenario": "scenarios/planetscale.sh",
+      "id": "metrics-watch",
+      "command": "metrics-watch",
+      "kind": "single",
+      "pending": true,
+      "tape": "tapes/metrics-watch.tape",
+      "scenario": "scenarios/planetscale.sh",
       "tagline": "Live PlanetScale target metrics — storage, CPU, replica lag — sampled and alerted on.",
       "frames": [
-        {"file": "metrics-watch.png", "step": "Metrics", "caption": "Sampled target utilisation with threshold alerts."}
+        {
+          "file": "metrics-watch.png",
+          "step": "Metrics",
+          "caption": "Sampled target utilisation with threshold alerts."
+        }
       ]
     },
     {
-      "id": "notify-email", "command": "notifications", "kind": "htmlframe", "pending": true,
-      "render": "render/email.mjs", "scenario": null,
+      "id": "notify-email",
+      "command": "notifications",
+      "kind": "htmlframe",
+      "render": "render/email.mjs",
+      "scenario": null,
       "tagline": "Threshold-breach alerts as a rendered HTML email (or Slack / webhook) — advisory, failure-isolated, never affecting the sync.",
       "frames": [
-        {"file": "notify-email.png", "step": "Email alert", "caption": "The HTML email template for a storage-utilisation breach."}
+        {
+          "file": "notify-email.png",
+          "step": "Email alert",
+          "caption": "The HTML email template for a storage-utilisation breach."
+        }
       ]
     },
     {
-      "id": "cutover", "command": "cutover", "kind": "single",
-      "tape": "tapes/cutover.tape", "scenario": "scenarios/cutover.sh",
+      "id": "cutover",
+      "command": "cutover",
+      "kind": "single",
+      "tape": "tapes/cutover.tape",
+      "scenario": "scenarios/cutover.sh",
       "tagline": "Prime the target's sequences and AUTO_INCREMENT columns past the migrated data so the app can write safely after the switch. Runs in milliseconds — here's the result panel.",
       "frames": [
-        {"file": "cutover.png", "step": "Sequences primed", "caption": "Per-engine rollup: primed / noop / skipped / refused."}
+        {
+          "file": "cutover.png",
+          "step": "Sequences primed",
+          "caption": "Per-engine rollup: primed / noop / skipped / refused."
+        }
       ]
     },
     {
-      "id": "matview", "command": "matview refresh", "kind": "single",
-      "tape": "tapes/matview.tape", "scenario": "scenarios/matview.sh",
+      "id": "matview",
+      "command": "matview refresh",
+      "kind": "single",
+      "tape": "tapes/matview.tape",
+      "scenario": "scenarios/matview.sh",
       "tagline": "Refresh the target's materialized views after a load or a sync catch-up.",
       "frames": [
-        {"file": "matview.png", "step": "Refreshed", "caption": "Views refreshed / skipped."}
+        {
+          "file": "matview.png",
+          "step": "Refreshed",
+          "caption": "Views refreshed / skipped."
+        }
       ]
     },
     {
-      "id": "trigger", "command": "trigger setup", "kind": "single",
-      "tape": "tapes/trigger.tape", "scenario": "scenarios/trigger.sh",
+      "id": "trigger",
+      "command": "trigger setup",
+      "kind": "single",
+      "tape": "tapes/trigger.tape",
+      "scenario": "scenarios/trigger.sh",
       "tagline": "Install trigger-based CDC capture on a source with no native replication stream — reporting exactly what DDL it applied.",
       "frames": [
-        {"file": "trigger.png", "step": "Installed", "caption": "Statements applied, DDL-detection mode, server version."}
+        {
+          "file": "trigger.png",
+          "step": "Installed",
+          "caption": "Statements applied, DDL-detection mode, server version."
+        }
       ]
     },
     {
-      "id": "slot", "command": "slot list", "kind": "single",
-      "tape": "tapes/slot.tape", "scenario": "scenarios/slot.sh",
+      "id": "slot",
+      "command": "slot list",
+      "kind": "single",
+      "tape": "tapes/slot.tape",
+      "scenario": "scenarios/slot.sh",
       "tagline": "List the logical-replication slots on a Postgres source — the ACTIVE column shows at a glance which have a live consumer.",
       "frames": [
-        {"file": "slot.png", "step": "Slots", "caption": "Name, plugin, active, WAL status, and LSNs — mirroring pg_replication_slots."}
+        {
+          "file": "slot.png",
+          "step": "Slots",
+          "caption": "Name, plugin, active, WAL status, and LSNs — mirroring pg_replication_slots."
+        }
       ]
     }
   ]
