@@ -33,18 +33,27 @@ const shown = m.sections.filter(ready);
 const skipped = m.sections.filter((s) => !ready(s)).map((s) => s.id);
 if (skipped.length) console.log("skipped (no frames yet):", skipped.join(", "));
 
-// Optional "More demos" strip of animated GIFs (only the ones present on disk).
+// Optional "More demos" strip. Each demo prefers <video> (webm+mp4, from the
+// same tape as the gif) and falls back to the gif; renders only if the gif is
+// present. Title + description are separate block elements so they can't run
+// together regardless of stylesheet load order.
 const demos = (m.demos || []).filter((d) => existsSync(diskAsset(d.file)));
+const demoCard = (d) => {
+  const base = d.file.replace(/\.(gif|mp4|webm)$/, "");
+  const hasVid = existsSync(diskAsset(base + ".webm")) || existsSync(diskAsset(base + ".mp4"));
+  const media = hasVid
+    ? `<video autoplay loop muted playsinline poster="${A}/${base}.gif">` +
+      (existsSync(diskAsset(base + ".webm")) ? `<source src="${A}/${base}.webm" type="video/webm">` : "") +
+      (existsSync(diskAsset(base + ".mp4")) ? `<source src="${A}/${base}.mp4" type="video/mp4">` : "") +
+      `<img src="${A}/${base}.gif" alt="${esc(d.title)}"></video>`
+    : `<img src="${A}/${base}.gif" alt="${esc(d.title)}" loading="lazy">`;
+  return `<figure class="demo-card"><div class="frame">${media}</div>` +
+    `<figcaption><span class="demo-title">${esc(d.title)}</span><span class="demo-desc">${esc(d.caption)}</span></figcaption></figure>`;
+};
 const demosStrip = demos.length
   ? `<section class="demos-strip">
     <h2>More demos</h2>
-    <div class="demos-grid">${demos
-      .map(
-        (d) =>
-          `<figure class="demo-card"><div class="frame"><img src="${A}/${d.file}" alt="${esc(d.title)}" loading="lazy"></div>` +
-          `<figcaption><strong>${esc(d.title)}</strong>${esc(d.caption)}</figcaption></figure>`,
-      )
-      .join("")}</div>
+    <div class="demos-grid">${demos.map(demoCard).join("")}</div>
   </section>`
   : "";
 
