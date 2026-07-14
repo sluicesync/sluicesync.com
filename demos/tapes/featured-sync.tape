@@ -22,7 +22,7 @@ Enter
 # DSNs come from /demo/env.sh (gitignored); see demos/README.md
 Type "source /demo/env.sh"
 Enter
-Type 'export SLUICE_SOURCE="$MYSQL_SHOP"'
+Type 'export SLUICE_SOURCE="$MYSQL_SHOP?tls=skip-verify"'
 Enter
 Type 'export SLUICE_TARGET="$PG_SHOPDB"'
 Enter
@@ -34,7 +34,7 @@ Sleep 800ms
 Type "# Continuous sync, MySQL to Postgres: consistent snapshot, then live CDC."
 Enter
 Sleep 1000ms
-Type "sluice sync start --source-driver mysql --target-driver postgres --include-table live_signups --stream-id shop-cdc2"
+Type "sluice sync start --source-driver mysql --target-driver postgres --include-table live_signups --stream-id shop-cdc"
 Sleep 400ms
 Enter
 Sleep 4s
