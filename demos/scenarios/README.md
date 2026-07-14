@@ -52,3 +52,10 @@ live MySQL→Postgres sync, applies an `ALTER … ADD COLUMN` mid-stream so slui
 forwards it, and captures the sync log to `demo/fwd-forward.log` (gitignored).
 `tapes/shot-forward.tape` then greps that log for the `forward-add-column` line.
 Needs `MYSQL_SHOP` + `PG_FWDDB` in `demo/env.sh`.
+
+## featured-sync (hero) — verify-ca source TLS
+
+The hero uses `--source-tls-ca /demo/ca.pem` (verify-ca, ADR-0158) so the binlog
+stream is authenticated and no TLS warning shows. Stage the rig's MySQL CA first:
+`docker exec sluice-localrig-mysql-src cat /var/lib/mysql/ca.pem > demos/demo/ca.pem`
+(gitignored). Needs `MYSQL_SHOP` (no `tls=` param) + `PG_SHOPDB` in `demo/env.sh`.
