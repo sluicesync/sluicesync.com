@@ -39,6 +39,7 @@ export PG_DEMO_RESTORED="postgres://USER:PASS@HOST:5432/demo_restored?sslmode=di
 # Postgres source used for `slot list` and `trigger setup` (a DB with the demo
 # replication slots + a `customers` table). Points at the maintenance DB.
 export PG_SLOTS="postgres://USER:PASS@HOST:5432/postgres?sslmode=disable"
+export PG_FWDDB="postgres://USER:PASS@HOST:5432/fwddb?sslmode=disable"
 
 # Postgres target DB for the homepage hero continuous-sync demo (featured-sync).
 export PG_SHOPDB="postgres://USER:PASS@HOST:5432/shopdb?sslmode=disable"

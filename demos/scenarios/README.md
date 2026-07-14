@@ -44,3 +44,11 @@ run sluice's own email-template test, so they need neither the rig nor `capture.
 - Only `restoredb` is treated as ephemeral (auto-reset by `capture.sh`). If you
   add another throwaway target, reset it the same way (three `-c` calls: terminate
   → `DROP DATABASE IF EXISTS` → `CREATE DATABASE`).
+
+## shot-forward (Schema change, forwarded)
+
+Run `./scenarios/forward.sh` first — it seeds a small `shop.fwd_orders`, runs a
+live MySQL→Postgres sync, applies an `ALTER … ADD COLUMN` mid-stream so sluice
+forwards it, and captures the sync log to `demo/fwd-forward.log` (gitignored).
+`tapes/shot-forward.tape` then greps that log for the `forward-add-column` line.
+Needs `MYSQL_SHOP` + `PG_FWDDB` in `demo/env.sh`.

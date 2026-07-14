@@ -270,6 +270,11 @@
       "file": "demo-drift.gif",
       "title": "Schema drift, refused",
       "caption": "sluice catches a hand-edited target and refuses loudly with a per-column diff and copy-paste DDL."
+    },
+    {
+      "file": "demo-forward.gif",
+      "title": "Schema change, forwarded",
+      "caption": "A column added to the source mid-sync is applied to the target automatically — the stream stays online, no drain and no recovery."
     }
   ]
 }

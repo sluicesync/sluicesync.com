@@ -160,6 +160,11 @@ copy_frames() {
       cp_if shot-roundtrip.mp4      demo-roundtrip.mp4
       cp_if shot-roundtrip.webm     demo-roundtrip.webm
       ;;
+    shot-forward)
+      cp_if shot-forward.gif        demo-forward.gif
+      cp_if shot-forward.mp4        demo-forward.mp4
+      cp_if shot-forward.webm       demo-forward.webm
+      ;;
     shot-drift)
       cp_if shot-drift.gif          demo-drift.gif
       cp_if shot-drift.mp4          demo-drift.mp4
