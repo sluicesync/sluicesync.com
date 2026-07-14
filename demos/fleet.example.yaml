@@ -1,0 +1,37 @@
+# Fleet config for the sync-tui / dashboard capture — TEMPLATE (safe to commit).
+#
+# Copy to  demos/demo/fleet.yaml  and fill in real DSNs; that copy is GITIGNORED.
+# The tui tape loads it from /demo/fleet.yaml (demos/demo is mounted at /demo).
+#
+#   cp demos/fleet.example.yaml demos/demo/fleet.yaml
+#   $EDITOR demos/demo/fleet.yaml
+#
+# Placeholder DSNs below are fake — do not commit real credentials here.
+syncs:
+  - stream-id: orders-to-warehouse
+    source-driver: mysql
+    source: USER:PASS@tcp(HOST:3306)/fleet_orders
+    target-driver: postgres
+    target: postgres://USER:PASS@HOST:5432/fleet_warehouse?sslmode=disable
+    include-table:
+      - orders
+
+  - stream-id: users-to-analytics
+    source-driver: postgres
+    source: postgres://USER:PASS@HOST:5432/fleet_users?sslmode=disable
+    target-driver: postgres
+    target: postgres://USER:PASS@HOST:5432/fleet_analytics?sslmode=disable
+    include-table:
+      - users
+
+  - stream-id: inventory-sync
+    source-driver: mysql
+    source: USER:PASS@tcp(HOST:3306)/fleet_inv
+    target-driver: mysql
+    target: USER:PASS@tcp(HOST:3306)/fleet_inv_replica
+    include-table:
+      - inventory
+
+restart:
+  backoff-base: 1s
+  backoff-cap: 30s

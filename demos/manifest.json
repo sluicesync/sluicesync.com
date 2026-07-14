@@ -13,7 +13,7 @@
       "id": "sync-start",
       "command": "sync start",
       "kind": "triptych",
-      "tape": "tapes/sync-start.tape",
+      "tape": "tapes/featured-sync.tape",
       "scenario": "scenarios/sync-cdc.sh",
       "tagline": "A continuous-sync stream as a live status panel — mode, position, freshness, rows applied, throughput, health, and recent events.",
       "frames": [
@@ -38,7 +38,7 @@
       "id": "migrate",
       "command": "migrate",
       "kind": "triptych",
-      "tape": "tapes/migrate.tape",
+      "tape": "tapes/shot-migrate.tape",
       "scenario": "scenarios/migrate.sh",
       "tagline": "A one-shot schema-and-data copy with a live phase checklist — tables, a per-table bulk-copy bar, then deferred indexes and constraints.",
       "frames": [
@@ -63,7 +63,7 @@
       "id": "verify",
       "command": "verify",
       "kind": "duo",
-      "tape": "tapes/verify.tape",
+      "tape": "tapes/shot-verify.tape",
       "scenario": "scenarios/migrate.sh",
       "tagline": "Reconcile the target against the source, row-for-row (or by count), and report exactly what matched.",
       "frames": [
@@ -83,7 +83,7 @@
       "id": "backup",
       "command": "backup full",
       "kind": "duo",
-      "tape": "tapes/backup.tape",
+      "tape": "tapes/shot-backup.tape",
       "scenario": "scenarios/migrate.sh",
       "tagline": "A chunked, optionally encrypted and signed logical backup — with an EndPosition so a later incremental resumes exactly where it left off.",
       "frames": [
@@ -103,7 +103,7 @@
       "id": "restore",
       "command": "restore",
       "kind": "duo",
-      "tape": "tapes/restore.tape",
+      "tape": "tapes/shot-restore.tape",
       "scenario": "scenarios/backup-restore.sh",
       "tagline": "Replay a backup chain into a fresh target — schema, data, then constraints.",
       "frames": [
@@ -123,7 +123,7 @@
       "id": "sync-tui",
       "command": "sync tui",
       "kind": "single",
-      "tape": "tapes/sync-tui.tape",
+      "tape": "tapes/shot-tui.tape",
       "scenario": "scenarios/fleet.sh",
       "tagline": "The fleet dashboard in your terminal — every stream's state, restarts, and time-in-state, with a detail pane for the selected stream.",
       "frames": [
@@ -153,7 +153,7 @@
       "id": "sync-health",
       "command": "sync health",
       "kind": "single",
-      "tape": "tapes/sync-health.tape",
+      "tape": "tapes/shot-health.tape",
       "scenario": "scenarios/fleet.sh",
       "tagline": "A scriptable per-stream health probe — freshness, position, lag, and spill — exit-code and JSON friendly for cron and CI.",
       "frames": [
@@ -168,7 +168,7 @@
       "id": "metrics-watch",
       "command": "metrics-watch",
       "kind": "single",
-      "tape": "tapes/metrics-watch.tape",
+      "tape": "tapes/shot-metrics.tape",
       "scenario": "scenarios/planetscale.sh",
       "tagline": "Live PlanetScale target metrics as a status panel — CPU, memory, storage, lag, and connections, sampled on a cadence, with threshold breaches surfaced as live events.",
       "frames": [
@@ -198,7 +198,7 @@
       "id": "cutover",
       "command": "cutover",
       "kind": "single",
-      "tape": "tapes/cutover.tape",
+      "tape": "tapes/shot-cutover.tape",
       "scenario": "scenarios/cutover.sh",
       "tagline": "Prime the target's sequences and AUTO_INCREMENT columns past the migrated data so the app can write safely after the switch. Runs in milliseconds — here's the result panel.",
       "frames": [
@@ -213,7 +213,7 @@
       "id": "matview",
       "command": "matview refresh",
       "kind": "single",
-      "tape": "tapes/matview.tape",
+      "tape": "tapes/shot-matview.tape",
       "scenario": "scenarios/matview.sh",
       "tagline": "Refresh the target's materialized views after a load or a sync catch-up.",
       "frames": [
@@ -228,7 +228,7 @@
       "id": "trigger",
       "command": "trigger setup",
       "kind": "single",
-      "tape": "tapes/trigger.tape",
+      "tape": "tapes/shot-trigger.tape",
       "scenario": "scenarios/trigger.sh",
       "tagline": "Install trigger-based CDC capture on a source with no native replication stream — reporting exactly what DDL it applied.",
       "frames": [
@@ -243,7 +243,7 @@
       "id": "slot",
       "command": "slot list",
       "kind": "single",
-      "tape": "tapes/slot.tape",
+      "tape": "tapes/shot-slot-wide.tape",
       "scenario": "scenarios/slot.sh",
       "tagline": "List the logical-replication slots on a Postgres source — the ACTIVE column shows at a glance which have a live consumer.",
       "frames": [

@@ -1,0 +1,14 @@
+# Screenshot capture harness — never commit real credentials, the staged binary,
+# or backup chains. Committed templates are demos/env.example.sh and
+# demos/fleet.example.yaml; the real filled-in copies live under demos/demo/.
+demos/demo/
+demos/**/env.sh
+demos/**/fleet.yaml
+
+# VHS scratch outputs — captured into demos/ root, then copied to
+# assets/screenshots/ (the durable, committed frames). The intermediates are
+# regenerated on every capture and are not committed.
+demos/*.gif
+demos/*.mp4
+demos/*.webm
+demos/*.png
