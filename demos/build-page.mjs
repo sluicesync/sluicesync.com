@@ -42,7 +42,7 @@ const demoCard = (d) => {
   const base = d.file.replace(/\.(gif|mp4|webm)$/, "");
   const hasVid = existsSync(diskAsset(base + ".webm")) || existsSync(diskAsset(base + ".mp4"));
   const media = hasVid
-    ? `<video autoplay loop muted playsinline poster="${A}/${base}.gif">` +
+    ? `<video controls autoplay loop muted playsinline poster="${A}/${base}.gif">` +
       (existsSync(diskAsset(base + ".webm")) ? `<source src="${A}/${base}.webm" type="video/webm">` : "") +
       (existsSync(diskAsset(base + ".mp4")) ? `<source src="${A}/${base}.mp4" type="video/mp4">` : "") +
       `<img src="${A}/${base}.gif" alt="${esc(d.title)}"></video>`
@@ -62,7 +62,7 @@ const heroHtml = `<div class="shots-hero">
   <h1>See sluice <span class="g">in action</span></h1>
   <p class="lede">Every command and surface shows a clean, legible view — from a one-shot migration to a live continuous-sync stream, a fleet dashboard, and even the alert emails. Piped or scripted, the output stays the plain structured logs; these views appear only at an interactive terminal or in a browser.</p>
   <div class="demo">
-    <video autoplay loop muted playsinline poster="${A}/${m.hero.poster}">
+    <video controls autoplay loop muted playsinline poster="${A}/${m.hero.poster}">
       <source src="${A}/${heroVideo}.webm" type="video/webm">
       <source src="${A}/${heroVideo}.mp4" type="video/mp4">
       <img src="${A}/${heroVideo}.gif" alt="sluice sync start live panel">
@@ -104,19 +104,17 @@ ${shown.map(section).join("\n")}
 ${demosStrip}
 </main>
 <footer class="shots-foot">Every frame is a real run of the released <code>sluice</code> binary · click any frame to enlarge · piped output, CI, and <code>--log-format=json</code> emit the same structured logs they always have — these views are additive. · <a href="/docs/">Docs</a> · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a></footer>
-<div class="lb" id="lightbox" role="dialog" aria-modal="true" aria-label="Enlarged view"><button class="lb-close" id="lbClose" aria-label="Close">&times;</button><img id="lbImg" src="" alt=""><video id="lbVid" controls loop playsinline></video></div>
+<div class="lb" id="lightbox" role="dialog" aria-modal="true" aria-label="Enlarged screenshot"><button class="lb-close" id="lbClose" aria-label="Close">&times;</button><img id="lbImg" src="" alt=""></div>
 <script>
+// Screenshots (section frames) click-to-enlarge as images. Demo/hero videos carry
+// native controls instead — their built-in fullscreen button (bottom-right of the
+// player) expands them to true full screen, which a lightbox can't match.
 (function(){
-  var lb=document.getElementById('lightbox'),img=document.getElementById('lbImg'),vid=document.getElementById('lbVid'),c=document.getElementById('lbClose');
-  function openImg(src,alt){vid.pause();vid.style.display='none';vid.removeAttribute('src');img.src=src;img.alt=alt||'';img.style.display='';lb.classList.add('open');c.focus();}
-  function openVid(v){img.style.display='none';img.src='';while(vid.firstChild){vid.removeChild(vid.firstChild);}
-    Array.prototype.forEach.call(v.querySelectorAll('source'),function(sr){var n=document.createElement('source');n.src=sr.src;n.type=sr.type;vid.appendChild(n);});
-    var im=v.querySelector('img');vid.setAttribute('aria-label',(im&&im.alt)||'Demo video');vid.style.display='';vid.load();lb.classList.add('open');c.focus();var p=vid.play();if(p&&p.catch){p.catch(function(){});}}
-  function close(){lb.classList.remove('open');img.src='';vid.pause();}
-  // Screenshots (section frames) enlarge as images; demo/hero videos enlarge as playable video.
-  document.querySelectorAll('.shot .frame img').forEach(function(el){el.addEventListener('click',function(){openImg(el.currentSrc||el.src,el.alt);});});
-  document.querySelectorAll('.demo-card .frame video, .shots-hero .demo video').forEach(function(el){el.addEventListener('click',function(){openVid(el);});});
-  lb.addEventListener('click',function(e){if(e.target!==img&&e.target!==vid){close();}});
+  var lb=document.getElementById('lightbox'),img=document.getElementById('lbImg'),c=document.getElementById('lbClose');
+  function open(src,alt){img.src=src;img.alt=alt||'';lb.classList.add('open');c.focus();}
+  function close(){lb.classList.remove('open');img.src='';}
+  document.querySelectorAll('.shot .frame img').forEach(function(el){el.addEventListener('click',function(){open(el.currentSrc||el.src,el.alt);});});
+  lb.addEventListener('click',function(e){if(e.target!==img){close();}});
   c.addEventListener('click',close);
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&lb.classList.contains('open')){close();}});
 })();
