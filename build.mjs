@@ -183,6 +183,7 @@ const FIELD_NOTES = [
   { slug: "float-in-primary-key", date: "2026-07-09", engine: "MySQL & Vitess", label: "When the row's own identity gets rounded", dek: "The VStream FLOAT repair re-reads exactly and matches by primary key &mdash; but when the FLOAT is <em>in</em> the key, the target's identity is itself rounded, so the match never lands, the repair silently no-ops, and <code>--strict-float</code> exits 0 with a rounded archive." },
   { slug: "cdc-position-leads-or-trails", date: "2026-07-10", engine: "Cross-cutting", label: "A CDC position can lead or trail the rows it covers", dek: "Postgres and MySQL put a schema/DDL position <em>before</em> the rows it introduces; Vitess stamps its VGTID <em>after</em> the rows the commit covers, so a snapshot and its transaction's rows can share one token. A &ldquo;did we reach the boundary?&rdquo; check that's sound on one engine silently false-negatives on the other." },
   { slug: "ddl-invisible-without-rows", date: "2026-07-12", engine: "Cross-cutting", label: "An ALTER with no rows behind it is invisible to Postgres CDC", dek: "Postgres pgoutput never streams DDL &mdash; a schema change surfaces only as a <code>RelationMessage</code>, emitted lazily right before the <em>first row</em> for that table. So an <code>ALTER &hellip; ADD COLUMN</code> with no following writes leaves <em>nothing</em> in the stream. MySQL's binlog logs the same DDL as a first-class event at its own position, whether or not a row ever follows." },
+  { slug: "mysql-cert-no-san", date: "2026-07-14", engine: "MySQL & Vitess", label: "MySQL's own certificate can't pass verify-full", dek: "The certificate <code>mysqld</code> generates for itself carries no SubjectAltName, and modern Go won't fall back to the Common Name &mdash; so <code>tls=true</code> (verify-full) can never validate a stock MySQL server. The secure middle ground is Postgres's <code>sslmode=verify-ca</code>: trust a CA, verify the chain, skip the hostname the cert can't satisfy." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -5634,6 +5635,45 @@ write(
   <li>Postgres logical replication protocol — the <a href="https://www.postgresql.org/docs/current/protocol-logicalrep-message-formats.html">Relation message</a>, sent before the first change to a relation whose row descriptor the subscriber hasn't seen; pgoutput carries no DDL statements.</li>
   <li>MySQL binlog — a DDL <a href="https://dev.mysql.com/doc/internals/en/query-event.html"><code>QUERY_EVENT</code></a> records the statement text at its own log position.</li>
   <li>Companion note — <a href="/field-notes/cdc-position-leads-or-trails/">A CDC position isn't a universal coordinate</a>.</li>
+</ul>
+`,
+  })
+);
+
+write(
+  "field-notes/mysql-cert-no-san",
+  page({
+    slug: "field-notes/mysql-cert-no-san",
+    title: "MySQL's own certificate can't pass verify-full",
+    subtitle: "The moment you decide to do MySQL TLS properly — tls=true, encrypt and verify the server — the handshake fails against a stock MySQL. Not because anything is misconfigured: the certificate mysqld generated for itself on first boot carries no SubjectAltName, and modern Go won't fall back to the Common Name to check the hostname. The two facts are structurally incompatible, and neither one makes that obvious on its own.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — wiring an authenticated TLS source connection for a MySQL→Postgres sync against a server using its default auto-generated certificate. <code>tls=skip-verify</code> connected but authenticated nothing; <code>tls=true</code> refused the handshake outright with a certificate error, on a server that was working fine.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A MySQL server started with no explicit certificate configuration doesn't run plaintext — since 5.7 it generates a self-signed CA and server certificate on first start and enables TLS automatically. So the encryption is there for free. The trouble is <em>verifying</em> it.</p>
+<p>The Go MySQL driver's DSN offers a small set of TLS modes: <code>tls=false</code> (plaintext), <code>tls=skip-verify</code> (encrypt, verify nothing), and <code>tls=true</code> (encrypt and fully verify — the equivalent of Postgres's <code>sslmode=verify-full</code>). The obvious secure choice is <code>tls=true</code>. Against a stock MySQL it fails every time, with a hostname-verification error — even though you're connecting to exactly the server that minted the cert.</p>
+<p>That leaves an unhappy binary choice: a verify-full mode that can't work, or <code>skip-verify</code>, which encrypts the pipe but authenticates the peer not at all — enough to stop a passive eavesdropper, useless against an active man-in-the-middle who simply presents their own cert. There's no in-between in the driver's DSN grammar.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>Two independent facts collide:</p>
+<ul>
+  <li><strong>MySQL's auto-generated server cert has no SubjectAltName.</strong> The <code>Auto_Generated_Server_Certificate</code> MySQL builds for itself puts the hostname (such as it is) only in the certificate's Common Name — the old, pre-2000 place for it. There is no SAN extension at all.</li>
+  <li><strong>Go stopped trusting the Common Name.</strong> Since Go 1.15, <code>crypto/tls</code> no longer falls back to a certificate's Common Name for hostname verification — a SAN is <em>required</em>. The CN is ignored for name-matching entirely. (This was a deliberate, security-motivated deprecation across the ecosystem, following the CA/Browser Forum; it isn't a Go quirk so much as where every modern TLS stack landed.)</li>
+</ul>
+<p>Put them together and verify-full is unreachable by construction: the client demands a SAN to match the hostname against, and the server's certificate simply doesn't have one. The failure isn't &ldquo;your cert is wrong for <em>this</em> host&rdquo; — it's &ldquo;your cert has nothing to match <em>any</em> host.&rdquo; No amount of setting the right hostname helps, because there's no SAN on either side of the comparison.</p>
+<p>The missing mode is the one that fits: verify the certificate <strong>chains to a CA you trust</strong>, and skip only the hostname check the SAN-less cert can't satisfy anyway. That's exactly what Postgres has had all along as <code>sslmode=verify-ca</code> — a real authentication (a cert not signed by your CA is refused) that stops short of binding to a hostname. MySQL's driver has no such named mode; you can only get it by descending into Go's <code>RegisterTLSConfig</code> and building a <code>tls.Config</code> with your CA in <code>RootCAs</code>, <code>InsecureSkipVerify: true</code> to bypass the built-in hostname check, and a custom <code>VerifyPeerCertificate</code> callback that verifies the chain against the CA with no DNS name — which, counterintuitively, still runs even under <code>InsecureSkipVerify</code>. Get the callback subtly wrong (verify against the system pool instead of your CA, or return <code>nil</code> on error) and you've built blind skip-verify wearing a verify-ca label — which is why the load-bearing test is the one that presents a cert signed by the <em>wrong</em> CA and insists the handshake fails.</p>
+
+<h2 id="what-sluice-does">Where it bit us</h2>
+<p>We were making a sync's MySQL source connection authenticated rather than merely encrypted. <code>tls=true</code> was the intended answer and it wouldn't connect; <code>skip-verify</code> connected but defeated the point. The realization was that against MySQL's default certificate there is no DSN mode that both authenticates the server and completes the handshake — the secure-and-working combination lives only in a hand-built TLS config. So sluice grew <code>--source-tls-ca</code> / <code>--target-tls-ca</code>: point them at the CA (MySQL writes one out next to the server cert), and they build the verify-ca config, register it with the driver, and rewrite the DSN's <code>tls=</code> to use it. The connection is then genuinely authenticated — a server not holding a cert signed by that CA fails the handshake — just not hostname-bound, which is the most a SAN-less cert can offer.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>MySQL's default TLS posture quietly forces you into verify-ca, and the reason is a two-part gotcha that neither half reveals alone: the server's auto-generated certificate carries no SubjectAltName, <strong>and</strong> the modern TLS client won't consult the Common Name to make up for it. So <code>tls=true</code> — the mode anyone reaches for when they want to &ldquo;do TLS properly&rdquo; — can never validate a stock MySQL server, and the tooling often presents only that or blind <code>skip-verify</code>, making authenticated TLS look impossible when it's merely unnamed. If you're connecting to any MySQL (or MariaDB, or a managed service) that presents a private-CA or self-signed certificate, the mode you actually want is verify-ca: trust the CA, verify the chain, skip the hostname the cert can't satisfy. Postgres names it for you; with MySQL you may have to build it yourself — and the one thing you must not get wrong is that &ldquo;skip the hostname&rdquo; is not the same as &ldquo;skip the CA.&rdquo;</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL Reference Manual — <a href="https://dev.mysql.com/doc/refman/8.0/en/creating-ssl-rsa-files-using-mysql.html">Creating SSL and RSA Certificates and Keys using MySQL</a>: the server auto-generates a self-signed CA + server certificate at first startup when none is configured, identifying the server in the Common Name rather than a SubjectAltName.</li>
+  <li>Go 1.15 release notes — <a href="https://go.dev/doc/go1.15#commonname"><code>crypto/tls</code></a>: the deprecated, CommonName-based fallback for hostname verification is disabled by default; certificates must carry a SubjectAltName. (The <code>x509ignoreCN</code> GODEBUG that briefly re-enabled it was removed in Go 1.17.)</li>
+  <li>PostgreSQL documentation — <a href="https://www.postgresql.org/docs/current/libpq-ssl.html">SSL Support</a>: <code>sslmode=verify-ca</code> verifies the certificate chains to a trusted CA; only <code>verify-full</code> additionally checks that the certificate's name matches the host.</li>
 </ul>
 `,
   })

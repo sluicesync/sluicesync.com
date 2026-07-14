@@ -10,6 +10,8 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
+- 2026-07-14MySQL & Vitess MySQL's own certificate can't pass verify-full — The certificate mysqld generates for itself carries no SubjectAltName, and modern Go won't fall back to the Common Name &mdash; so tls=true (verify-full) can never validate a stock MySQL server. The secure middle ground is Postgres's sslmode=verify-ca: trust a CA, verify the chain, skip the hostname the cert can't satisfy.
+
 - 2026-07-12Cross-cutting An ALTER with no rows behind it is invisible to Postgres CDC — Postgres pgoutput never streams DDL &mdash; a schema change surfaces only as a RelationMessage, emitted lazily right before the first row for that table. So an ALTER &hellip; ADD COLUMN with no following writes leaves nothing in the stream. MySQL's binlog logs the same DDL as a first-class event at its own position, whether or not a row ever follows.
 
 - 2026-07-10Cross-cutting A CDC position can lead or trail the rows it covers — Postgres and MySQL put a schema/DDL position before the rows it introduces; Vitess stamps its VGTID after the rows the commit covers, so a snapshot and its transaction's rows can share one token. A &ldquo;did we reach the boundary?&rdquo; check that's sound on one engine silently false-negatives on the other.
