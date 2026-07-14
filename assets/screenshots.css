@@ -10,6 +10,9 @@
 .demo-cap{max-width:920px;margin:12px auto 0;color:var(--muted);font-size:13.5px;text-align:center}
 .demo-cap code{font-size:12.5px}
 .shots-main{max-width:1160px;margin:0 auto;padding:12px 22px 40px}
+.cred-note{margin:8px 0 4px;padding:16px 18px;border:1px solid var(--line);border-left:3px solid var(--orange);border-radius:10px;background:var(--paper-2);color:var(--muted);font-size:14px;line-height:1.6}
+.cred-note .cred-label{display:block;color:var(--ink);font-weight:700;font-size:14.5px;margin-bottom:4px}
+.cred-note code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--dark);color:#e8eef0;padding:1px 6px;border-radius:5px}
 .cmd-shot{padding:38px 0;border-top:1px solid var(--line)}
 .cmd-shot:first-child{border-top:none}
 .cmd-shot .head h2{margin:0 0 3px;font-size:15px}
@@ -30,7 +33,8 @@ figcaption .step{display:block;font-family:ui-monospace,Menlo,Consolas,monospace
 /* click-to-enlarge lightbox */
 .lb{position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;background:rgba(8,16,20,.9);padding:28px;cursor:zoom-out}
 .lb.open{display:flex}
-.lb img{max-width:min(1400px,96vw);max-height:92vh;width:auto;height:auto;border-radius:10px;border:1px solid #2a3d45;box-shadow:0 30px 90px -20px rgba(0,0,0,.8)}
+.lb img,.lb video{max-width:min(1400px,96vw);max-height:92vh;width:auto;height:auto;border-radius:10px;border:1px solid #2a3d45;box-shadow:0 30px 90px -20px rgba(0,0,0,.8)}
+.lb video{display:none;background:#000}
 .lb-close{position:absolute;top:16px;right:22px;background:none;border:none;color:#cdd8dc;font-size:34px;line-height:1;cursor:pointer;padding:6px 12px;border-radius:8px}
 .lb-close:hover,.lb-close:focus-visible{background:rgba(255,255,255,.08);color:#fff;outline:2px solid var(--orange)}
 @media(max-width:860px){.grid.n3,.grid.n2{grid-template-columns:1fr}}
@@ -40,6 +44,7 @@ figcaption .step{display:block;font-family:ui-monospace,Menlo,Consolas,monospace
 .demos-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
 .demo-card{margin:0;display:flex;flex-direction:column;gap:10px}
 .demo-card .frame video,.demo-card .frame img{display:block;width:100%}
+.demo-card .frame video,.shots-hero .demo video{cursor:zoom-in}
 .demo-card figcaption{font-size:13.5px;color:var(--muted);line-height:1.5}
 .demo-card figcaption .demo-title{display:block;color:var(--ink);font-size:14.5px;font-weight:700;margin-bottom:2px}
 .demo-card figcaption .demo-desc{display:block}

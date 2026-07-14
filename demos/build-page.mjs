@@ -99,13 +99,27 @@ const page = `<!DOCTYPE html>
 </header>
 ${heroHtml}
 <main class="shots-main">
+<aside class="cred-note"><span class="cred-label">Where are the credentials?</span> The command lines below don't show any — by design. sluice reads connection DSNs from the <code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code> environment variables (or a config file passed with <code>--config</code>), and secrets such as an encryption passphrase from <code>--encryption-passphrase-env</code> / <code>--encryption-passphrase-file</code> rather than a literal on the command line. Every command shown is exactly what runs — only the credentials are supplied out-of-band, so they never land in shell history or a screen recording.</aside>
 ${shown.map(section).join("\n")}
 ${demosStrip}
 </main>
 <footer class="shots-foot">Every frame is a real run of the released <code>sluice</code> binary · click any frame to enlarge · piped output, CI, and <code>--log-format=json</code> emit the same structured logs they always have — these views are additive. · <a href="/docs/">Docs</a> · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a></footer>
-<div class="lb" id="lightbox" role="dialog" aria-modal="true" aria-label="Enlarged screenshot"><button class="lb-close" id="lbClose" aria-label="Close">&times;</button><img id="lbImg" src="" alt=""></div>
+<div class="lb" id="lightbox" role="dialog" aria-modal="true" aria-label="Enlarged view"><button class="lb-close" id="lbClose" aria-label="Close">&times;</button><img id="lbImg" src="" alt=""><video id="lbVid" controls loop playsinline></video></div>
 <script>
-(function(){var lb=document.getElementById('lightbox'),img=document.getElementById('lbImg'),c=document.getElementById('lbClose');function o(s,a){img.src=s;img.alt=a||'';lb.classList.add('open');c.focus();}function s(){lb.classList.remove('open');img.src='';}document.querySelectorAll('.frame img').forEach(function(el){el.addEventListener('click',function(){o(el.currentSrc||el.src,el.alt);});});lb.addEventListener('click',function(e){if(e.target!==img)s();});c.addEventListener('click',s);document.addEventListener('keydown',function(e){if(e.key==='Escape'&&lb.classList.contains('open'))s();});})();
+(function(){
+  var lb=document.getElementById('lightbox'),img=document.getElementById('lbImg'),vid=document.getElementById('lbVid'),c=document.getElementById('lbClose');
+  function openImg(src,alt){vid.pause();vid.style.display='none';vid.removeAttribute('src');img.src=src;img.alt=alt||'';img.style.display='';lb.classList.add('open');c.focus();}
+  function openVid(v){img.style.display='none';img.src='';while(vid.firstChild){vid.removeChild(vid.firstChild);}
+    Array.prototype.forEach.call(v.querySelectorAll('source'),function(sr){var n=document.createElement('source');n.src=sr.src;n.type=sr.type;vid.appendChild(n);});
+    var im=v.querySelector('img');vid.setAttribute('aria-label',(im&&im.alt)||'Demo video');vid.style.display='';vid.load();lb.classList.add('open');c.focus();var p=vid.play();if(p&&p.catch){p.catch(function(){});}}
+  function close(){lb.classList.remove('open');img.src='';vid.pause();}
+  // Screenshots (section frames) enlarge as images; demo/hero videos enlarge as playable video.
+  document.querySelectorAll('.shot .frame img').forEach(function(el){el.addEventListener('click',function(){openImg(el.currentSrc||el.src,el.alt);});});
+  document.querySelectorAll('.demo-card .frame video, .shots-hero .demo video').forEach(function(el){el.addEventListener('click',function(){openVid(el);});});
+  lb.addEventListener('click',function(e){if(e.target!==img&&e.target!==vid){close();}});
+  c.addEventListener('click',close);
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&lb.classList.contains('open')){close();}});
+})();
 </script>
 </body>
 </html>
