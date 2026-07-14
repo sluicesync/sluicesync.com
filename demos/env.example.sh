@@ -47,3 +47,5 @@ export PG_SHOPDB="postgres://USER:PASS@HOST:5432/shopdb?sslmode=disable"
 # Backup encryption passphrase (used by backup/restore/roundtrip tapes via
 # --encryption-passphrase-env ENC_PASS, so it never appears on a command line).
 export ENC_PASS="CHANGE_ME"
+export MYSQL_PIIDEMO="USER:PASS@tcp(HOST:3306)/piidemo"
+export PG_PIIDEMO="postgres://USER:PASS@HOST:5432/piidemo?sslmode=disable"

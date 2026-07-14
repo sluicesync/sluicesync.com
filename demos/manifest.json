@@ -275,6 +275,11 @@
       "file": "demo-forward.gif",
       "title": "Schema change, forwarded",
       "caption": "A column added to the source mid-sync is applied to the target automatically — the stream stays online, no drain and no recovery."
+    },
+    {
+      "file": "demo-redact.gif",
+      "title": "PII, redacted in flight",
+      "caption": "Migrate real customer PII with a redaction rule per column — mask presets, PCI first-6/last-4, SSN, email — applied on the bulk copy and on every live CDC change."
     }
   ]
 }

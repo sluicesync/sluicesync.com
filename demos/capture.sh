@@ -165,6 +165,11 @@ copy_frames() {
       cp_if shot-forward.mp4        demo-forward.mp4
       cp_if shot-forward.webm       demo-forward.webm
       ;;
+    shot-redact)
+      cp_if shot-redact.gif        demo-redact.gif
+      cp_if shot-redact.mp4        demo-redact.mp4
+      cp_if shot-redact.webm       demo-redact.webm
+      ;;
     shot-drift)
       cp_if shot-drift.gif          demo-drift.gif
       cp_if shot-drift.mp4          demo-drift.mp4
