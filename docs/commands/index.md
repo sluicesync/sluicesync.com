@@ -28,7 +28,7 @@ List the database engines built into this binary and their bulk-load / CDC capab
 
     sluice engines
 
-  Nine engines are registered today: mysql (binlog CDC), planetscale and self-hosted vitess (both VStream CDC), postgres (logical-replication CDC), sqlite and d1 (migrate sources — sqlite is also a target — no CDC), and the trigger-CDC engines postgres-trigger (slot-less Postgres), sqlite-trigger (local SQLite file), and d1-trigger (live Cloudflare D1). The vitess flavor shares the PlanetScale engine code with a self-hosted-vtgate capability set, and warm-resumes since v0.99.44.
+  13 engines are registered today: mysql (binlog CDC), planetscale and self-hosted vitess (both VStream CDC), postgres (logical-replication CDC), sqlite and d1 (migrate sources — sqlite is also a target — no CDC), the trigger-CDC engines postgres-trigger (slot-less Postgres), sqlite-trigger (local SQLite file), and d1-trigger (live Cloudflare D1), and the flat-file migrate sources csv, tsv, ndjson (ADR-0163) and mydumper (a mydumper / pscale database dump directory, ADR-0161). The vitess flavor shares the PlanetScale engine code with a self-hosted-vtgate capability set, and warm-resumes since v0.99.44.
 
 Engine · Role · Notes ·
 
@@ -49,6 +49,24 @@ postgres-trigger · CDC source · Slot-less Postgres trigger-CDC: per-table AFTE
 sqlite-trigger · CDC source · Trigger-based continuous sync from a local SQLite file: per-table AFTER triggers + a sluice_change_log watermark for exactly-once resume (ADR-0135). ·
 
 d1-trigger · CDC source · The same trigger-CDC design over a live D1's HTTP query API (ADR-0136). ·
+
+csv / tsv · migrate source (file) · RFC 4180 delimited files (ADR-0163), staged into a temp SQLite database with every value byte-exact TEXT (007.1500 stays 007.1500; integers above 253 stay exact) and read through the validated SQLite surface; --infer-types auto-engages to recover rich target types. File conventions are declared, never sniffed — see the flat-file note below. tsv is the same engine with the delimiter fixed to TAB. Migrate only (no CDC). ·
+
+ndjson · migrate source (file) · One JSON object per line (ADR-0163). Numbers land as their raw source text — never through a float64 — so integers above 253 and arbitrary-precision decimals stay byte-exact; nested objects/arrays land as raw JSON text; a duplicate key within an object or a top-level JSON array refuses loudly (the message carries the jq -c '.[]' conversion). Migrate only (no CDC). ·
+
+mydumper · migrate source (directory) · A mydumper or pscale database dump directory (ADR-0161): metadata + per-table -schema.sql + extended-INSERT data chunks (plain, gzip, or zstd). Values decode through the live MySQL engine's own decoder — byte-identical to a live read; single-precision FLOAT display-rounding baked into the dump file itself is WARNed per table. Migrate only (no CDC). ·
+
+  Flat-file imports: conventions are declared, never sniffed (ADR-0163). RFC 4180 encodes neither NULL nor header presence — both are producer conventions, and guessing either is the #1 CSV silent-loss class (a wrong header guess eats a data row or turns data into column names; a wrong NULL guess silently turns empty strings into NULLs or vice versa). So the csv/tsv drivers require the conventions on the command line:
+
+Flag · Purpose ·
+
+--csv-header / --csv-no-header · One is required. Declare whether the first record carries the column names (--csv-no-header names columns col1..colN in file order). Opening a csv/tsv source without either is refused loudly (SLUICE-E-CSV-HEADER-UNDECLARED). Mutually exclusive. ·
+
+--csv-null · The UNQUOTED field text that means SQL NULL: --csv-null='' (the PostgreSQL COPY CSV convention — an unquoted empty field is NULL), --csv-null='\N', or --csv-null=NULL. A QUOTED field is always data ("NULL" is the four-character string; "" is the empty string). Without this flag a file containing an unquoted empty field is refused loudly (SLUICE-E-CSV-NULL-AMBIGUOUS) — a file with no empty unquoted fields needs no flag. ·
+
+--csv-delimiter · csv driver only: the field delimiter — a single ASCII character, or \t/tab for TAB (default ,). The tsv driver is fixed to TAB. ·
+
+  Plain mysqldump / pg_dump .sql dumps and pg_dump -Fc archives are deliberately not parsed by any driver — they refuse with SLUICE-E-SOURCE-FOREIGN-DUMP and the message carries the exact scratch-server-replay recipe; a recognisable format handed to the wrong driver (a mydumper directory to csv, a .tsv through the comma lexer, a gzip'd or UTF-16 file) refuses with SLUICE-E-SOURCE-WRONG-DRIVER naming the right driver or preparation step.
 
   WAN-fast MySQL CDC apply (ADR-0139/0140). Against a MySQL / PlanetScale-MySQL target, consecutive same-shape INSERTs fold into one multi-row INSERT … ON DUPLICATE KEY UPDATE, UPDATEs apply as that same keyed upsert, and DELETEs coalesce into one DELETE … WHERE pk IN (…) — turning N round trips into one so high-latency / cross-region apply keeps up. A rate-limited INFO line (rows_per_stmt) reports the coalescing ratio so you can see whether it's helping.
 
@@ -106,6 +124,14 @@ Flag · Purpose ·
 --allow-cross-shard-merge · Opt out of the cross-shard-collision preflight (Bug 152). Off by default the guard is active: a multi-shard Vitess/PlanetScale source without --inject-shard-column refuses to merge into a single PK/UNIQUE target. Pass this only when the key is globally unique across shards. ·
 
 --reset-target-data · Destructive recovery: drop source-schema tables on the target, then cold-start. Prompts (type reset) unless --yes. Mutually exclusive with --resume. ·
+
+--source-tls-ca / --target-tls-ca · Path to a PEM CA certificate for CA-pinned verify-ca TLS to a MySQL source / target (ADR-0158): trust this CA, verify the server certificate chains to it, skip the hostname check — the strongest mode that works against MySQL's SAN-less auto-generated certs. On the source it covers both the data connection and the binlog/CDC stream. Refused if the DSN already sets tls=; refused on non-MySQL endpoints (Postgres uses sslrootcert=/path/ca.pem in the DSN instead). Also accepted by sync start, verify, backup, and restore (target side). ·
+
+--planetscale-org · On migrate this arms the automatic deploy-request index-build fallback on a planetscale target (ADR-0148) — different from the same flag's telemetry meaning on sync start. When a deferred post-copy ADD INDEX hits PlanetScale's statement-time wall (errno 3024) or the safe-migrations direct-DDL block (errno 1105), sluice builds it via a dev branch + deploy request instead. Requires safe migrations ON (sluice never toggles it) plus a service token (PLANETSCALE_SERVICE_TOKEN_ID / PLANETSCALE_SERVICE_TOKEN env). Control-plane only, distinct from the data-plane --target DSN; ignored on non-planetscale targets; off when unset (the migrate is unchanged). ·
+
+--planetscale-database / --planetscale-branch · Database name (defaults to the --target DSN's database) and production branch (default main) for the ADR-0148 index-build fallback. Only consulted when --planetscale-org is set. ·
+
+--csv-null / --csv-header / --csv-no-header / --csv-delimiter · Flat-file source declarations (ADR-0163) for --source-driver csv|tsv — see the flat-file note under engines. Refused (never silently ignored) when the source driver is not a flat-file engine. ·
 
   Filtered dry run, then apply:
 
@@ -175,6 +201,12 @@ Flag · Purpose ·
 --notify-lag-seconds / --notify-storage-growth-per-min · Alert when the target's control-plane replica lag (seconds) is at or above the value, or when storage utilisation is climbing at or above this fraction-of-capacity per minute (a pre-grow early warning, e.g. 0.02 = +2%/min). 0 disables. Requires --planetscale-org telemetry. ·
 
 --notify-cooldown · Minimum interval between re-fires of a still-breached alert (default 15m) — a sustained breach reminds at most once per interval, not every poll. ·
+
+--notify-schema-drift · On by default (ADR-0157; inert unless a --notify-* sink is configured): fire a critical notification when a source schema change stalls the sync — a DDL sluice cannot auto-forward (e.g. RENAME COLUMN on MySQL). The alert carries the drift detail + recovery steps. Ungated from PlanetScale telemetry — works on every engine pair. Pass --notify-schema-drift=false to disable while keeping metrics alerts. Advisory + failure-isolated: a delivery problem never affects the (already stalled) sync. ·
+
+--notify-slot-health · On by default (ADR-0059; inert unless a sink is configured; fires only for Postgres logical-replication sources — the structured slog WARNs fire regardless): notify when the source replication slot crosses a health threshold — WAL retention pressure at 70% (warning) / 85% (critical) of max_slot_wal_keep_size, 30m slot inactivity (warning), wal_status unreserved (critical — invalidation at the next checkpoint), and the terminal events (wal_status lost, slot dropped mid-stream) each page critical exactly once and latch. A sustained slot-health probe outage (5 consecutive failures) pages a warning — the net never goes silently blind. Pass --notify-slot-health=false to keep the slog WARNs only. Advisory + failure-isolated. ·
+
+--source-tls-ca / --target-tls-ca · CA-pinned verify-ca TLS to a MySQL source / target (ADR-0158) — PEM CA path; covers the data connection and the binlog/CDC stream on the source. See the migrate row for the full semantics. ·
 
 --apply-retry-attempts · Max consecutive retriable apply failures absorbed before exiting (ADR-0038, default 8 — tuned for managed-Vitess tx-killer transients). 1 = no retry. The counter resets whenever the persisted CDC position advances. ·
 
@@ -369,6 +401,10 @@ backup verify · Re-checksum every chunk in a chain and report mismatches. ·
 
 backup prune / compact · Retention: drop the oldest segments, or merge consecutive segments whose gaps fall within --merge-window. Compact splits a merge group at a rotation-boundary coverage gap instead of refusing the run (v0.99.41) — chains stopped while the source was idle stay compactable. ·
 
+backup keygen · Generate an Ed25519 signing keypair for --sign-key / --verify-key (ADR-0154 Phase 2): the private key (PKCS#8 PEM, written 0600) signs backups, the public key (SPKI PEM, distributable freely) verifies them. --out-dir DIR writes sluice-sign-key.pem + sluice-verify-key.pem, or name the paths with --priv + --pub (mutually exclusive with --out-dir); --force overwrites — by default keygen refuses to clobber an existing private key (losing/replacing it strands the signing of any chain it already signed). ·
+
+backup export-as-parquet · One-shot, read-only transcode of a backup's row chunks into Parquet for analytics — own section below. ·
+
 Flag · Purpose ·
 
 --output-dir / --target · Destination: a local directory, or a URL (s3://, gs://, azblob://, file:///). Mutually exclusive. ·
@@ -387,12 +423,55 @@ Flag · Purpose ·
 
 --kms-key-arn / --gcp-kms-key-resource / --azure-key-vault-id · KMS mode: wrap the CEK through AWS KMS, GCP Cloud KMS, or Azure Key Vault respectively — the root key never leaves the cloud KMS. Mutually exclusive with each other and with the passphrase flags. KMS and passphrase modes can't be mixed within one chain. ·
 
+--sign · Sign the backup manifest + lineage catalog with a detached HMAC-SHA-256 keyed off the chain KEK (ADR-0154 Phase 1). Requires --encrypt with a passphrase (HMAC-off-KEK signs only encrypted chains); extending an already-signed chain signs automatically. Mutually exclusive with --sign-key. ·
+
+--sign-key · Sign with an Ed25519 private key (PKCS#8 PEM — generate a pair with sluice backup keygen), or via a cloud KMS signing key given as kms://<provider>/<key-ref> (aws / gcp / azure — the private key stays in the HSM). Selects the asymmetric scheme over the --sign HMAC default; works on both plaintext and encrypted backups. Accepts a file path, env:VAR, or kms://...; never logged. ·
+
+--verify-key · Read side (restore / backup verify / the broker / export-as-parquet): the public key that verifies an asymmetrically-signed chain — an SPKI PEM file (the offline DR path) or kms://... to fetch the trusted key online. Required for such a chain — the KEK does NOT verify an asymmetric signature, and the recorded manifest key reference is never trusted; verification anchors on the key you name. Absent it, the chain WARNs present-but-unverified and proceeds (DR-safe) unless --require-signature. ·
+
+--require-signature · Strict-always signature policy on restore/verify: a signed chain that cannot be verified (no matching key supplied) is refused rather than warned. An INVALID signature is always refused regardless of this flag. Leave off for the DR-safe default (never fail a restore for a signature it cannot check). ·
+
     sluice backup full --source-driver postgres --source ... --target s3://my-bucket/app-chain --chain-slot
     sluice backup incremental --source-driver postgres --source ... --target s3://my-bucket/app-chain
+
+    # signed chain: generate an Ed25519 pair once, sign on write, verify on read
+    sluice backup keygen --out-dir ~/.sluice/keys
+    sluice backup full --source-driver postgres --source ... --target s3://my-bucket/app-chain \
+        --sign-key ~/.sluice/keys/sluice-sign-key.pem
+    sluice restore --from s3://my-bucket/app-chain --target-driver postgres --target ... \
+        --verify-key ~/.sluice/keys/sluice-verify-key.pem --require-signature
 
   Full backups are engine-neutral; incremental chains need a CDC source. backup full works against any registered source — including sqlite (a local file). backup incremental appends changes since the chain root, so it needs a CDC-capable source: Postgres / MySQL natively, or the trigger-CDC engines for SQLite / D1 (sqlite-trigger / d1-trigger). A base sqlite source is migrate-only (no CDC), so it can root a full backup but not extend an incremental chain.
 
   Values that used to break backups (v0.99.40). IEEE-special floats (NaN, ±Infinity) now ride the chunk codec exactly — one such row no longer makes a table un-backupable, and restores are bit-identical to pg_dump.
+
+## backup export-as-parquet
+
+### sluice backup export-as-parquet
+One-shot, read-only transcode of an existing backup's row chunks into one zstd-compressed Parquet file per table plus a parquet_index.json export manifest — the analytics exit surface over the chain sluice already captured (ADR-0164).
+The export represents one snapshot — the latest full by default, or the full named by --backup-id. Incremental change-windows after that full are not folded in (a loud WARN names the count); operators who need point-in-time state restore the chain and re-export. Exit-only: sluice never reads its Parquet output back — sluice restore keeps the JSON-Lines path. The Parquet files themselves are written plaintext even from an encrypted chain — the analytics destination's encryption posture is a separate operator choice.
+
+Flag · Purpose ·
+
+--from-dir / --from · The backup to export: a local directory (the same one --output-dir wrote to), or a URL (s3://, gs://, azblob://, file:///). One is required; mutually exclusive. ·
+
+--output-dir / --output · Destination for the Parquet files + parquet_index.json: a local directory (created if absent) or a URL (s3://bucket/prefix, gs://, azblob://, file:///). One is required; mutually exclusive. ·
+
+--backup-endpoint / --backup-region / --backup-path-style · S3-compatible-provider overrides (endpoint, region, path-style addressing) — apply to both --from and --output when they are s3:// URLs. ·
+
+--include-table / --exclude-table · Glob-aware table filters (comma-separated, repeatable; mutually exclusive) — export a subset of the snapshot's tables. ·
+
+--backup-id · Export the segment full snapshot with this BackupID instead of the latest one (chain-to-a-point at snapshot granularity; find ids in the chain's manifests or lineage.json). Incremental ids are refused — their change-windows are not exportable. ·
+
+--force-overwrite · Replace a prior export at the destination. By default the command refuses when parquet_index.json is already present. ·
+
+--encrypt + key flags / --verify-key / --require-signature · Read-side encryption + signature flags, mirroring restore: an encrypted chain needs --encrypt + the chain's passphrase / KMS reference; a signed chain is verified (strictly, with --require-signature) before any chunk is decoded. ·
+
+    sluice backup export-as-parquet --from s3://my-bucket/app-chain \
+        --output-dir ./warehouse-drop \
+        --exclude-table 'audit_*'
+
+  Never a silent narrow: a column type or value with no faithful Parquet representation — a multi-dimensional array, a TIME outside a calendar day (MySQL TIME reaches ±838h), a PG NUMERIC NaN/Infinity, a sub-microsecond timestamp — is refused loudly with SLUICE-E-EXPORT-UNREPRESENTABLE (exclude the table and export the rest, or query that table's JSON-Lines chunks directly — DuckDB reads them natively). The documented string downgrades (unbounded NUMERIC, TIMETZ) carry the exact value text and are WARNs, not refusals.
 
 ## restore
 
@@ -413,6 +492,10 @@ Flag · Purpose ·
 
 --target-schema · Postgres-only: land restored tables under a named schema namespace. ·
 
+--encrypt + key flags / --verify-key / --require-signature · Read-side chain unwrapping and signature verification — the same flags the backup write side takes: an encrypted chain needs --encrypt + the chain's passphrase / KMS reference (a mismatched or missing key mode is refused at preflight with SLUICE-E-BACKUP-ENCRYPTION-MISMATCH); an asymmetrically-signed chain needs --verify-key, strict with --require-signature. ·
+
+--target-tls-ca · CA-pinned verify-ca TLS to a MySQL target (ADR-0158) — see the migrate row. ·
+
     sluice restore --from s3://my-bucket/app-chain \
         --target-driver postgres --target ...
 
@@ -428,6 +511,138 @@ Flag · Purpose ·
 
     sluice restore --from s3://my-bucket/mysql-chain \
         --target-driver postgres --target 'postgres://user:pass@host:5432/app'
+
+## backfill
+
+### sluice backfill
+Backfill or transform a column in place — a same-database, keyset-chunked, resumable, online-safe UPDATE. The 'migrate' step of the expand-contract pattern (ADR-0159).
+Backfill is single-endpoint — it runs INSIDE one database (no source/target pair), walking the table's primary key in bounded batches and issuing one UPDATE per batch, so no statement ever locks (or hits the statement-time wall of a managed provider on) more than --batch-size rows. The cursor persists in the same database's sluice_migrate_state control tables, so a killed run resumes where it left off — the crash-replay window is at most one chunk, and the replayed chunk is a no-op under a self-describing --where guard. The --set expressions and the --where predicate are native SQL for the --driver engine, emitted verbatim (same-database, so there is no cross-dialect translation to do).
+
+Flag · Purpose ·
+
+--driver · Required. Engine name for the database (mysql, planetscale, vitess, or postgres — the engines that implement the in-place backfill surface). SQLite/D1 refuse with SLUICE-E-BACKFILL-UNSUPPORTED-ENGINE (a single-file/edge database doesn't need the online-safety machinery — run the UPDATE directly). ·
+
+--dsn · Required. Database DSN. Backfill is same-database: it reads and updates this one endpoint. ·
+
+--table · Required. Table to backfill. It must have a usable orderable primary key to cursor on — a keyless table (or a JSON/array/geometry PK) refuses with SLUICE-E-BACKFILL-NO-PRIMARY-KEY; there is no flag to force an unbounded whole-table UPDATE. ·
+
+--set · Assignment 'COL = EXPR' applied to every matched row (repeatable; required except with --verify-only). Split at the FIRST =, so expressions may themselves contain =. A --set column that doesn't exist on the table refuses up front with SLUICE-E-BACKFILL-UNKNOWN-COLUMN (the message lists the table's actual columns). ·
+
+--where · Native-SQL predicate scoping which rows are backfilled. Make it self-describing (e.g. new_col IS NULL) so re-runs and crash-resume skip already-done rows. ·
+
+--batch-size · Rows per bounded UPDATE batch (keyset-chunked walk of the primary key). 0 (default) uses sluice's bulk-copy default. ·
+
+--dry-run · Print the generated per-chunk UPDATE statement and an affected-row estimate, then exit without writing anything. ·
+
+--restart · Discard the stored resume cursor for this exact spec (--set/--where) and start over from the beginning of the table. ·
+
+--verify · After the run completes, count rows still matching --where: 0 prints the safe-to-contract signal; >0 fails with SLUICE-E-BACKFILL-INCOMPLETE (re-run to catch up, then verify again). Requires --where. ·
+
+--verify-only · Skip the walk and just run the --where remaining-count gate (no UPDATEs, no control-table writes) with the same 0 / >0 exit contract — the scriptable post-migration check. Requires --where; --set is optional. ·
+
+    # expand step done (new column exists); backfill it online, then gate the contract step
+    sluice backfill --driver planetscale --dsn 'user:pass@tcp(host)/app' --table users \
+        --set "full_name = CONCAT(first_name, ' ', last_name)" \
+        --where 'full_name IS NULL' \
+        --verify
+
+  Resume vs restart. A killed run resumes from the persisted cursor automatically on re-run; a spec whose stored state is already complete needs --restart to walk again (the SLUICE-E-BACKFILL-INCOMPLETE catch-up loop). A cursor persisted by an older sluice whose JSON store mangled binary or >253 integer PK values is refused loudly (SLUICE-E-BACKFILL-CORRUPT-CURSOR) rather than silently skipping PK ranges — re-run with --restart; a self-describing guard makes the re-walk touch only the rows the interrupted run never reached.
+
+## expand-contract
+
+### sluice expand-contract
+Drive the full expand → migrate → contract schema-change pattern on a PlanetScale database: deploy-request the ADD COLUMN, run the online backfill, verify, and (only with --yes) deploy-request the DROP COLUMN (ADR-0162).
+This command mutates a production branch. It is PlanetScale-specific by design: it needs the control-plane service token on top of the data-plane DSN, and the production branch must have safe migrations enabled — deploy requests are the mechanism the expand and contract legs ship through. sluice never flips that toggle for you: with safe migrations off it refuses with SLUICE-E-PS-SAFE-MIGRATIONS-DISABLED. The legs: expand creates a sluice dev branch, applies --expand-ddl, and deploys it via a deploy request (sluice's control tables ride inside the same deploy); migrate runs the backfill against the production data with your --set/--where; verify re-counts the --where guard; contract — a destructive DROP COLUMN — runs only after a clean verify and --yes. Without --yes (or without --contract-ddl) the run stops after verify and prints the exact resume command, so the destructive leg is always an explicit second decision.
+
+Flag · Purpose ·
+
+--org · Required (or env PLANETSCALE_ORG). PlanetScale organization slug. ·
+
+--database · Required. PlanetScale database name. ·
+
+--branch · Production branch the pattern targets (deploy requests merge into it; the backfill runs against its data). Default main. ·
+
+--service-token-id / --service-token · PlanetScale service token (branch + deploy-request scopes). Set via the env vars PLANETSCALE_SERVICE_TOKEN_ID / PLANETSCALE_SERVICE_TOKEN (the pscale CLI convention) — never on the command line; never logged. Required except under --dry-run, which makes no control-plane call. ·
+
+--dsn · Required. Data-plane MySQL DSN for the production branch — the migrate (backfill) leg runs inside it. The engine is fixed to planetscale (no --driver to mis-set). ·
+
+--table · Required. Table the pattern operates on. ·
+
+--expand-ddl · Verbatim ADD COLUMN DDL for the expand leg (e.g. ALTER TABLE t ADD COLUMN full_name VARCHAR(255)), applied on a dev branch and shipped via a deploy request. Required unless --resume-from skips the leg. ·
+
+--contract-ddl · Verbatim DROP COLUMN DDL for the contract leg. Optional: without it the run stops after verify with resume instructions. Runs only after a clean verify AND --yes. ·
+
+--set / --where · The backfill assignment(s) (repeatable; native SQL, emitted verbatim) and the self-describing guard (e.g. new_col IS NULL). --where is required: it scopes the backfill AND is the verify gate that authorizes the contract step. ·
+
+--batch-size · Rows per bounded backfill UPDATE. 0 (default) uses sluice's bulk-copy default. ·
+
+--yes, -y · Confirm the contract leg (a destructive DROP COLUMN deploy request). Without it the run stops after verify and prints the exact resume command. ·
+
+--dry-run · Print the full plan — branches, deploy requests, the rendered backfill statement, the gates — without a single control-plane call and without writing anything. ·
+
+--keep-branches · Keep the sluice dev branches instead of deleting them at the end (debugging aid). ·
+
+--resume-from · Leg to continue from after an interrupted run: expand (default, full pattern), migrate (the ADD COLUMN already deployed), contract (the backfill already completed; still re-verifies — --set is optional here). ·
+
+--poll-interval · Deploy-request / branch state polling cadence. Default 10s. ·
+
+--deploy-timeout · Per-deploy-request deadline. Default 1h — large tables deploy via VReplication: real wall-clock, but async and unbounded by errno 3024. ·
+
+    export PLANETSCALE_SERVICE_TOKEN_ID=...
+    export PLANETSCALE_SERVICE_TOKEN=...
+    sluice expand-contract --org acme --database app \
+        --dsn 'user:pass@tcp(aws.connect.psdb.cloud)/app?tls=true' --table users \
+        --expand-ddl 'ALTER TABLE users ADD COLUMN full_name VARCHAR(255)' \
+        --set "full_name = CONCAT(first_name, ' ', last_name)" \
+        --where 'full_name IS NULL' \
+        --contract-ddl 'ALTER TABLE users DROP COLUMN first_name, DROP COLUMN last_name' \
+        --yes
+
+  The SLUICE-E-PS-* refusal family names each failure precisely. SLUICE-E-PS-SAFE-MIGRATIONS-DISABLED (exit 3): safe migrations is off on the branch — enable it in the PlanetScale UI or via pscale branch safe-migrations enable; sluice never auto-enables a production-branch behavior change. SLUICE-E-PS-DEPLOY-REQUEST-FAILED: a deploy request errored, was closed, computed an empty or stranger-touching diff, or outran --deploy-timeout — the message carries the DR number, state, and URL, and a timed-out expand continues with --resume-from migrate. SLUICE-E-PS-BRANCH-STALE-BASE: a fresh PlanetScale dev branch's schema can lag production (observed live: a branch created 14 minutes after a deploy still lacked the deployed column), and a deploy request from a stale base would silently revert newer production schema — sluice gates every dev branch on freshness, self-heals once via an on-demand backup + branch re-create, and raises this only if still stale.
+
+## deploy-ddl
+
+### sluice deploy-ddl
+Ship ONE verbatim DDL statement to a PlanetScale production branch safely, as one command: dev branch (with the stale-base freshness gate), apply the DDL, deploy request, deploy, finalize, cleanup (ADR-0165).
+This command mutates a production branch (through PlanetScale's governed deploy-request channel). It replaces five hand-driven pscale commands plus a hazard the operator can't see — a fresh PlanetScale dev branch can silently propose reverting recent production schema (the SLUICE-E-PS-BRANCH-STALE-BASE gate above catches it). It requires safe migrations ON the branch (the deploy-request prerequisite; without safe migrations, direct DDL works and this command is unnecessary). There is no data-plane DSN: the DDL runs on the dev branch via a just-minted branch password. The named consumer is the one-time control-table bootstrap on a safe-migrations branch — control-tables ddl prints the statements to ship.
+
+Flag · Purpose ·
+
+--org · Required (or env PLANETSCALE_ORG). PlanetScale organization slug. ·
+
+--database · Required. PlanetScale database name. ·
+
+--branch · Production branch the deploy request merges into (must have safe migrations enabled). Default main. ·
+
+--service-token-id / --service-token · PlanetScale service token (branch + deploy-request scopes), via env PLANETSCALE_SERVICE_TOKEN_ID / PLANETSCALE_SERVICE_TOKEN; never logged. Required except under --dry-run. ·
+
+--ddl · Required. The single verbatim DDL statement to ship (e.g. CREATE TABLE ... or ALTER TABLE ...), applied on a dev branch exactly as written and deployed via a deploy request. ·
+
+--dry-run · Print the plan — branch name, the DDL, the deploy-request flow — without a single control-plane call and without writing anything. ·
+
+--keep-branches · Keep the sluice dev branch instead of deleting it at the end (debugging aid). ·
+
+--poll-interval · Deploy-request / branch state polling cadence. Default 10s. ·
+
+--deploy-timeout · Deploy-request deadline. Default 1h (large tables deploy via VReplication — async, unbounded by errno 3024). ·
+
+    # bootstrap sluice's control tables on a safe-migrations branch:
+    sluice control-tables ddl            # prints the exact CREATE statements
+    sluice deploy-ddl --org acme --database app \
+        --ddl 'CREATE TABLE IF NOT EXISTS sluice_migrate_state (...)'   # one statement per run
+
+## control-tables ddl
+
+### sluice control-tables ddl
+Print the exact CREATE statements for sluice's own control tables (migrate-state + cdc-state), single-sourced from the engine's definitions — for bootstrapping a target that refuses direct DDL (ADR-0165).
+Read-only, needs no credentials and no org/database — output is pure SQL plus -- comment lines, so it pastes or pipes into any governed channel: deploy-ddl (one statement per run), the PlanetScale UI, or a reviewed migration file. On a PlanetScale branch with safe migrations enabled, direct DDL is refused (Error 1105, surfaced as SLUICE-E-PS-DIRECT-DDL-BLOCKED) — sluice's own ensure paths are detect-first, so pre-creating the control tables this way lets migrate / sync / backfill run against the branch without ever needing a direct CREATE.
+
+Flag · Purpose ·
+
+--engine · Engine whose control-table dialect to print. Default planetscale (the bootstrap consumer — safe migrations blocks direct DDL); mysql / vitess print the same dialect. Engines that don't publish their control-table DDL are refused by name. ·
+
+    sluice control-tables ddl                       # planetscale dialect (default)
+    sluice control-tables ddl --engine mysql        # same dialect, spelled for vanilla MySQL
 
 ## trigger setup / teardown
 

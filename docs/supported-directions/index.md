@@ -22,9 +22,13 @@ SQLite (file / .sql dump) · ✓ · ✓ b · ✓ · ✓ ·
 
 Cloudflare D1 (live) · ✓ · ✓ b · ✓ · ✓ ·
 
+CSV / TSV / NDJSON (file, csv/tsv/ndjson) · ✓ · ✓ b · ✓ · ✓ ·
+
+mydumper / pscale dump (directory, mydumper) · ✓ · ✓ b · ✓ · ✓ ·
+
 a same-engine MySQL uses the native LOAD DATA LOCAL INFILE loader.   b a PlanetScale / Vitess target blocks LOAD DATA LOCAL, so cold-copy falls back to batched multi-row INSERT (use the planetscale / vitess engine name, not mysql, against a Vitess-backed host).   c same-engine Postgres byte-pipes the native COPY stream — the raw-copy fast lane — when there's no transform to apply. See How sluice copies your data for which internal path each cell takes.
 
-Targets are MySQL, PlanetScale / Vitess, Postgres, or SQLite. Cloudflare D1 is a migrate source only (read live over its HTTP API), never a migrate target. The trigger-CDC engines (postgres-trigger, sqlite-trigger, d1-trigger) are sync-only and don't appear here.
+Targets are MySQL, PlanetScale / Vitess, Postgres, or SQLite. Cloudflare D1 is a migrate source only (read live over its HTTP API), never a migrate target. The flat-file engines — csv, tsv, ndjson (each staged byte-exact into a temp SQLite database; file conventions declared with the --csv-* flags, never sniffed — ADR-0163) and mydumper (a mydumper / pscale database dump directory, ADR-0161) — are migrate sources only. Plain mysqldump / pg_dump .sql dumps are deliberately not parsed (loud refusal with a scratch-server recipe). The trigger-CDC engines (postgres-trigger, sqlite-trigger, d1-trigger) are sync-only and don't appear here.
 
 ## Sync — continuous change-data-capture
 

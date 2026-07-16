@@ -3,9 +3,10 @@
 > Migrate and continuously sync MySQL and Postgres, and import SQLite / Cloudflare D1 — correctness-first, loud failure by default.
 
 sluice is an open-source tool for moving and keeping databases in sync between MySQL and
-Postgres, in all four directions. SQLite files (and a wrangler d1 export .sql dump)
-and live Cloudflare D1 databases also import into Postgres or MySQL, and SQLite is itself a migrate target —
-nine engines are registered today (run sluice engines to list them). It is built around three surfaces you can
+Postgres, in all four directions. SQLite files (and a wrangler d1 export .sql dump),
+live Cloudflare D1 databases, CSV / TSV / NDJSON files, and mydumper / pscale dump
+directories also import into Postgres or MySQL, and SQLite is itself a migrate target —
+13 engines are registered today (run sluice engines to list them). It is built around three surfaces you can
 use independently or end to end:
 
 - Migrate — a one-shot schema + data copy, with deferred indexes/constraints for fast bulk load and per-table resume.
