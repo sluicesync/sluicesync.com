@@ -113,7 +113,7 @@ Flag · Purpose ·
 
 --infer-types · SQLite / D1 source only (ADR-0144): opt-in, data-validated promotion of conservatively-typed columns to native target types — INTEGER→boolean, ISO-8601 TEXT→timestamptz/timestamp, JSON TEXT→jsonb, UUID TEXT→uuid — but only after an exhaustive aggregate over the actual data confirms every value qualifies; otherwise the column keeps its safe type. Mixed-offset / sub-µs temporal columns and non-UUID *_id values stay text, never silently coerced. An explicit --type-override always wins. Off by default. Against a live D1, auto-engages --stage-local (below). ·
 
---stage-local / --no-stage-local · Cloudflare D1 source only (ADR-0145, v0.99.167): first replicate the live D1 into a byte-faithful local SQLite file (verbatim DDL + exact storage classes, integers above 253 included — lossless, unlike wrangler d1 export), then migrate from that file. Sidesteps D1's HTTP query limits (the per-query CPU ceiling and the GLOB pattern-complexity limit that block --infer-types on a live D1). Auto-engaged by --infer-types against a D1 source; set --stage-local explicitly to stage without inference, or --no-stage-local to force the direct path. The staged file is created in the system temp dir and removed when the migrate finishes. Mutually exclusive. ·
+--stage-local / --no-stage-local · Cloudflare D1 source only (ADR-0145, v0.99.167): first replicate the live D1 into a byte-faithful local SQLite file (verbatim DDL + exact storage classes, integers above 253 included — lossless, unlike wrangler d1 export), then migrate from that file. Sidesteps D1's HTTP query limits (the per-query CPU ceiling and the GLOB pattern-complexity limit that block --infer-types on a live D1). Auto-engaged by --infer-types against a D1 source; set --stage-local explicitly to stage without inference, or --no-stage-local to force the direct path. The staged file is created in the system temp dir (override with the global --stage-dir, v0.99.259) and removed when the migrate finishes. Mutually exclusive. ·
 
 --include-orm-tables / --skip-orm-tables · ORM bookkeeping tables (Rails schema_migrations, Prisma _prisma_migrations, Drizzle __drizzle_*, Laravel migrations, Flyway, Goose, …) carry the source engine's migration state, which is meaningless on a different target engine. On a cross-engine migrate they're skipped by default, each skip announced by name; --include-orm-tables copies them anyway. A same-engine run keeps them (the history is still valid) unless you pass --skip-orm-tables. The two flags are mutually exclusive. ·
 
@@ -127,7 +127,7 @@ Flag · Purpose ·
 
 --source-tls-ca / --target-tls-ca · Path to a PEM CA certificate for CA-pinned verify-ca TLS to a MySQL source / target (ADR-0158): trust this CA, verify the server certificate chains to it, skip the hostname check — the strongest mode that works against MySQL's SAN-less auto-generated certs. On the source it covers both the data connection and the binlog/CDC stream. Refused if the DSN already sets tls=; refused on non-MySQL endpoints (Postgres uses sslrootcert=/path/ca.pem in the DSN instead). Also accepted by sync start, verify, backup, and restore (target side). ·
 
---planetscale-org · On migrate this arms the automatic deploy-request index-build fallback on a planetscale target (ADR-0148) — different from the same flag's telemetry meaning on sync start. When a deferred post-copy ADD INDEX hits PlanetScale's statement-time wall (errno 3024) or the safe-migrations direct-DDL block (errno 1105), sluice builds it via a dev branch + deploy request instead. Requires safe migrations ON (sluice never toggles it) plus a service token (PLANETSCALE_SERVICE_TOKEN_ID / PLANETSCALE_SERVICE_TOKEN env). Control-plane only, distinct from the data-plane --target DSN; ignored on non-planetscale targets; off when unset (the migrate is unchanged). ·
+--planetscale-org · On migrate this arms the automatic deploy-request index-build fallback on a planetscale target (ADR-0148) — on restore and sync start the same flag serves both this fallback and the telemetry opt-in, each arming on its own token pair (v0.99.259). When a deferred post-copy ADD INDEX hits PlanetScale's statement-time wall (errno 3024) or the safe-migrations direct-DDL block (errno 1105), sluice builds it via a dev branch + deploy request instead. Requires safe migrations ON (sluice never toggles it) plus a service token (PLANETSCALE_SERVICE_TOKEN_ID / PLANETSCALE_SERVICE_TOKEN env). Control-plane only, distinct from the data-plane --target DSN; ignored on non-planetscale targets; off when unset (the migrate is unchanged). ·
 
 --planetscale-database / --planetscale-branch · Database name (defaults to the --target DSN's database) and production branch (default main) for the ADR-0148 index-build fallback. Only consulted when --planetscale-org is set. ·
 
@@ -184,11 +184,13 @@ Flag · Purpose ·
 
 --position-from-manifest · URL of a backup chain (s3://, gs://, azblob://, file:///) whose terminal manifest's EndPosition becomes this stream's resume position — resume CDC from a restored chain's tail without re-bulking. Bypasses the persisted sluice_cdc_state position. PG soft preflight warnings fire here; --strict-preflight promotes them to refusals. (Mutually exclusive with --restart-from-scratch / --reset-target-data.) ·
 
---planetscale-org · PlanetScale org slug — enables OPTIONAL target-health telemetry (CPU/mem/storage/lag) read from the PlanetScale metrics endpoint (ADR-0107). A control-plane credential, distinct from the data-plane --target DSN. Feeds proactive apply back-off and the sluice_target_* gauges. Opt-in and all-or-nothing: setting the org without both token flags is a loud refusal. Off when unset (default sync unchanged). ·
+--planetscale-org · PlanetScale org slug, consumed by both optional PlanetScale integrations — each arms on its own token pair (v0.99.259): (1) target-health telemetry (CPU/mem/storage/lag) read from the PlanetScale metrics endpoint (ADR-0107), feeding proactive apply back-off and the sluice_target_* gauges — opt-in and all-or-nothing with the metrics-token pair (org + a partial metrics pair is a loud refusal); (2) the ADR-0148 deploy-request index-build fallback for the cold-start index phase on a planetscale target — opportunistic, WARN-at-most, arming on the service-token pair (a fallback-only arming never trips the telemetry refusal). A control-plane credential, distinct from the data-plane --target DSN. Unlike migrate's flag it has no ambient PLANETSCALE_ORG env binding here — arming needs the explicit flag (the tokens still come from env). Off when unset (default sync unchanged). ·
 
 --planetscale-metrics-token-id / --planetscale-metrics-token · PlanetScale service-token (granted read_metrics_endpoints) ID + secret for --planetscale-org telemetry. Set via the env vars PLANETSCALE_METRICS_TOKEN_ID / PLANETSCALE_METRICS_TOKEN — never on the command line; masked in all logging. ·
 
 --planetscale-metrics-db / --planetscale-metrics-branch · Database (defaults to the --target DSN's database) and branch (default main) the telemetry series is filtered to. Only consulted when --planetscale-org is set. ·
+
+--planetscale-database / --planetscale-branch / --planetscale-service-token-id / --planetscale-service-token / --planetscale-deploy-timeout · ADR-0148 index-build fallback inputs — same set and defaults as migrate's: database defaults to the --target DSN's, branch to main, deploy deadline 1h; the service token (branch + deploy-request scopes) via env PLANETSCALE_SERVICE_TOKEN_ID / PLANETSCALE_SERVICE_TOKEN. Before v0.99.259 the cold-start's walled PlanetScale index build always ended at the SLUICE-E-INDEX-* hint; armed, sluice builds it via a deploy request. An unarmed run is byte-identical. ·
 
 --suppress-target-metrics-history · Disable persisting polled target-health metrics to the sluice_target_metrics_history table (7-day retention, pruned). History is on by default when telemetry is configured; it lets sluice diagnose show the recent CPU/mem/storage/lag trend without scripting the metrics API. Advisory + failure-isolated — never affects the sync. ·
 
@@ -494,6 +496,10 @@ Flag · Purpose ·
 
 --encrypt + key flags / --verify-key / --require-signature · Read-side chain unwrapping and signature verification — the same flags the backup write side takes: an encrypted chain needs --encrypt + the chain's passphrase / KMS reference (a mismatched or missing key mode is refused at preflight with SLUICE-E-BACKUP-ENCRYPTION-MISMATCH); an asymmetrically-signed chain needs --verify-key, strict with --require-signature. ·
 
+--planetscale-org · PlanetScale org slug, consumed by both optional PlanetScale integrations — each arms on its own token pair (v0.99.259): (1) target-health telemetry (ADR-0107/0115) clamping the AUTO restore-parallelism product by live headroom — all-or-nothing with the metrics-token pair (--planetscale-metrics-token-id / --planetscale-metrics-token, env-set); (2) the ADR-0148 deploy-request index-build fallback for restore's deferred index phase on a planetscale target — opportunistic, WARN-at-most, arming on the service-token pair (a fallback-only arming never trips the telemetry refusal). Control-plane only, distinct from the data-plane --target DSN; no ambient PLANETSCALE_ORG env binding on this command. Off when unset. ·
+
+--planetscale-database / --planetscale-branch / --planetscale-service-token-id / --planetscale-service-token / --planetscale-deploy-timeout · ADR-0148 index-build fallback inputs — same set and defaults as migrate's (database from the --target DSN, branch main, deadline 1h; service token via env). Before v0.99.259 a restore's walled PlanetScale index build always ended at the SLUICE-E-INDEX-* hint even with credentials available. On timeout the deploy keeps running in PlanetScale and re-running the restore re-probes and rebuilds only what is still missing. ·
+
 --target-tls-ca · CA-pinned verify-ca TLS to a MySQL target (ADR-0158) — see the migrate row. ·
 
     sluice restore --from s3://my-bucket/app-chain \
@@ -534,7 +540,7 @@ Flag · Purpose ·
 
 --dry-run · Print the generated per-chunk UPDATE statement and an affected-row estimate, then exit without writing anything. ·
 
---restart · Discard the stored resume cursor for this exact spec (--set/--where) and start over from the beginning of the table. ·
+--restart · Discard the stored resume cursor for this exact spec (--set/--where) and start over from the beginning of the table. Refused while another run of the same spec looks live (SLUICE-E-BACKFILL-CONCURRENT-RUN) — it would clear the state row out from under the live walker. ·
 
 --verify · After the run completes, count rows still matching --where: 0 prints the safe-to-contract signal; >0 fails with SLUICE-E-BACKFILL-INCOMPLETE (re-run to catch up, then verify again). Requires --where. ·
 
@@ -546,7 +552,7 @@ Flag · Purpose ·
         --where 'full_name IS NULL' \
         --verify
 
-  Resume vs restart. A killed run resumes from the persisted cursor automatically on re-run; a spec whose stored state is already complete needs --restart to walk again (the SLUICE-E-BACKFILL-INCOMPLETE catch-up loop). A cursor persisted by an older sluice whose JSON store mangled binary or >253 integer PK values is refused loudly (SLUICE-E-BACKFILL-CORRUPT-CURSOR) rather than silently skipping PK ranges — re-run with --restart; a self-describing guard makes the re-walk touch only the rows the interrupted run never reached.
+  Resume vs restart. A killed run resumes from the persisted cursor automatically on re-run; a spec whose stored state is already complete needs --restart to walk again (the SLUICE-E-BACKFILL-INCOMPLETE catch-up loop). A cursor persisted by an older sluice whose JSON store mangled binary or >253 integer PK values is refused loudly (SLUICE-E-BACKFILL-CORRUPT-CURSOR) rather than silently skipping PK ranges — re-run with --restart; a self-describing guard makes the re-walk touch only the rows the interrupted run never reached. A second invocation of the same spec while the first is still walking — its state-row heartbeat fresher than 5 minutes, typically an overlapping cron — is refused with SLUICE-E-BACKFILL-CONCURRENT-RUN (v0.99.260): two concurrent walks would interleave cursor writes and break the at-most-one-chunk replay bound. Heartbeat-only, no lease — a kill -9'd run keeps the spec refused for at most one window.
 
 ## expand-contract
 
@@ -586,7 +592,7 @@ Flag · Purpose ·
 
 --poll-interval · Deploy-request / branch state polling cadence. Default 10s. ·
 
---deploy-timeout · Per-deploy-request deadline. Default 1h — large tables deploy via VReplication: real wall-clock, but async and unbounded by errno 3024. ·
+--deploy-timeout · Per-deploy-request deadline. Default 1h — large tables deploy via VReplication: real wall-clock, but async and unbounded by errno 3024. A deploy request that outwaits the deadline still un-deployed keeps the dev branch (deleting it would close the still-open deploy request you were just told to approve); the timeout message names the kept branch and the post-close delete recipe (v0.99.260). ·
 
     export PLANETSCALE_SERVICE_TOKEN_ID=...
     export PLANETSCALE_SERVICE_TOKEN=...
@@ -598,7 +604,9 @@ Flag · Purpose ·
         --contract-ddl 'ALTER TABLE users DROP COLUMN first_name, DROP COLUMN last_name' \
         --yes
 
-  The SLUICE-E-PS-* refusal family names each failure precisely. SLUICE-E-PS-SAFE-MIGRATIONS-DISABLED (exit 3): safe migrations is off on the branch — enable it in the PlanetScale UI or via pscale branch safe-migrations enable; sluice never auto-enables a production-branch behavior change. SLUICE-E-PS-DEPLOY-REQUEST-FAILED: a deploy request errored, was closed, computed an empty or stranger-touching diff, or outran --deploy-timeout — the message carries the DR number, state, and URL, and a timed-out expand continues with --resume-from migrate. SLUICE-E-PS-BRANCH-STALE-BASE: a fresh PlanetScale dev branch's schema can lag production (observed live: a branch created 14 minutes after a deploy still lacked the deployed column), and a deploy request from a stale base would silently revert newer production schema — sluice gates every dev branch on freshness, self-heals once via an on-demand backup + branch re-create, and raises this only if still stale.
+  The SLUICE-E-PS-* refusal family names each failure precisely. SLUICE-E-PS-SAFE-MIGRATIONS-DISABLED (exit 3): safe migrations is off on the branch — enable it in the PlanetScale UI or via pscale branch safe-migrations enable; sluice never auto-enables a production-branch behavior change. SLUICE-E-PS-DEPLOY-REQUEST-FAILED: a deploy request errored, was closed, computed an empty or stranger-touching diff, or outran --deploy-timeout — the message carries the DR number, state, and URL, and a timed-out expand continues with --resume-from migrate. SLUICE-E-PS-BRANCH-STALE-BASE: a fresh PlanetScale dev branch's schema can lag production (observed live: a branch created 14 minutes after a deploy still lacked the deployed column), and a deploy request from a stale base would silently revert newer production schema — sluice gates every dev branch on freshness, self-heals once via an on-demand backup + branch re-create, and raises this only if still stale. Two more pre-deploy gates ship since ADR-0167 (v0.99.258): the deploy request's computed diff is refused if it touches any object the leg never intended (the stale-base phantom-revert signature), and after a review/deploy wait longer than ~2 minutes production's schema is re-verified against the provisioning baseline — refusing SLUICE-E-PS-BRANCH-STALE-BASE if it moved mid-wait.
+
+  Re-running the pattern on a reused database: when the current run's expand leg actually deployed a schema change, the backfill walk restarts even if a prior cycle left a completed marker for the identical --set/--where spec — the self-describing guard scopes the re-walk to unfinished rows; --resume-from migrate still honors mid-walk cursors and completed markers, and standalone sluice backfill is unchanged (v0.99.258).
 
 ## deploy-ddl
 
@@ -624,7 +632,7 @@ Flag · Purpose ·
 
 --poll-interval · Deploy-request / branch state polling cadence. Default 10s. ·
 
---deploy-timeout · Deploy-request deadline. Default 1h (large tables deploy via VReplication — async, unbounded by errno 3024). ·
+--deploy-timeout · Deploy-request deadline. Default 1h (large tables deploy via VReplication — async, unbounded by errno 3024). On a timeout with the deploy request still un-deployed the dev branch is kept — deleting it would close the still-open deploy request; the message names the kept branch and the cleanup recipe (v0.99.260). The same ADR-0167 post-wait freshness recheck as expand-contract guards a >2-minute review wait (operator-authored DDL skips only the diff-scope assertion). ·
 
     # bootstrap sluice's control tables on a safe-migrations branch:
     sluice control-tables ddl            # prints the exact CREATE statements

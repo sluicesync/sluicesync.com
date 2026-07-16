@@ -88,6 +88,8 @@ Flag · Default · Purpose ·
 
 --sqlite-date-encoding · iso · How a SQLite / D1 source decodes columns declared date/time (SQLite has no native temporal storage): iso reads ISO-8601 TEXT; unixepoch / unixmillis read INTEGER/REAL unix seconds/milliseconds; julian reads a REAL/INTEGER Julian day. A value whose storage class doesn't match is refused loudly naming the row — never a silently-wrong date (use --type-override <col>=text to carry an outlier raw). Per-source override: ?sqlite_date_encoding=… on the source DSN. ·
 
+--stage-dir · system temp · Directory for sluice's large scratch files: the csv/tsv/ndjson staged SQLite copy (roughly the source file's size), the D1 --stage-local replica, and the backup export-as-parquet per-table scratch. Override on hosts whose /tmp is a small tmpfs — the ADR-0145 hazard class. The directory must already exist (a missing path is refused loudly). Env: SLUICE_STAGE_DIR. (The sqlite .sql-dump materialize path does not honor it yet.) (v0.99.259) ·
+
 --max-memory · off · Soft ceiling on the Go heap (e.g. 2GiB, 512MiB), applied via SetMemoryLimit at startup to bound RSS. Unlike --max-buffer-bytes (raw buffered bytes only), this bounds the whole heap. Honors the GOMEMLIMIT env var when unset. (v0.99.10) ·
 
 --version, -V · — · Print version and exit. ·
