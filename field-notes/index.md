@@ -10,6 +10,42 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
+- 2026-07-16Postgres The parent table that returns rows it doesn't own — Old-style INHERITS parents present to information_schema as ordinary, unrelated BASE TABLEs &mdash; while a SELECT on the parent, without ONLY, also returns every child's rows. The standard enumerate-and-copy recipe lands the child data twice, silently, exit 0 &mdash; and the same filter hides FDW foreign tables entirely.
+
+- 2026-07-16Cross-cutting The Parquet library nulled every false — Hand parquet-go rows as map[string]any and it decides NULL-vs-present for optional columns by asking whether the Go value is the zero value &mdash; so false, 0, "", and the epoch all silently export as NULL. And a Parquet NULL reads back as exactly the zero value, so the naive round-trip test goes green while the file says NULL.
+
+- 2026-07-16Cross-cutting CSV has no NULL — RFC 4180 says nothing about NULL, so the convention rides on the quoted/unquoted distinction &mdash; which Go's encoding/csv collapses. And at exactly one column wide, the universal skip-blank-lines convention is byte-indistinguishable from a legitimate record whose only field is empty: a NULL row, silently eaten.
+
+- 2026-07-16MySQL & Vitess "mydumper format" is a family, not a spec — pscale database dump produces &ldquo;mydumper format&rdquo; &mdash; byte-compatible enough that one reader serves both. The shared layout hides three producer forks: binary travels differently, string quoting differs, and TIMESTAMP semantics hinge on a TIME_ZONE header one producer always writes and the other never does.
+
+- 2026-07-16MySQL & Vitess Your dump already rounded your floats — mydumper renders single-precision FLOAT through mysqld's ~6-significant-digit formatter: 8388608 lands in the dump file as 8.38861e6, which parses back to a different float32 &mdash; while DOUBLE columns in the very same run dump at full precision. The loss is in the file, at dump time.
+
+- 2026-07-16MySQL & Vitess mydumper chunk numbers are PK ranges, not a sequence — Healthy dumps have numbering gaps, -r dumps start at 00001, and a deleted trailing chunk leaves no gap at all &mdash; so contiguity is neither necessary nor sufficient, a deleted middle chunk streams silently short at exit 0, and the real loss detector is the dump's own rows = metadata everyone skips as informational.
+
+- 2026-07-16MySQL & Vitess The two MySQL escapes that keep their backslash — MySQL's escape table has a trap in its last two rows: \% and \_ evaluate to the two bytes backslash-percent and backslash-underscore &mdash; backslash kept &mdash; while every other unrecognized escape drops it. A uniform unescaper silently shortens the data by one byte.
+
+- 2026-07-16Cross-cutting Persist a resume cursor as JSON and it silently teleports — Go's json.Marshal replaces invalid-UTF-8 bytes with U+FFFD and numbers ride float64 past 253 &mdash; so a resumed keyset walk skipped 73,100 of 100,000 rows at exit 0. A corrupted cursor doesn't corrupt a cell you might notice: it relocates the walk. Resume state is a codec too.
+
+- 2026-07-16Cross-cutting Same document, different winner — RFC 8259 leaves duplicate JSON object keys undefined, and two engines picked opposite answers: SQLite's json_valid blesses them and reads the FIRST; Postgres jsonb keeps the LAST. Promote a &ldquo;validated&rdquo; text column to jsonb and you silently change which value every future query reads &mdash; validate with the destroyer, and you bless exactly what it destroys.
+
+- 2026-07-16Postgres The alert cleared at the exact moment the slot died — When Postgres invalidates a replication slot, pg_replication_slots reports wal_status='lost' and the lag columns go NULL &mdash; not huge. Coerce NULL to zero, compute 0% pressure, and your threshold evaluator concludes the condition cleared &mdash; a false all-clear at precisely the moment the state became fatal.
+
+- 2026-07-16MySQL & Vitess The dump reader skipped what it couldn't lex — and the verifier rode the same reader — A UTF-8 BOM glued to a chunk's first INSERT made the whole statement lex empty and vanish at exit 0 &mdash; and verify --depth count counted through the identical blind spot, confirming the loss instead of catching it. Then the fix's own third act: the refusal reached verify's report but not its exit code.
+
+- 2026-07-16MySQL & Vitess Your dump reader is quadratic in a knob somebody else set — twice — A dump reader's cost was quadratic in statement size &mdash; mydumper's --statement-size, a knob the dump's producer set. We fixed it, benchmarked the layer, shipped &ldquo;order-of-magnitude&rdquo; &mdash; and the pipeline stayed quadratic, because the value decoder one layer down sized its buffers to the statement tail. Benchmark the pipeline, not the layer.
+
+- 2026-07-16Cross-cutting The round-trip test that cannot see symmetric bugs — If your writer and every test pin read through the same library, the format boundary is self-consistent, not correct: a symmetric regression ships files the rest of the world can't read while your suite stays green. The fix isn't another test &mdash; it's a reader you don't ship. And the checker built to be that reader promptly demonstrated the class inside its own harness.
+
+- 2026-07-16MySQL & Vitess The index that shares only a name — Detect-then-skip index builds trust the name &mdash; and when the source's UNIQUE index name-matches a plain INDEX on the target, the existing definition silently decides which duplicate writes the target accepts or refuses. Every step exits green; &ldquo;already exists&rdquo; is not &ldquo;already correct.&rdquo;
+
+- 2026-07-16Cross-cutting Two things the Parquet export directory doesn't tell you — GeoParquet defines an omitted crs as &ldquo;this is lon/lat degrees&rdquo; &mdash; so an EPSG:3857 export without the stamp reads Web-Mercator meters as degrees, no error. And when read_parquet('dir/*.parquet') makes the directory the catalog, a re-export that only adds files leaves a dropped table's stale .parquet answering the glob as current data.
+
+- 2026-07-16MySQL & Vitess Your replication "position" is an unbounded set — A MySQL GTID set grows with every server UUID that has ever written to the topology; a Vitess VGTID is that set again per shard. Checkpoint &ldquo;the position&rdquo; into a 64 KB TEXT column and you've stored an unbounded value in a bounded box &mdash; and on a non-strict server the overflow is a silently truncated position, discovered only at the next resume.
+
+- 2026-07-16Postgres Postgres writes +00; your parser expects +00:00 — ISO 8601 admits at least four spellings of a UTC offset and Postgres COPY picks the shortest: bare +00. A layout list that stops at &plusmn;hh:mm refuses Postgres's own default text output &mdash; and the naive fix reads a time zone out of every bare date's day-of-month, because 2026-07-02 ends in exactly the two-digit offset shape.
+
+- 2026-07-16Cross-cutting Object stores can now say "that changed since you read it" — the portability layer can't ask — Every writer of the backup-chain catalog was last-Put-wins. The textbook fix is compare-and-swap, and the stores now have it &mdash; but the portable object-store surface exposes only create-if-absent, so the guard is a CAS built from create-only claim markers, ground-truthed on real S3, with the millisecond residual it can't close stated honestly.
+
 - 2026-07-14MySQL & Vitess MySQL's own certificate can't pass verify-full — The certificate mysqld generates for itself carries no SubjectAltName, and modern Go won't fall back to the Common Name &mdash; so tls=true (verify-full) can never validate a stock MySQL server. The secure middle ground is Postgres's sslmode=verify-ca: trust a CA, verify the chain, skip the hostname the cert can't satisfy.
 
 - 2026-07-12Cross-cutting An ALTER with no rows behind it is invisible to Postgres CDC — Postgres pgoutput never streams DDL &mdash; a schema change surfaces only as a RelationMessage, emitted lazily right before the first row for that table. So an ALTER &hellip; ADD COLUMN with no following writes leaves nothing in the stream. MySQL's binlog logs the same DDL as a first-class event at its own position, whether or not a row ever follows.

@@ -197,6 +197,24 @@ const FIELD_NOTES = [
   { slug: "cdc-position-leads-or-trails", date: "2026-07-10", engine: "Cross-cutting", label: "A CDC position can lead or trail the rows it covers", dek: "Postgres and MySQL put a schema/DDL position <em>before</em> the rows it introduces; Vitess stamps its VGTID <em>after</em> the rows the commit covers, so a snapshot and its transaction's rows can share one token. A &ldquo;did we reach the boundary?&rdquo; check that's sound on one engine silently false-negatives on the other." },
   { slug: "ddl-invisible-without-rows", date: "2026-07-12", engine: "Cross-cutting", label: "An ALTER with no rows behind it is invisible to Postgres CDC", dek: "Postgres pgoutput never streams DDL &mdash; a schema change surfaces only as a <code>RelationMessage</code>, emitted lazily right before the <em>first row</em> for that table. So an <code>ALTER &hellip; ADD COLUMN</code> with no following writes leaves <em>nothing</em> in the stream. MySQL's binlog logs the same DDL as a first-class event at its own position, whether or not a row ever follows." },
   { slug: "mysql-cert-no-san", date: "2026-07-14", engine: "MySQL & Vitess", label: "MySQL's own certificate can't pass verify-full", dek: "The certificate <code>mysqld</code> generates for itself carries no SubjectAltName, and modern Go won't fall back to the Common Name &mdash; so <code>tls=true</code> (verify-full) can never validate a stock MySQL server. The secure middle ground is Postgres's <code>sslmode=verify-ca</code>: trust a CA, verify the chain, skip the hostname the cert can't satisfy." },
+  { slug: "object-store-create-only-cas", date: "2026-07-16", engine: "Cross-cutting", label: "Object stores can now say \"that changed since you read it\" — the portability layer can't ask", dek: "Every writer of the backup-chain catalog was last-Put-wins. The textbook fix is compare-and-swap, and the stores now have it &mdash; but the portable object-store surface exposes only create-if-absent, so the guard is a CAS built from create-only claim markers, ground-truthed on real S3, with the millisecond residual it can't close stated honestly." },
+  { slug: "shortest-legal-offset", date: "2026-07-16", engine: "Postgres", label: "Postgres writes +00; your parser expects +00:00", dek: "ISO 8601 admits at least four spellings of a UTC offset and Postgres COPY picks the shortest: bare <code>+00</code>. A layout list that stops at <code>&plusmn;hh:mm</code> refuses Postgres's own default text output &mdash; and the naive fix reads a time zone out of every bare date's day-of-month, because <code>2026-07-02</code> ends in exactly the two-digit offset shape." },
+  { slug: "position-is-an-unbounded-set", date: "2026-07-16", engine: "MySQL & Vitess", label: "Your replication \"position\" is an unbounded set", dek: "A MySQL GTID set grows with every server UUID that has ever written to the topology; a Vitess VGTID is that set again per shard. Checkpoint &ldquo;the position&rdquo; into a 64&nbsp;KB <code>TEXT</code> column and you've stored an unbounded value in a bounded box &mdash; and on a non-strict server the overflow is a silently truncated position, discovered only at the next resume." },
+  { slug: "parquet-directory-doesnt-tell-you", date: "2026-07-16", engine: "Cross-cutting", label: "Two things the Parquet export directory doesn't tell you", dek: "GeoParquet defines an <em>omitted</em> <code>crs</code> as &ldquo;this is lon/lat degrees&rdquo; &mdash; so an EPSG:3857 export without the stamp reads Web-Mercator meters as degrees, no error. And when <code>read_parquet('dir/*.parquet')</code> makes the directory the catalog, a re-export that only adds files leaves a dropped table's stale <code>.parquet</code> answering the glob as current data." },
+  { slug: "index-that-shares-only-a-name", date: "2026-07-16", engine: "MySQL & Vitess", label: "The index that shares only a name", dek: "Detect-then-skip index builds trust the name &mdash; and when the source's UNIQUE index name-matches a plain INDEX on the target, the existing definition silently decides which duplicate writes the target accepts or refuses. Every step exits green; &ldquo;already exists&rdquo; is not &ldquo;already correct.&rdquo;" },
+  { slug: "round-trip-cannot-see-symmetric-bugs", date: "2026-07-16", engine: "Cross-cutting", label: "The round-trip test that cannot see symmetric bugs", dek: "If your writer and every test pin read through the same library, the format boundary is self-consistent, not correct: a symmetric regression ships files the rest of the world can't read while your suite stays green. The fix isn't another test &mdash; it's a reader you don't ship. And the checker built to be that reader promptly demonstrated the class inside its own harness." },
+  { slug: "quadratic-in-a-knob-somebody-else-set", date: "2026-07-16", engine: "MySQL & Vitess", label: "Your dump reader is quadratic in a knob somebody else set — twice", dek: "A dump reader's cost was quadratic in <em>statement</em> size &mdash; mydumper's <code>--statement-size</code>, a knob the dump's producer set. We fixed it, benchmarked the layer, shipped &ldquo;order-of-magnitude&rdquo; &mdash; and the pipeline stayed quadratic, because the value decoder one layer down sized its buffers to the statement tail. Benchmark the pipeline, not the layer." },
+  { slug: "verifier-rode-the-same-reader", date: "2026-07-16", engine: "MySQL & Vitess", label: "The dump reader skipped what it couldn't lex — and the verifier rode the same reader", dek: "A UTF-8 BOM glued to a chunk's first INSERT made the whole statement lex empty and vanish at exit 0 &mdash; and <code>verify --depth count</code> counted through the identical blind spot, confirming the loss instead of catching it. Then the fix's own third act: the refusal reached verify's report but not its exit code." },
+  { slug: "alert-cleared-when-slot-died", date: "2026-07-16", engine: "Postgres", label: "The alert cleared at the exact moment the slot died", dek: "When Postgres invalidates a replication slot, <code>pg_replication_slots</code> reports <code>wal_status='lost'</code> and the lag columns go NULL &mdash; not huge. Coerce NULL to zero, compute 0% pressure, and your threshold evaluator concludes the condition <em>cleared</em> &mdash; a false all-clear at precisely the moment the state became fatal." },
+  { slug: "same-document-different-winner", date: "2026-07-16", engine: "Cross-cutting", label: "Same document, different winner", dek: "RFC 8259 leaves duplicate JSON object keys undefined, and two engines picked opposite answers: SQLite's <code>json_valid</code> blesses them and reads the FIRST; Postgres <code>jsonb</code> keeps the LAST. Promote a &ldquo;validated&rdquo; text column to <code>jsonb</code> and you silently change which value every future query reads &mdash; validate with the destroyer, and you bless exactly what it destroys." },
+  { slug: "json-cursor-teleport", date: "2026-07-16", engine: "Cross-cutting", label: "Persist a resume cursor as JSON and it silently teleports", dek: "Go's <code>json.Marshal</code> replaces invalid-UTF-8 bytes with U+FFFD and numbers ride float64 past 2<sup>53</sup> &mdash; so a resumed keyset walk skipped 73,100 of 100,000 rows at exit 0. A corrupted cursor doesn't corrupt a cell you might notice: it relocates the walk. Resume state is a codec too." },
+  { slug: "mysql-like-escapes-keep-backslash", date: "2026-07-16", engine: "MySQL & Vitess", label: "The two MySQL escapes that keep their backslash", dek: "MySQL's escape table has a trap in its last two rows: <code>\\%</code> and <code>\\_</code> evaluate to the two bytes backslash-percent and backslash-underscore &mdash; backslash kept &mdash; while every other unrecognized escape drops it. A uniform unescaper silently shortens the data by one byte." },
+  { slug: "mydumper-chunk-numbers-pk-ranges", date: "2026-07-16", engine: "MySQL & Vitess", label: "mydumper chunk numbers are PK ranges, not a sequence", dek: "Healthy dumps have numbering gaps, <code>-r</code> dumps start at 00001, and a deleted <em>trailing</em> chunk leaves no gap at all &mdash; so contiguity is neither necessary nor sufficient, a deleted middle chunk streams silently short at exit 0, and the real loss detector is the dump's own <code>rows =</code> metadata everyone skips as informational." },
+  { slug: "mydumper-float-display-rounding", date: "2026-07-16", engine: "MySQL & Vitess", label: "Your dump already rounded your floats", dek: "mydumper renders single-precision FLOAT through mysqld's ~6-significant-digit formatter: 8388608 lands in the dump file as <code>8.38861e6</code>, which parses back to a <em>different</em> float32 &mdash; while DOUBLE columns in the very same run dump at full precision. The loss is in the file, at dump time." },
+  { slug: "mydumper-format-family", date: "2026-07-16", engine: "MySQL & Vitess", label: "\"mydumper format\" is a family, not a spec", dek: "<code>pscale database dump</code> produces &ldquo;mydumper format&rdquo; &mdash; byte-compatible enough that one reader serves both. The shared layout hides three producer forks: binary travels differently, string quoting differs, and TIMESTAMP semantics hinge on a TIME_ZONE header one producer always writes and the other never does." },
+  { slug: "csv-has-no-null", date: "2026-07-16", engine: "Cross-cutting", label: "CSV has no NULL", dek: "RFC 4180 says nothing about NULL, so the convention rides on the quoted/unquoted distinction &mdash; which Go's <code>encoding/csv</code> collapses. And at exactly one column wide, the universal skip-blank-lines convention is byte-indistinguishable from a legitimate record whose only field is empty: a NULL row, silently eaten." },
+  { slug: "parquet-zero-value-null", date: "2026-07-16", engine: "Cross-cutting", label: "The Parquet library nulled every false", dek: "Hand parquet-go rows as <code>map[string]any</code> and it decides NULL-vs-present for optional columns by asking whether the Go value is the zero value &mdash; so <code>false</code>, <code>0</code>, <code>\"\"</code>, and the epoch all silently export as NULL. And a Parquet NULL reads back as exactly the zero value, so the naive round-trip test goes green while the file says NULL." },
+  { slug: "inherits-rows-it-doesnt-own", date: "2026-07-16", engine: "Postgres", label: "The parent table that returns rows it doesn't own", dek: "Old-style INHERITS parents present to <code>information_schema</code> as ordinary, unrelated BASE TABLEs &mdash; while a SELECT on the parent, without <code>ONLY</code>, also returns every child's rows. The standard enumerate-and-copy recipe lands the child data twice, silently, exit 0 &mdash; and the same filter hides FDW foreign tables entirely." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -5882,6 +5900,1039 @@ write(
   <li>MySQL Reference Manual — <a href="https://dev.mysql.com/doc/refman/8.0/en/creating-ssl-rsa-files-using-mysql.html">Creating SSL and RSA Certificates and Keys using MySQL</a>: the server auto-generates a self-signed CA + server certificate at first startup when none is configured, identifying the server in the Common Name rather than a SubjectAltName.</li>
   <li>Go 1.15 release notes — <a href="https://go.dev/doc/go1.15#commonname"><code>crypto/tls</code></a>: the deprecated, CommonName-based fallback for hostname verification is disabled by default; certificates must carry a SubjectAltName. (The <code>x509ignoreCN</code> GODEBUG that briefly re-enabled it was removed in Go 1.17.)</li>
   <li>PostgreSQL documentation — <a href="https://www.postgresql.org/docs/current/libpq-ssl.html">SSL Support</a>: <code>sslmode=verify-ca</code> verifies the certificate chains to a trusted CA; only <code>verify-full</code> additionally checks that the certificate's name matches the host.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: object-store create-only CAS ---------------------------
+write(
+  "field-notes/object-store-create-only-cas",
+  page({
+    slug: "field-notes/object-store-create-only-cas",
+    title: "Object stores can now say \"that changed since you read it\" — the portability layer can't ask",
+    subtitle: "Every writer of a backup chain shared one read-modify-write JSON catalog with no arbitration — last Put wins, loser's update silently vanishes. The fix wants compare-and-swap on the object, and the major stores now have it — but the portable object-store surface exposes only create-if-absent. You can build a CAS out of create-only (since ground-truthed live on real S3). You can also be honest about the millisecond window it can't close — and about the fact that the primitive that would close it exists upstream, one abstraction layer away.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — hardening sluice's backup-chain catalog (ADR-0160, shipped v0.99.246), then ground-truthed against real AWS S3 (us-east-1, 2026-07-16): conditional-PUT enforcement, exactly-one-winner concurrency, and sluice's own coded conflict refusal all observed end to end through the production path. The unguarded race was real but never field-observed; the design constraint — no portable conditional overwrite — turned out to be a property of the portability layer, not the stores, and that reversal is the note.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A sluice backup chain has one structural record: a lineage catalog, a JSON object listing every segment and its parentage. Every writer — full-backup finalize, cron'd incrementals, stream rollovers, compaction, prune — loaded it, mutated it in memory, and Put it back whole. Two concurrent writers (two cron incrementals, a backup racing a prune, an operator double-start) interleave, the last Put wins, and the loser's structural update silently vanishes: a lost catalog append at best, a mis-parented chain at worst. The data chunks themselves are write-once at distinct paths; the catalog read-modify-write was the one unguarded shared object.</p>
+<p>The textbook fix is conditional overwrite — Put-if-ETag-matches, a true CAS on the object. The stores themselves have it: AWS S3 gained conditional writes in late 2024 — <code>If-None-Match</code> creates and, with them, <code>If-Match</code> ETag overwrites — GCS has always had generation-match preconditions, Azure has <code>If-Match</code>. But sluice's cloud backends ride a portable abstraction (gocloud.dev/blob), and the portable surface exposes exactly one conditional primitive: create-if-absent (mapping to <code>If-None-Match: *</code> on S3 and Azure, a generation-0 precondition on GCS, <code>O_EXCL</code> on local files). No If-Match — the writer options simply have no field for it (verified in source: nothing in v0.46.0's blob/ handles it, and no plan is visible). For years that was the fleet's fault — S3 had no conditional writes at all, and the portable layer tracked the floor of the fleet. The floor has moved; the abstraction hasn't.</p>
+
+<h2 id="building-cas">Building CAS from create-only</h2>
+<p>The catalog write becomes a compare-and-swap on a chain write-generation, arbitrated by create-only claim markers at the chain root (<code>lineage.gen/g-&lt;N&gt;</code>):</p>
+<ol>
+  <li><strong>Observe, then read.</strong> At load, list the markers and record the max claimed generation — <em>before</em> reading the catalog. The order is load-bearing: reversed, you can observe past a competitor's just-landed update and silently clobber it; observe-first turns that window into a spurious-but-safe conflict.</li>
+  <li><strong>Claim, then Put.</strong> At write, create marker <code>g-&lt;observed+1&gt;</code>. Create-if-absent guarantees exactly one concurrent writer wins the slot; the loser's create fails and the write refuses loudly — coded, with the marker's forensic body (host, pid, timestamp) pointing at the other writer — having changed nothing.</li>
+  <li><strong>GC</strong> a trailing window of old markers after success.</li>
+</ol>
+<p>The liveness property is the part worth stealing: an orphaned marker from a crashed writer is not a stale lock. The next writer's observation lists markers, not catalog content, so the orphan simply becomes the new base and the next generation is claimed after it. No TTLs, no leases, no clock trust, no manual unlock. The rejected alternative makes the contrast sharp — storing the generation counter inside the catalog would turn a crashed claim into a permanent conflict with the recorded counter, a bricked chain needing manual repair. Listing markers as the observation source is what buys lock-free liveness.</p>
+
+<h2 id="verified">Verified on the real thing</h2>
+<p>The scheme was originally pinned against MinIO and derived for AWS from documentation; a 2026-07-16 probe against real S3 (us-east-1) closed that gap, both at the raw API and through sluice's production path. Raw layer: <code>If-None-Match: *</code> PUT returns 200 on a fresh key and 412 PreconditionFailed on an occupied one; two concurrent conditional PUTs on one fresh key produce exactly one 200 and one 412, final content the winner's. Through sluice's own BlobStore (gocloud's s3blob), eight concurrent claim attempts produced exactly one winner and seven coded losers, and the full interleaved-writer scenario ended in the coded <code>SLUICE-E-BACKUP-CHAIN-CONFLICT</code> refusal naming the other writer's marker, with the loser having written nothing. The library genuinely sends the header — <code>s3blob.go</code> sets <code>IfNoneMatch = "*"</code> when asked, and a 412 on a PUT is only possible if a precondition was sent and enforced server-side. Real create-only CAS, end to end, no silent-ignore.</p>
+<p>One nuance the probe surfaced without reproducing: under truly simultaneous in-flight conditional PUTs, S3 can hand the loser a 409 ConditionalRequestConflict instead of the 412. gocloud maps only the 412 to the failed-precondition error the guard's conflict branch keys on, so a 409 loser would fall through to the guard's capability-degrade path — an unguarded write plus a WARN whose &ldquo;the store may not support conditional PUTs&rdquo; wording would be wrong in that instant. Safe direction (the loser is unguarded, never corrupted-by-guard, and the store's own arbitration already refused it), but it's a mapped-wrong degrade rather than the coded refusal; sluice v0.99.263 closed it by treating the 409 as a conflict, not a capability signal — a 409 means another conditional request was in flight and nothing was written, so the PUT is retried once (a clean retry means this writer won after all), and any still-contended outcome routes to the coded chain-conflict refusal, never the degrade path. The transferable half: when you build on a conditional primitive, audit the error mapping too — a store can refuse your precondition with a status your library doesn't translate.</p>
+
+<h2 id="residual">The residual, stated honestly</h2>
+<p>A create-only CAS narrows the race; it cannot close it. Claim and Put are two operations, and a competitor whose observation lands inside another writer's claim-to-Put window — normally milliseconds, a marker PUT followed by the catalog PUT of an already-marshaled body — reads the pre-Put catalog, claims the next generation, and both writers Put unconditionally: last-write-wins again, undetected. The guard shrinks the silently-vulnerable window from the whole seconds-wide read-modify-write span to that millisecond gap. (The probe confirmed the window is real on live S3: the final catalog Put is an unconditional 200-overwrite.) True closure needs conditional overwrite on the catalog object itself — and the same probe confirmed that primitive now exists on the store: <code>If-Match</code> PUT returned 200 against the current ETag and 412 against a stale one, exactly the lost-update refusal the catalog wants. Closure no longer waits on the provider; it waits on the portability layer growing If-Match, or on a per-provider SDK write (aws-sdk-go-v2's PutObject takes it today). That residual is documented in the ADR and accepted for v1 — a guard whose limits you can state is worth more than one you believe is airtight.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>If your coordination lives on an object store, inventory the conditional primitives you actually have — and check which layer is withholding them. Portably it may be create-if-absent and nothing else, even when every store underneath now offers conditional overwrite; the constraint that shapes your design can belong to the client library, not the service. Know the two patterns create-only buys you: exactly-one-winner arbitration (claim markers) and lock-free liveness (observe the markers, not the guarded object, so a crashed claimant is a base, not a blocker). Order matters twice (observe before read; claim before put), and the honest accounting matters most: create-only CAS is a race-narrower, the claim-to-Put gap is the price of building on the one primitive your abstraction exposes — and when the missing primitive appears one layer up, say so, because that turns &ldquo;accepted residual&rdquo; into &ldquo;closable, per-provider, whenever it's promoted.&rdquo; This is the same family as our database-side note that <a href="/field-notes/create-if-not-exists-race/">CREATE &hellip; IF NOT EXISTS is not a lock</a> — existence checks arbitrate creation, never modification.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://pkg.go.dev/gocloud.dev/blob">gocloud.dev/blob</a> — <code>WriterOptions.IfNotExist</code> and its per-provider mapping (S3/Azure <code>If-None-Match: *</code>, GCS generation-0, local <code>O_EXCL</code>); no If-Match field in v0.46.0 (verified in source).</li>
+  <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html">AWS S3 — conditional requests</a>: <code>If-None-Match</code> creates and <code>If-Match</code> ETag overwrites (GA November 2024); 409 ConditionalRequestConflict on overlapping in-flight conditional writes.</li>
+  <li>Real-AWS ground-truth probe (2026-07-16, us-east-1) — the 412/409 matrix, exactly-one-winner concurrency, and wire-level confirmation that gocloud sends the precondition header through sluice's own BlobStore path.</li>
+  <li>sluice ADR-0160 — the backup-chain concurrent-writer guard: the marker scheme, the rejected alternatives, and the claim-to-Put residual.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the shortest legal offset -------------------------------
+write(
+  "field-notes/shortest-legal-offset",
+  page({
+    slug: "field-notes/shortest-legal-offset",
+    title: "Postgres writes +00; your parser expects +00:00 — and every date ends in the shape of the shortest legal offset",
+    subtitle: "ISO 8601 admits at least four spellings of a UTC offset, and Postgres COPY picks the shortest: 2026-07-15 08:09:10.123456+00. A layout list that stops at ±hh:mm refuses Postgres's own default text output. And the fix has its own trap — a bare date like 2026-07-02 ends in -02, exactly the naive two-digit offset shape.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — sluice's SQLite/D1 type-inference path meeting a real Postgres-COPY-produced <code>timestamptz</code> column (found by the flat-file integration corpus; fixed v0.99.250). The bug was a loud wrong-refusal — a promoted column aborting mid-copy — affecting v0.99.166 through v0.99.249; never silent loss, and completed runs were always correct.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>An ISO 8601 UTC offset can be spelled <code>Z</code>, <code>+00:00</code>, <code>+0000</code>, or bare <code>+00</code> — all conformant. Postgres <code>COPY &hellip; CSV</code> renders <code>timestamptz</code> in the shortest legal form: space-separated, colon-less, two-digit offset. A parser whose layout list covers <code>-07:00</code> and <code>-0700</code> but not <code>-07</code> refuses Postgres's own default text output — arguably the single most common zoned-timestamp rendering a data tool will ever meet in a file.</p>
+<p>sluice hit both halves of the class at once, because it had two independent implementations of the same predicate. The type-inference validator (GLOB-based, deciding whether a TEXT column's values all conform to a timestamp shape and can be promoted) accepted the value; the decoder (<code>time.Parse</code> layout-based, executing that promotion at copy time) refused it. Validator promises, decoder reneges: a promoted column aborted loudly mid-copy with a raw decode error. Two implementations of &ldquo;is this a zoned timestamp?&rdquo; had drifted apart, and every value in the gap between them became a wrong refusal.</p>
+
+<h2 id="widening-trap">The widening has its own trap</h2>
+<p>The obvious fix — teach both sides the bare <code>&plusmn;hh</code> spelling — contains a false-positive generator. A two-digit offset is a two-character numeric suffix after a sign, and a plain DATE ends in one: <code>2026-07-02</code> terminates in <code>-02</code>, which is byte-identical to the naive <code>&plusmn;hh</code> shape. An unanchored acceptor reads an offset into every date whose day-of-month resembles one — inventing a time zone, and with it an instant shift, on values that were naive dates all along.</p>
+<p>The accepted spelling has to be anchored: bare <code>&plusmn;hh</code> counts as an offset only when it follows seconds or a fractional-seconds field. A date can't get there; a real COPY-rendered <code>timestamptz</code> always does.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The decoder gained the missing layouts (T-separated naive datetimes, space-separated zoned forms, <code>&plusmn;hhmm</code>, anchored <code>&plusmn;hh</code>); the validator gained the matching spellings with the anchoring; and — the part that fixes the class rather than the instance — both sides are now pinned cell-by-cell against the same separator &times; zone &times; fraction matrix, with a real Postgres-COPY-produced <code>timestamptz</code> column instant-checked end to end on both Postgres and MySQL targets. The bare-date rows in the validator matrix assert the value stays naive. When two components implement one predicate, either make them literally one function or pin them against one shared truth table; anything looser drifts.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Any Postgres, one psql session:</p>
+<pre><code>${esc(`CREATE TABLE t (ts timestamptz);
+INSERT INTO t VALUES ('2026-07-15 08:09:10.123456+00');
+\\copy t TO 'out.csv' CSV
+
+$ cat out.csv
+2026-07-15 08:09:10.123456+00     <- space separator, bare two-digit offset`)}</code></pre>
+<p>Feed <code>out.csv</code> to any parser whose zoned layouts stop at <code>&plusmn;hh:mm</code>/<code>&plusmn;hhmm</code> and watch it refuse Postgres's own default output. The false-positive half is just as quick: hand an unanchored <code>&plusmn;hh</code> acceptor the bare date <code>2026-07-02</code> and it reads a UTC-2 offset out of the day-of-month — which is why the accepted spelling must be anchored after seconds or a fraction.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Two lessons. First, a validator and a decoder that answer the same question are one predicate wearing two implementations, and the gap between them is a bug class of its own — here it surfaced as a loud wrong-refusal, but the same drift in the permissive direction would promise conformance the executor silently mangles. Second, the shortest legal ISO offset is a substring of every date: any temporal grammar that accepts bare <code>&plusmn;hh</code> without anchoring it to the time portion will hallucinate time zones out of day-of-month digits. Postgres will send you the short spelling — its COPY output is the conformance test your parser actually has to pass.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>ISO 8601 — time zone designators: <code>Z</code>, <code>&plusmn;hh:mm</code>, <code>&plusmn;hhmm</code>, and <code>&plusmn;hh</code> are all conformant spellings.</li>
+  <li><a href="https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-OUTPUT">PostgreSQL documentation — datetime output styles</a>: the ISO style renders the offset without a colon when minutes are zero (the <code>+00</code> shape COPY emits).</li>
+  <li>sluice v0.99.250 changelog — the validator/decoder temporal-matrix fix and the affected-version range.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: position is an unbounded set ----------------------------
+write(
+  "field-notes/position-is-an-unbounded-set",
+  page({
+    slug: "field-notes/position-is-an-unbounded-set",
+    title: "Your replication \"position\" is an unbounded set — and a 64 KB column caps it near 1,000 servers",
+    subtitle: "A MySQL GTID set grows with every server UUID that has ever written to the topology; a Vitess VGTID is that set again per shard. Checkpoint \"the position\" into a MySQL TEXT column and you've stored an unbounded value in a 64 KB box — and on a server without strict mode, the overflow is a silently truncated position, discovered only at the next resume.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — a full inventory of sluice's own MySQL control tables (roadmap item 65a, fixed v0.99.249). Never observed overflowing in the field, and on sluice's connections it would have failed loudly (<code>STRICT_TRANS_TABLES</code> is pinned); the silent-truncation half of this note is standard non-strict MySQL semantics stated as reasoning, not a field observation.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A replication position looks like a scalar — a number, a name — and for a single-server binlog coordinate it nearly is. A GTID set is not. It is a union of per-server-UUID interval lists (<code>uuid:1-5000,uuid2:1-300,&hellip;</code>), and its size is a function of topology history: every failover, clone, or promotion can introduce a server UUID that lives in the set from then on. A Vitess VGTID multiplies that again — one GTID set per shard, so resharding scales the token with the shard count.</p>
+<p>Any CDC tool that persists &ldquo;the position&rdquo; therefore needs a column sized for an unbounded value. MySQL <code>TEXT</code> caps at 65,535 bytes — roughly 1,000 server-UUID entries at typical entry sizes, or one very heavily sharded VGTID. sluice's inventory found it had made this call correctly once and then re-made it wrong twice: the schema-history anchor column was <code>LONGTEXT</code> from day one, with a comment saying exactly why (&ldquo;for GTID sets can be long&rdquo;), while two sibling tables holding the same token had shipped as <code>TEXT</code>. Inconsistent sizing across sibling columns holding the same value is precisely how this class ships — the reasoning was done, recorded, and not propagated.</p>
+
+<h2 id="loud-silent">The loud/silent split</h2>
+<p>What happens at byte 65,536 depends on a server setting the checkpoint writer may not control. With <code>STRICT_TRANS_TABLES</code> (sluice pins it), the INSERT/UPDATE errors and the position write aborts loudly mid-stream — recoverable, if inconvenient. On a server with strict mode disabled — still common in legacy configs — the value is silently truncated at the column limit with a warning nobody reads. A truncated GTID set is not detectably wrong: it parses, it's a valid set, it just describes less history than it should. The corruption manifests at the next resume as a position that re-fetches (or skips) work, which is the worst possible place for corruption to land — far from the write that caused it, wearing the costume of a replication bug.</p>
+
+<h2 id="coda">The coda: the one-line fix that gets refused</h2>
+<p>The remediation is a one-line <code>ALTER &hellip; MODIFY &hellip; LONGTEXT</code> — which, on a PlanetScale branch with safe migrations enabled, is itself refused with Error 1105, because safe migrations refuses direct DDL by statement class regardless of effect (a widen-in-place MODIFY included). So the shipped fix is detect-then-ALTER: probe <code>information_schema</code> for the column's current <code>DATA_TYPE</code>, issue the MODIFY only while it's still <code>text</code> (zero DDL on the already-wide path), and when a genuinely needed widen is blocked, refuse loudly carrying the exact ALTER for the operator to ship through a deploy request — never a silent skip. Fresh installs simply declare <code>LONGTEXT</code>. (Postgres is unaffected; its <code>text</code> is unbounded.)</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>The arithmetic first: one GTID-set entry is a 36-character server UUID plus its interval list (<code>uuid:1-500000</code> &asymp; 45&ndash;60 bytes with separators), so a 65,535-byte TEXT column holds on the order of 1,000 entries — synthesize one past the cap and watch what your strict-mode posture does with it:</p>
+<pre><code>${esc(`mysql> CREATE TABLE ckpt (id INT PRIMARY KEY, pos TEXT);
+mysql> SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+mysql> INSERT INTO ckpt VALUES (1, REPEAT('a', 70000));
+ERROR 1406 (22001): Data too long for column 'pos'      -- loud abort
+
+mysql> SET SESSION sql_mode = '';
+mysql> INSERT INTO ckpt VALUES (2, REPEAT('a', 70000));
+Query OK, 1 row affected, 1 warning                     -- silently truncated
+mysql> SELECT LENGTH(pos) FROM ckpt WHERE id = 2;       -- 65535`)}</code></pre>
+<p>The non-strict row is the field failure mode: a valid-parsing, shorter-than-written position discovered only at resume. The widen coda reproduces on any PlanetScale safe-migrations branch: <code>ALTER TABLE ckpt MODIFY pos LONGTEXT</code> is refused with Error 1105 even as a pure widen — which is why the fix must probe <code>information_schema</code> first and issue the ALTER only when the column is genuinely still <code>text</code>.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Position tokens carry more structure than they look like they do. We've written before about <a href="/field-notes/postgres-lsn-timeline-scoped/">a Postgres LSN being a coordinate in a reference frame</a> rather than an absolute address; this is the size-shaped sibling: a MySQL/Vitess position is a set that grows with topology history, and &ldquo;how big can the position get?&rdquo; has no engine-provided answer. Size every column that stores an engine-opaque token as unbounded, and when you get that reasoning right once, grep for the siblings — the second and third columns holding the same value are where the corrected mistake quietly survives. And know your strict-mode posture: it is the difference between this bug aborting your stream and relocating your resume point.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html">MySQL Reference Manual — GTID format and storage</a> (per-server-UUID interval lists), TEXT column size limits, and strict SQL mode vs silent truncation.</li>
+  <li><a href="https://vitess.io/docs/">Vitess documentation</a> — VGTID (per-shard GTID sets in a keyspace position).</li>
+  <li>sluice v0.99.249 changelog — the TEXT &rarr; LONGTEXT widen, the detect-then-ALTER shape, and the safe-migrations refusal path.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the Parquet export directory ----------------------------
+write(
+  "field-notes/parquet-directory-doesnt-tell-you",
+  page({
+    slug: "field-notes/parquet-directory-doesnt-tell-you",
+    title: "Two things the Parquet export directory doesn't tell you",
+    subtitle: "Two things a file-based export doesn't tell its readers — and what spec-compliant readers assume in the silence. GeoParquet defines an omitted crs as \"this is lon/lat degrees\" — so omission is an assertion, and an EPSG:3857 export without the stamp reads Web-Mercator meters as degrees, no error, wrong planet positions. And the standard read_parquet('dir/*.parquet') recipe treats the directory as the catalog — but a re-export doesn't unwrite old files, so a dropped table's stale .parquet keeps answering the glob as current data. The fix for the second grew a third act: the first orphan sweep deleted without an ownership proof, and a cleanup pass without one is a hazard of its own.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — the 2026-07-15 repo audit (MED-D0-4 and MED-D0-5) against sluice's <code>backup export-as-parquet</code>, then exhibited live as a before/after differential by the v0.99.258 regression cycle on a real geometry corpus (details below). Both were sluice's own writer bugs: the schema knew the SRID the whole time (the IR carries it) and the writer simply didn't say it; the orphan sweep was simply never written. Fixed in v0.99.258 — and the sweep's first cut then over-deleted (the 2026-07-16 confirming audit's HIGH-2, live-reproduced), corrected in v0.99.262; that's the third act below. The GeoParquet omitted-crs default is spec behavior — nothing to file upstream.</p>
+
+<h2 id="crs">First: the omission that means something</h2>
+<p>GeoParquet's <code>geo</code> footer metadata has a <code>crs</code> field per geometry column, and the spec defines its absence: an omitted <code>crs</code> means OGC:CRS84 — longitude/latitude degrees. That makes omission an <em>assertion</em>, not a gap. sluice's export emitted only the encoding and geometry types; a <code>geometry(Point, 3857)</code> column — Web-Mercator, coordinates in meters — exported with no <code>crs</code>, and every spec-compliant reader dutifully interpreted millions-of-meters coordinates as degrees. GeoPandas and DuckDB-spatial don't error on that: the values are numerically plausible, the shapes render, and every position is wrong.</p>
+<p>The live differential (v0.99.258 cycle, a corpus of SRID 4326 + 3857 + 32633 columns): the v0.99.257 export's <code>geo</code> block carries no <code>crs</code> at all — the 3857 column reads back as degrees under the spec default. The v0.99.258 export embeds canonical PROJJSON for the bundled SRIDs (4326 as <code>GeographicCRS</code>/WGS 84, 3857 as <code>ProjectedCRS</code>/Pseudo-Mercator), and read-back verification confirmed the round trip: DuckDB-spatial types the columns <code>GEOMETRY('EPSG:4326')</code> / <code>GEOMETRY('EPSG:3857')</code>, and GeoPandas reconstructs both CRSs.</p>
+<p>The repair has its own subtlety, worth spelling out because it's the same trap one level down. For an SRID sluice can't render to PROJJSON (the corpus's 32633), the honest stamp is an <strong>explicit <code>null</code></strong> — which the spec defines as &ldquo;CRS undefined,&rdquo; semantically different from omitting the key (&ldquo;CRS is CRS84&rdquo;) — plus a WARN and an index note naming the SRID and the downstream remedies (GeoPandas <code>set_crs</code>, DuckDB <code>ST_Transform</code>). The key is never omitted. When a spec assigns meaning to your silence, &ldquo;I don't know&rdquo; has to be said out loud.</p>
+
+<h2 id="directory-catalog">Second: the directory is the catalog</h2>
+<p>The analytics cookbook pattern — <code>SELECT &hellip; FROM read_parquet('exports/*.parquet')</code> — makes the directory listing the table catalog. But sluice's re-export wrote the fresh files and an updated index, and deleted nothing. Drop a table (or exclude it) and re-export with <code>--force-overwrite</code>: the fresh index no longer lists it, but its old <code>.parquet</code> file still sits in the directory, still matches the glob, and still serves last week's rows as current data. No reader consults the index; the glob <em>is</em> the query surface.</p>
+<p>Live differential, same cycle: on v0.99.257 a dropped table's <code>tbl2.parquet</code> orphan survives a <code>--force-overwrite</code> re-export and keeps answering the glob. On v0.99.258 the re-export deletes every <code>.parquet</code> the fresh index does not claim, logging each by name (<code>deleted a stale .parquet not claimed by this export's index</code>), and the sibling files are untouched.</p>
+
+<h2 id="ownership">Third: the fix that over-reached — cleanup needs an ownership proof</h2>
+<p>Honesty requires the third act: the v0.99.258 sweep closed the orphan hole and opened a bigger one. Its scope was &ldquo;every <code>.parquet</code> the fresh index does not claim&rdquo; — but it listed the output root <em>recursively</em>, and it ran whenever <code>--force-overwrite</code> was set, ungated on a prior sluice export existing there at all. sluice only ever writes top-level <code>&lt;schema&gt;.&lt;table&gt;.parquet</code> names, so a nested <code>.parquet</code> is by construction someone else's — yet the 2026-07-16 confirming audit (HIGH-2) reproduced a first-ever forced export into a directory that also held foreign Hive-style datasets (<code>other-tool/dt=&hellip;/part-0001.parquet</code>, a Spark output tree) deleting all of them, irreversibly, named at INFO only after the fact. &ldquo;Not claimed by my index&rdquo; describes every Parquet file on earth; a delete keyed on the <em>absence</em> of a claim has no boundary.</p>
+<p>v0.99.262 draws the boundary the first cut skipped, and it's a positive proof, not a broader filter: the sweep touches only top-level names — the shapes sluice could have written — and only when the destination's prior <code>parquet_index.json</code> proves a sluice export owned the directory; everything unclaimed outside that boundary is WARN-named as unmanaged and never deleted. The index that no reader consults (act two's complaint) turns out to have a second job: it is the writer's own ownership sentinel, the artifact that licenses the delete.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Any MySQL or Postgres with a geometry column (this is the regression-cycle corpus shape):</p>
+<pre><code>${esc(`CREATE TABLE geo (id INT PRIMARY KEY,
+                  p4326 POINT NOT NULL SRID 4326,
+                  p3857 POINT NOT NULL SRID 3857);
+-- insert a few rows, then:
+sluice backup full --source-driver=mysql --source '<dsn>' --out ./store
+sluice backup export-as-parquet --from-dir ./store --out ./exports
+
+# inspect the geo metadata (duckdb):
+SELECT key, value FROM parquet_kv_metadata('exports/geo.parquet');
+# <= v0.99.257: the geo block has NO "crs" key — 3857 meters read as degrees
+# >= v0.99.258: PROJJSON for 4326 + 3857; unbundled SRIDs get explicit "crs": null + a WARN
+
+# the orphan: drop a table, take a fresh backup, re-export
+sluice backup export-as-parquet --from-dir ./store2 --out ./exports --force-overwrite
+ls exports/*.parquet
+# <= v0.99.257: the dropped table's file is still there, still answers the glob
+# >= v0.99.258: "deleted a stale .parquet not claimed by this export's index" naming it
+
+# the third act: a foreign nested dataset in the same destination
+mkdir -p fresh-exports/other-tool/dt=2026-07-01   # no prior sluice export here
+cp elsewhere/part-0001.parquet fresh-exports/other-tool/dt=2026-07-01/
+sluice backup export-as-parquet --from-dir ./store --out ./fresh-exports --force-overwrite
+# v0.99.258-261: the foreign nested .parquet is DELETED — on a first-ever export
+# >= v0.99.262: top-level-only + prior-index ownership gate; foreign files WARN-named as unmanaged, untouched`)}</code></pre>
+<p>For the misread itself: <code>import geopandas; geopandas.read_parquet('exports/geo.parquet').crs</code> — pre-fix that reports EPSG:4326-equivalent (the spec default) for a column whose numbers are meters.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Common thread: in a spec'd file format, whatever the reader is <em>defined to assume in the absence of your metadata</em> is part of your writer's contract — read the spec's defaults as obligations, and when you genuinely don't know a value, say so explicitly rather than omitting the key, because the two silences can mean different things. And when the directory is the catalog — every glob-based lake pattern — deleting is part of writing: an exporter that only adds files leaves every consumer reading the union of all its historical runs. But the license to delete extends exactly as far as ownership does, and ownership must be a positive proof (a sentinel you wrote, names only you emit), never the absence of a claim — a cleanup pass scoped by what it <em>doesn't</em> recognize will eventually meet a directory it shares.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://geoparquet.org/">GeoParquet specification</a> — the <code>geo</code> metadata's <code>crs</code> field: omitted means OGC:CRS84; explicit <code>null</code> means undefined; PROJJSON as the encoding.</li>
+  <li>sluice v0.99.258 changelog — the per-column CRS stamp (canonical PROJJSON for 4326/3857, explicit null + WARN for unbundled SRIDs) and the <code>--force-overwrite</code> orphan sweep; audit findings MED-D0-4/5.</li>
+  <li>sluice v0.99.262 changelog — the sweep's ownership boundary: top-level names only, gated on the prior <code>parquet_index.json</code> sentinel, unmanaged files WARN-named and never deleted; the 2026-07-16 confirming audit's HIGH-2 (foreign nested datasets deleted on a first-ever forced export, live-reproduced).</li>
+  <li>sluice-testing session report v0.99.258 (F6) — the live differential on the 4326/3857/32633 corpus, including the DuckDB-spatial and GeoPandas read-back.</li>
+  <li>Companion field note — <a href="/field-notes/parquet-zero-value-null/">The Parquet library nulled every false</a> (the same surface's earlier silent class: the library nulled every <code>false</code>; here the spec degrades every omission).</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the index that shares only a name ------------------------
+write(
+  "field-notes/index-that-shares-only-a-name",
+  page({
+    slug: "field-notes/index-that-shares-only-a-name",
+    title: "The index that shares only a name",
+    subtitle: "Idempotent index builds are detect-then-skip: if an index with the intended name already exists on the target, skip the build. But a name is not a definition — and index names live in a tiny convention-driven namespace (idx_email, uq_name). The sharpest cell is uniqueness: when the source's UNIQUE index name-matches a plain INDEX on the target, the existing definition silently decides which duplicate writes the target accepts or refuses. Every step exits green.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — the 2026-07-15 repo audit (MED-D0-8) against sluice's MySQL index-build paths, both the direct build and the deploy-request fallback; then exhibited both-sides on real MySQL by the v0.99.260 regression cycle (the differential below). This was sluice's own skip logic trusting a name; the advisory WARN shipped in v0.99.260. It's the index-level twin of the table-shape gate that shipped two releases earlier (ADR-0166): &ldquo;already exists&rdquo; is not &ldquo;already correct.&rdquo;</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Migration tools re-run. Resume flows, retries, and pre-provisioned targets all mean the index-build phase routinely finds indexes already present — so every tool's build is detect-then-skip: probe the target catalog for the intended name, skip if found. sluice's probe checked existence by name only. A pre-existing index that merely <em>shares</em> the intended name — different columns, different prefix lengths, or crucially different uniqueness — was silently accepted as &ldquo;already built.&rdquo;</p>
+<p>For most definition drift the consequence is query plans that don't match what the operator thinks they migrated. Uniqueness is the cell with teeth, and it cuts both directions:</p>
+<ul>
+  <li>Source has <code>UNIQUE KEY uq_name(name)</code>, target has a plain <code>KEY uq_name(name)</code>: the target now <em>accepts</em> duplicate names the source could never hold. The divergence surfaces later as data the application assumes impossible.</li>
+  <li>The inverse — plain on the source, UNIQUE pre-created on the target — means the target <em>rejects</em> inserts the source legally performed, as constraint violations during sync or a later write.</li>
+</ul>
+<p>Either way, the migration exits green: the copy is exact, the index build reports success (it skipped), and the difference is invisible until data exercises it.</p>
+
+<h2 id="differential">The live differential</h2>
+<p>The v0.99.260 regression cycle ran it on real MySQL: source table with <code>UNIQUE KEY uq_name(name)</code>, target pre-created from sluice's own captured DDL with the index demoted to a plain <code>KEY uq_name(name)</code>.</p>
+<pre><code>${esc(`binary       outcome (same rc=0, same exact data md5 both sides)
+---------    -----------------------------------------------------------
+v0.99.259    silent skip — zero WARN lines; the target index stays
+             non-unique with no signal anywhere
+v0.99.260    dedicated WARN: "an index with this name already exists
+             with DIFFERENT UNIQUENESS — the build skips it, so the
+             EXISTING definition decides which duplicate writes the
+             target accepts or refuses" with index=uq_name
+             existing_definition=(name) intended_definition="UNIQUE (name)"`)}</code></pre>
+<p>A different-column collision gets the general WARN naming both definitions; the same-name-same-definition control stays silent on both binaries (no WARN noise on the healthy path). Deliberately a WARN and not a refusal: a differing definition can be intentional operator tuning — a wider covering index, an adjusted prefix — which is exactly what detect-then-skip exists to respect. The advisory costs one <code>information_schema.statistics</code> read per table that had skips, and a probe failure degrades to DEBUG rather than failing a build the existence check already green-lit.</p>
+
+<h2 id="catalog-quirks">The compare is a tour of MySQL catalog quirks</h2>
+<p>Deriving &ldquo;is the existing definition the one I would have built?&rdquo; from <code>information_schema.statistics</code> turned out to be its own field trip, ground-truthed on real MySQL during the fix:</p>
+<ul>
+  <li>A <strong>SPATIAL</strong> index reports a <code>SUB_PART</code> of 32 nobody asked for — catalog noise, not part of any buildable definition; compare it literally and every spatial index false-drifts.</li>
+  <li><strong>FULLTEXT/SPATIAL</strong> indexes silently shed UNIQUE and per-column prefixes at DDL-emit time (insist and you get Error 1089) — so the <em>intended</em> side of the compare has to drop them too, mirroring the emitter's rules rather than the raw schema.</li>
+  <li><strong>DESC</strong> key parts don't appear as a direction flag: they hide in <code>COLLATION='D'</code>.</li>
+  <li><strong>Functional key parts</strong> surface as NULL <code>COLUMN_NAME</code> and can only be matched positionally — MySQL normalizes the expression text, so a byte-compare false-flags spellings that are equal.</li>
+</ul>
+<p>Every one of those is a way an honest definition compare either misses drift or invents it. The namespace being conventional is what makes the class common; the catalog being quirky is what makes the fix nontrivial.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Any MySQL, two minutes (this is the regression-cycle fixture):</p>
+<pre><code>${esc(`-- source
+CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(50), val INT,
+                UNIQUE KEY uq_name (name), KEY idx_val (val));
+
+-- pre-create the target table identically EXCEPT the index clause:
+--   UNIQUE KEY uq_name (name)  ->  KEY uq_name (name)
+
+sluice migrate --source-driver=mysql --source '<src>' --target-driver=mysql --target '<dst>'
+# <= v0.99.259: rc=0, no signal; SHOW INDEX FROM t on the target: uq_name NON_UNIQUE=1
+# >= v0.99.260: rc=0, same data, plus the DIFFERENT-UNIQUENESS WARN naming both definitions
+
+-- then demonstrate the consequence the WARN names:
+INSERT INTO t VALUES (100,'alice',1),(101,'alice',2);   -- target accepts; source never could`)}</code></pre>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>This is the third member of a family: existence checks that answer a different question than the one you asked. <code>CREATE &hellip; IF NOT EXISTS</code> answers &ldquo;did a create race me?&rdquo; without atomicity; a platform's statement-class gate answers &ldquo;is this statement allowed?&rdquo; rather than &ldquo;is this effect safe?&rdquo;; and a name probe answers &ldquo;does something called this exist?&rdquo; when the build needs &ldquo;does <em>this definition</em> exist?&rdquo;. Whenever idempotency is implemented as detect-then-skip, the detection must compare what the skip is trusting — and for indexes specifically, uniqueness is a data-integrity property wearing a performance object's clothes: it decides what writes are legal, so drifting it silently is a correctness bug, not a tuning difference. &ldquo;Already exists&rdquo; is not &ldquo;already correct.&rdquo;</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice v0.99.260 changelog — the index definition-drift WARN (columns, prefix, direction, uniqueness; direct build and deploy-request fallback alike); the 2026-07-15 audit finding MED-D0-8.</li>
+  <li>sluice-testing session report v0.99.260 (F1) — the live both-sides differential and exact WARN wording on real MySQL.</li>
+  <li><a href="https://dev.mysql.com/doc/refman/8.0/en/information-schema-statistics-table.html">MySQL documentation — <code>information_schema.statistics</code></a> (SUB_PART, COLLATION, NULL COLUMN_NAME for functional key parts) and Error 1089; the catalog quirks above were ground-truthed on real MySQL including prefix+DESC, functional, and spatial indexes.</li>
+  <li>sluice ADR-0166 — the table-shape gate (&ldquo;already exists &ne; already correct&rdquo; one level up); companion field note <a href="/field-notes/create-if-not-exists-race/">CREATE IF NOT EXISTS is not a lock</a> (the family's atomicity member).</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: round-trip tests and symmetric bugs ----------------------
+write(
+  "field-notes/round-trip-cannot-see-symmetric-bugs",
+  page({
+    slug: "field-notes/round-trip-cannot-see-symmetric-bugs",
+    title: "The round-trip test that cannot see symmetric bugs",
+    subtitle: "Write false, the file says NULL, read it back as false — green. A writer bug whose read-back is symmetric is invisible to every round-trip test, and the general condition is worse than one bug: if your writer and every test pin read through the same library, the entire format boundary is self-consistent, and a symmetric regression ships files the rest of the world can't read while your suite stays green. The fix isn't another test; it's an outside reader. And the checker we built to be that reader promptly demonstrated the class inside its own harness.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — sluice's Parquet export boundary, flagged by the 2026-07-15 repo audit (MED-T3): the writer and every read-back pin were the same parquet-go v0.30.1, with the advertised consumer (DuckDB) appearing in no gate. The class it guards against is prospective — an independent DuckDB probe run during the audit verified today's compatibility exact — but the shape had already fired once for real: the published <a href="/field-notes/parquet-zero-value-null/">parquet-zero-value-null</a> note, where the library nulled every Go zero value and the round-trip read it back as the zero value, green. The external-reader gate shipped in v0.99.259.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>sluice's <code>backup export-as-parquet</code> had, by the audit's count, a model test suite at the value level: every type family &times; shape pinned, the zero-value wart pinned from both sides, refusals coded. And all of it — writer <em>and</em> every reader in every pin — went through parquet-go v0.30.1. That's self-consistency, not correctness. A future library upgrade that broke the format <em>symmetrically</em> — a logical-type annotation dropped on write and ignored on read, an encoding both directions misinterpret identically — would keep every pin green while shipping files DuckDB and Spark can't decode.</p>
+<p>One concrete stake makes it vivid: if the <code>UINT_64</code> logical-type annotation stopped surviving, uint64 max (18446744073709551615) reads back as <strong>-1</strong> in any reader that honors the physical int64 without the annotation. sluice's own round trip would never notice; both sides would agree on the annotation's absence.</p>
+
+<h2 id="external-reader">The structural fix: something else does the reading</h2>
+<p>v0.99.259 added a CI gate that is deliberately <em>not</em> another parquet-go test: a deterministic family &times; shape matrix — uint64 max, &minus;0.0 (signbit), NaN/&plusmn;Inf, denormals, all three DECIMAL physical tiers, microsecond temporals, JSON, empty-vs-NULL, array element families, row-group placement, footer metadata including the GeoParquet CRS — is generated through the real export codec and read back with <strong>real DuckDB</strong>, comparing values exactly. At gate-landing time: 15/15 checks under DuckDB v1.5.4, including DuckDB-spatial auto-decoding the GeoParquet column to <code>POINT (1 2)</code>.</p>
+<p>One deliberate choice inverts normal CI hygiene: the workflow runs <code>duckdb/duckdb:latest</code>, unpinned. A pinned reader would freeze the gate at today's ecosystem; unpinned, the ecosystem's reader drifts <em>into</em> the gate instead of past it — if a future DuckDB stops accepting something sluice writes, the gate goes red, which is exactly the news it exists to deliver. (The cost — an upstream DuckDB regression can redden sluice's CI — is why it's a non-required workflow.)</p>
+
+<h2 id="recursive-kicker">The recursive kicker</h2>
+<p>The checker compares DuckDB's output against expected values stored in a JSON file. Its first cut decoded that file with <code>encoding/json</code>'s default path — where every number is float64 — so <code>18446744073709551615</code> became <code>18446744073709552000</code> <strong>inside the verification harness itself</strong>: the exact mangling class the gate exists to catch on the DuckDB side, reproduced in the tool built to catch it. Fixed with <code>UseNumber</code>, then pinned with a test asserting that the float64-rounded near-miss must <em>fail</em> the comparison — the harness now proves it can distinguish the values it was built to protect.</p>
+<p>That beat is the note's thesis in miniature: every comparison harness is one more codec, and a codec can be wrong. (It's also the uint64 twin of our published <a href="/field-notes/int64-json-boundary/">int64-json-boundary</a> class.)</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>The harness bug is four lines of Go, no database required:</p>
+<pre><code>${esc(`var v []map[string]any
+json.Unmarshal([]byte(\`[{"u":18446744073709551615}]\`), &v)
+fmt.Println(v[0]["u"])   // 1.8446744073709552e+19 — float64, exactness gone
+// json.NewDecoder(...).UseNumber() preserves it as the literal "18446744073709551615"`)}</code></pre>
+<p>The boundary check itself, against any sluice Parquet export (DuckDB CLI):</p>
+<pre><code>${esc(`SELECT typeof(u), u FROM read_parquet('export/native.parquet') LIMIT 1;
+-- want: UBIGINT, 18446744073709551615 — a reader that lost the UINT_64
+-- annotation reports BIGINT and -1
+
+SELECT DISTINCT row_group_id, row_group_num_rows
+FROM parquet_metadata('export/native.parquet');
+-- one row group per source chunk: the alignment contract as an external reader counts it`)}</code></pre>
+<p>And the class demonstration needs no bug at all: write any value your library round-trips through a lossy representation (the published zero-value case: <code>false</code> &rarr; NULL &rarr; <code>false</code>), and observe that a write-then-read-with-the-same-library test is green by construction.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A format boundary is only tested when something on the other side does the reading. Round-trip tests through one library verify that library's self-consistency — necessary, and structurally incapable of seeing symmetric bugs, which are exactly the bugs a library upgrade introduces. If a file format is your product's interface, put a reader you don't ship into the gate, feed it your worst values (the extremes, the annotations, the metadata — not the happy middle), and consider leaving its version unpinned so the ecosystem drifts into your tests rather than past them. Then apply the same skepticism to the checker: its own deserialization path is a codec too, and the first value it mangles will be one of the extremes you chose it to protect.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice v0.99.259 changelog — the DuckDB parquet-compat CI workflow (matrix contents, exact-value comparison, unpinned latest).</li>
+  <li>The 2026-07-15 repo audit, MED-T3 — the self-consistent-boundary finding, including the audit's own independent DuckDB probe verifying today's compatibility.</li>
+  <li>sluice's duckdbverify harness — the UseNumber comment and the uint64-near-miss-must-fail pin (<code>TestWant_Uint64SurvivesTheJSONRoundTrip</code>: &ldquo;the first cut decoded checks.json with plain Unmarshal and 18446744073709551615 became &hellip;552000&rdquo;); the UBIGINT stake (&ldquo;without the UINT_64 annotation surviving, uint64 max reads as -1&rdquo;).</li>
+  <li>Companion field notes — <a href="/field-notes/parquet-zero-value-null/">parquet-zero-value-null</a> (the symmetric-bug shape observed for real; this note is its constructive sequel), <a href="/field-notes/int64-json-boundary/">int64-json-boundary</a> (the checker's own bug is that class's uint64 twin), <a href="/field-notes/verifier-rode-the-same-reader/">verifier-rode-the-same-reader</a> (the same independence principle at the dump-reader boundary).</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: quadratic in a knob somebody else set --------------------
+write(
+  "field-notes/quadratic-in-a-knob-somebody-else-set",
+  page({
+    slug: "field-notes/quadratic-in-a-knob-somebody-else-set",
+    title: "Your dump reader is quadratic in a knob somebody else set — twice",
+    subtitle: "A dump reader's cost was quadratic in statement size — and statement size isn't the reader's variable, it's the --statement-size flag chosen by whoever took the dump. We found it, fixed it, benchmarked the fix, shipped \"order-of-magnitude on the giant chunk\" — and the same-day regression cycle measured no end-to-end difference at all, because the same complexity class lived one layer down, in a buffer sized to the statement tail. Two acts: the quadratic, and the quadratic that survived its own fix.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — sluice's mydumper source engine, in two rounds: the statement splitter (2026-07-15 repo audit, MED-P1, measured; fixed v0.99.259) and the value decoder beneath it (Bug 191, filed by the v0.99.259 regression cycle the day the splitter fix shipped; fixed v0.99.261). Both were sluice's own bugs, and the second one is the reason this note exists: fidelity was byte-exact throughout — this is purely a wall-clock/complexity story, but one that crossed into a loud failure cliff before it was done.</p>
+
+<h2 id="act-one">Act one: the carry-rescan splitter</h2>
+<p>A block-based statement splitter is the natural way to read a dump file: consume 1 MiB blocks, find statement boundaries, emit complete statements. The catch is that a boundary can't be recognized without lexer context — quotes, backtick identifiers, comments, and two-character delimiters (<code>--</code>, <code>/*</code>) all straddle block boundaries — so the easy correctness answer is: keep the unfinished statement tail (the &ldquo;carry&rdquo;), and on the next block, re-lex carry+block from byte 0.</p>
+<p>That makes cost quadratic in <strong>statement size</strong>, not file size. And statement size belongs to the producer: mydumper's <code>--statement-size</code> flag (default ~1 MiB, raisable to tens of MiB by anyone chasing fewer round trips at load time). The audit measured it on identical bytes: 64 MiB as 64 default-sized statements read in 165 ms; as one statement, 2.52 s; double the statement and it quadruples (128 MiB = 9.86 s); ~40 s at the reader's named 256 MiB ceiling. A dump taken with <code>--statement-size 64M</code> read ~15&times; slower per byte than its default-sized sibling — no error, nothing to see but a slow restore.</p>
+<p>The v0.99.259 fix persists the lexer state across blocks: a small state machine whose pending one-byte lookaheads replace the re-scan, so the trajectory — and every statement boundary — is independent of where reads fall, and each byte is examined exactly once. The fix commit's own benchmark: 2.23 s &rarr; 128 ms on the 64 MiB statement (~17&times;, 524 MB/s, on par with the 148 ms the same bytes cost as 64 statements). The verification craft is worth stealing: the old whole-input splitter <em>stays in the codebase</em> as a differential oracle, and the incremental lexer is pinned byte-identical against it for every token family spanning a block boundary at every offset (block sizes 1 through 8), plus a seeded-random backstop.</p>
+
+<h2 id="act-two">Act two: the quadratic below the quadratic</h2>
+<p>The release notes said &ldquo;order-of-magnitude on the giant chunk.&rdquo; The same-day regression cycle built exactly that shape — a 49 MiB, 12,010-row single-statement dump — and measured: migrate 340.8 s on v0.99.259 vs 348.9 s on v0.99.258. <code>verify --depth count</code>, which isolates the source read: 354&ndash;377 s vs 334&ndash;369 s across three runs each. <strong>No differential.</strong> The splitter really was linear as claimed — its re-lex accounted for only ~2&ndash;3 s of the ~350 even on the old binary.</p>
+<p>Bisection fit the remaining cost to rows &times; statement_size at ~1.8 GB/s effective: 750 rows &times; 49 MiB &rarr; 20.4 s; 12,000 rows &times; 3 MiB &rarr; 22.5 s; the same rows split into 12 &times; 4 MiB statements &rarr; 29.1 s. One layer below the splitter, the quoted-string value decoder allocated each value's output buffer as <code>make([]byte, 0, len(s))</code> — where <code>s</code> was the remaining statement <em>tail</em> from the value's opening quote. Roughly 25 MiB of capacity, zeroed, for every ~4 KiB value: about 300 GB of large-object allocation churn per chunk. Same class, same producer-owned knob, different layer.</p>
+<p>Fixing it (v0.99.261) surfaced two things the first act had framed too narrowly:</p>
+<ul>
+  <li><strong>The default shape paid the tax too.</strong> Generalizing the scanner over the quote character exposed a worse same-class sibling in the <em>double-quote</em> path — which is mydumper &ge;1.0's default emit shape — copying the entire tail into a fresh allocation per value. Even default ~1 MiB statements paid rows &times; ~0.5 MiB average; the &ldquo;only raised <code>--statement-size</code> dumps are affected&rdquo; framing was itself a layer-one conclusion.</li>
+  <li><strong>The perf class had crossed into a correctness cliff.</strong> The decode stall starved the in-flight <code>LOAD DATA</code> stream past the target's <code>net_read_timeout</code> (30 s on the rig): v0.99.258 failed deterministically — 2 of 2 runs — on the gzipped twin of the same dump with <code>Error 1159 (08S01): Got timeout reading communication packets</code>. v0.99.259's splitter work moved the stall back under the cliff <em>at that size</em>; only v0.99.261 bounds the gap by value size instead of statement size (the changelog honestly says &ldquo;plausibly closed&rdquo; — larger values still cost what they cost).</li>
+</ul>
+<p>The v0.99.261 decoder pre-scans to the closing quote with the same escape grammar, then sizes the buffer to the value. And this time the benchmark is at the pipeline level: end-to-end row reads on a 16 MiB statement went 1.81 s / 34.4 GB allocated &rarr; 75 ms / 139 MB, linear through 48 MiB. Byte-exactness is pinned by a million-input differential fuzz against the old decoder as oracle, plus the delimiter &times; escape-shape matrix — and the regression cycle's fidelity oracle for the whole path was the MySQL server itself parsing the same statements (a three-way digest match, both binaries against server truth).</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Take the same data twice with real mydumper and time the reads:</p>
+<pre><code>${esc(`docker run --rm --network host mydumper/mydumper:v1.0.3-1 \\
+  mydumper -h 127.0.0.1 -u root -p secret -B mydb -o /dump-default          # ~1 MiB statements
+docker run --rm --network host mydumper/mydumper:v1.0.3-1 \\
+  mydumper -h 127.0.0.1 -u root -p secret -B mydb -o /dump-64m -s 64000000  # one giant statement per chunk
+
+time sluice verify --depth count --source-driver=mydumper --source ./dump-64m \\
+  --target-driver=mysql --target '<dsn>'   # isolates the source read`)}</code></pre>
+<p>On a table with &ge;5k normal-size rows and a 16 MiB+ single statement: sluice &le; v0.99.258 is quadratic at both layers; v0.99.259/260 shows little end-to-end change on many-row giant statements (the act-two shape); &ge; v0.99.261 reads both dumps at the same per-byte rate. To see the cliff, gzip the giant dump's chunks and load into a MySQL with <code>net_read_timeout</code> at its 30 s default — v0.99.258 aborts with Error 1159.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Two, one per act. Any incremental parser that re-scans its carry — or sizes work against its remaining input — is quadratic in its largest <em>token</em>, and the largest token's size may be a flag somebody else set at dump time; your complexity class has an owner, and it might not be you. And a complexity-class fix needs an end-to-end measurement, because the same class can live at more than one layer of the same path: we fixed the layer, benchmarked the layer, and the pipeline stayed quadratic. Benchmark the pipeline. (The write-side twins of this class are already published: <a href="/field-notes/backup-manifest-quadratic/">rewriting a whole manifest per chunk</a>, and <a href="/field-notes/migrate-state-quadratic-blob/">re-encoding a growing state blob per checkpoint</a> — those grow an object once per write; this one re-paid a growing tail once per value.)</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice v0.99.259 changelog (the linear splitter, with the oracle-pin methodology) and v0.99.261 changelog (Bug 191: the value-decoder fix, the pipeline-level 1.81 s &rarr; 75 ms numbers, the double-quote sibling, the million-input differential fuzz).</li>
+  <li>The 2026-07-15 repo audit, MED-P1 — the measured 165 ms / 2.52 s / 9.86 s quadratic confirmation.</li>
+  <li>sluice-testing Bug 191 and session report v0.99.259 (F1/F5) — the no-differential measurement, the rows &times; statement_size bisection, the ~300 GB allocation figure, and the deterministic Error 1159 cliff.</li>
+  <li><a href="https://mydumper.github.io/mydumper/">mydumper documentation</a> — <code>--statement-size</code> (<code>-s</code>).</li>
+  <li>Companion field notes — <a href="/field-notes/backup-manifest-quadratic/">backup-manifest-quadratic</a> and <a href="/field-notes/migrate-state-quadratic-blob/">migrate-state-quadratic-blob</a> (the write-side quadratic twins), <a href="/field-notes/mydumper-format-family/">mydumper-format-family</a> (<code>--statement-size</code> as one more producer axis).</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the verifier rode the same reader ------------------------
+write(
+  "field-notes/verifier-rode-the-same-reader",
+  page({
+    slug: "field-notes/verifier-rode-the-same-reader",
+    title: "The dump reader skipped what it couldn't lex — and the verifier rode the same reader",
+    subtitle: "A statement-splitting dump reader dispatched on the first token and let anything that lexed empty fall through as \"comment-only.\" A UTF-8 BOM glued to the first INSERT made it lex empty: the whole statement vanished at exit 0. And verify --depth count counted through the identical blind spot, so the safety net confirmed the loss instead of catching it. Then the fix's own third act: the refusal reached verify's report but not its exit code.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — the 2026-07-15 repo audit's CRITICAL-1 finding against sluice's mydumper source engine, exhibited live on the shipped binary by the v0.99.257 regression cycle (both scenarios, exact row counts below). This is a confession note: the exposure window was v0.99.247&ndash;v0.99.256, the engine's entire published life. The reader fix shipped in v0.99.257; the verify exit-code half (Bug 190) followed in v0.99.258.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A mydumper-format dump is a directory of <code>.sql</code> chunk files, each a stream of statements. sluice's reader split each chunk into statements, lexed the leading keyword, and switched on it: <code>INSERT</code> streams rows, <code>SET</code> hits the session-header gates, and — the load-bearing default — <em>any other statement refuses loudly</em>. Except one arm: a statement whose keyword lexed to the empty string was treated as a comment-only fragment and skipped, without verifying it actually was one.</p>
+<p>Two mundane inputs weaponize that posture:</p>
+<ul>
+  <li><strong>A UTF-8 BOM</strong> (<code>EF BB BF</code>) at the start of a chunk. mydumper itself never writes one — but PowerShell and plenty of Windows editors prepend it on re-save. The BOM glues itself to the first statement, its keyword lexes empty, and the entire first INSERT — up to ~1 MiB of rows at mydumper's default statement size — silently vanishes. &ldquo;Bulk copy complete,&rdquo; exit 0.</li>
+  <li><strong>A severed INSERT tail</strong> — <code>(2,'b'),(3,'c');</code>, the classic torn-dump shape. Digits don't lex as a keyword; the fragment's rows vanish the same way.</li>
+</ul>
+<p>The knife-twist is the verifier. <code>sluice verify --depth count</code> counted source rows through the <em>same</em> <code>processChunk</code> dispatch as the copy path — so it re-counted through the identical blind spot and reported the short counts as matching. The audit's phrasing stuck: the safety net confirms the loss instead of catching it.</p>
+<p>Note the irony in the design: the engine's default branch was &ldquo;ANY other statement refused loudly&rdquo; — but that refusal was unreachable for exactly the statements that don't lex to a keyword. The loud-failure posture existed; the skip arm sat in front of it.</p>
+
+<h2 id="differential">The live differential</h2>
+<p>The v0.99.257 regression cycle ran both shapes on real mydumper v1.0.3 dumps (10-row table), shipped binaries both sides:</p>
+<pre><code>${esc(`scenario                      v0.99.256                     v0.99.257
+------------------------      --------------------------    -----------------------------
+BOM on header-less chunk      rc=0, 5 of 10 rows land;      BOM WARN, all 10 rows, md5
+                              verify --depth count rc=0     exact, verify clean
+                              CONFIRMS the loss
+severed fragment spliced      rc=0, 8 of 10 rows;           migrate refuses rc=1 naming
+between INSERTs               verify confirms               the chunk file + a quoted
+                                                            head of the offending bytes
+pure-comment fragment         clean                         clean (no false refusal)`)}</code></pre>
+<p>One more shape from the same cycle: a BOM on a chunk <em>with</em> headers glued to the leading <code>/*!40101 SET NAMES&hellip;*/</code> line — no row loss there, but a session header silently vanishing is the same skip class.</p>
+
+<h2 id="third-act">The third act — loud in the text, silent in the exit code</h2>
+<p>The v0.99.257 fix made the verify door inherit the refusal — and the same cycle found that on the torn dump, verify printed the refusal in its table row (<code>t SKIPPED (source count error: &hellip; does not begin with a SQL keyword &hellip;)</code>) and still <strong>exited 0</strong>. Verify's exit policy counted only count <em>mismatches</em>; any per-table count error landed as an informative skip. An rc-gated verify — a script, a CI job — passed while a table was never verified. That was filed as Bug 190 and fixed as a class in v0.99.258: every table verify could not examine (count error either side, sample-hash error, missing-on-target) now counts toward a <code>tables_unverified</code> failure class and the run exits 2, with the summary trailer stating &ldquo;an unverified table is not a pass; non-zero exit code follows.&rdquo; Mismatches keep exit 1; deliberate <code>--exclude-table</code> exclusions stay exit-neutral.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Since v0.99.257: a leading BOM is stripped losslessly with a WARN (matching the flat-file engines' posture; data-chunk and schema paths both), any other keyword-less non-comment fragment refuses loudly naming the file and a quoted 40-byte head of the bytes, and unterminated <code>/*!NNNNN</code> versioned comments refuse instead of silently skipping. The skip arm is now reserved for provably-inert content — pure comments and whitespace. Since v0.99.258, verify's exit code tells the truth about what it couldn't check.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Seconds to observe, on any mydumper dump (real ones via <code>docker run mydumper/mydumper:v1.0.3-1</code>). Splice a fragment into a data chunk:</p>
+<pre><code>${esc(`printf '(999,"x");\\n' >> dump/mydb.t.00000.sql   # or splice mid-file
+
+# sluice <= 0.99.256: migrate rc=0, fragment rows silently absent;
+#                     verify --depth count rc=0 confirms the short count
+# sluice  = 0.99.257: migrate refuses rc=1 naming the file + bytes;
+#                     verify PRINTS the refusal but exits 0  (Bug 190)
+# sluice >= 0.99.258: verify exits 2 — "1 could not be verified"
+sluice migrate --source-driver=mydumper --source ./dump --target-driver=mysql --target '<dsn>'
+sluice verify  --depth count --source-driver=mydumper --source ./dump --target-driver=mysql --target '<dsn>'; echo $?`)}</code></pre>
+<p>For the BOM half: re-save any chunk through PowerShell's default <code>Set-Content</code>, or <code>printf '\\xef\\xbb\\xbf' | cat - chunk.sql &gt; bom.sql</code>.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Two, one per act. In a statement stream, &ldquo;skip what you don't recognize&rdquo; is the silent-loss posture: a skip must be reserved for content you can prove inert, and everything else refused naming the bytes — otherwise your loud-failure default is unreachable for exactly the inputs that need it. And a verifier that shares its reader with the copy path inherits every one of the reader's blind spots — it can only catch loss introduced downstream of the shared parse. After you fix the reader, check the verifier's <em>exit-code contract</em> too: &ldquo;loud in the text, silent in the rc&rdquo; is the same confirming-not-catching failure one layer up. A detector that cannot examine a table must not report overall success.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice v0.99.257 changelog (the fragment refusal + BOM strip) and v0.99.258 changelog (Bug 190, the <code>tables_unverified</code> exit-2 class).</li>
+  <li>The 2026-07-15 repo audit, finding CRITICAL-1 — observed via the shipped binary, three independent end-to-end repros.</li>
+  <li>sluice-testing session reports v0.99.257 (F1, the live differential table above) and v0.99.258 (F2, Bug 190 closed on every door).</li>
+  <li>Unicode/UTF-8 — the byte-order mark <code>EF BB BF</code>; mydumper writes none, Windows tooling adds them on re-save.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the alert cleared when the slot died ---------------------
+write(
+  "field-notes/alert-cleared-when-slot-died",
+  page({
+    slug: "field-notes/alert-cleared-when-slot-died",
+    title: "The alert cleared at the exact moment the slot died",
+    subtitle: "Monitor a Postgres replication slot by WAL-retention pressure and you inherit a sign flip at the terminal event: when Postgres invalidates the slot, pg_replication_slots reports wal_status='lost' and the lag columns go NULL — not huge. Coerce NULL to zero, compute 0% pressure, and your threshold evaluator concludes the condition cleared. The operator is told the pressure resolved at precisely the moment it became fatal.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — live on PG16, first by the 2026-07-15 repo audit (MED-D0-9, against sluice's own slot-health evaluator) and then reproduced as a staged before/after differential by the v0.99.258 regression cycle, exact log lines below. This was sluice's bug, not Postgres's: the catalog behavior is documented. Fixed in v0.99.258. One mitigating fact up front: the CDC streamer itself fails loudly on a lost slot, so this was an alerting-truth inversion, not a data-loss path — the feature that existed to give operators early warning gave them a false all-clear instead.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>sluice's slot-health watcher pages on WAL-retention pressure: percent of <code>max_slot_wal_keep_size</code> retained for the slot, WARN at 70%, CRITICAL at 85%. The natural implementation reads the slot's lag from <code>pg_replication_slots</code>, computes a percentage, and compares against thresholds — and that implementation contains the trap twice over:</p>
+<ul>
+  <li>When Postgres invalidates a slot (the WAL it needs got recycled past the cap), the row doesn't show an enormous lag. It shows <code>wal_status='lost'</code> and <strong>NULL</strong> in the lag columns — the audit's live probe row was <code>active=f | lost | NULL | NULL</code>.</li>
+  <li>sluice's Postgres reporter mapped NULL lag to 0 bytes, and the threshold evaluator never read <code>WALStatus</code> at all. NULL lag &rarr; 0% pressure &rarr; below every threshold &rarr; <code>Cleared=true</code> &rarr; an INFO reading &ldquo;condition cleared.&rdquo;</li>
+</ul>
+<p>So the observed sequence on the shipped binary was: page CRITICAL at 85%, keep paging as pressure climbs — then, at the exact tick the slot became irrecoverable, log &ldquo;condition cleared&rdquo; and go quiet. Terminal states in monitoring views often present as <em>absent</em> data rather than extreme data, and absent-means-clean defaults invert the alert exactly when it matters most.</p>
+
+<h2 id="differential">The live differential</h2>
+<p>The v0.99.258 cycle staged it on a throwaway <code>postgres:16</code> with <code>max_slot_wal_keep_size=1MB</code>: stall the consumer realistically, burn WAL to ~92% of the cap (lag 969,120 bytes, identical on both binaries), take one in-condition <code>retention pressure CRITICAL</code> tick, then burn past the cap and CHECKPOINT so the slot invalidates live.</p>
+<pre><code>${esc(`binary       at the terminal event
+---------    ------------------------------------------------------------
+v0.99.257    next tick emits \`postgres: slot-health condition cleared\`
+             with wal_status=lost lag_bytes=0 — the false all-clear —
+             and NO lost page ever (lost=0, cleared=1)
+v0.99.258    exactly ONE terminal ERROR: \`slot INVALIDATED
+             (wal_status=lost) — terminal, re-snapshot required\`;
+             ZERO clears; the pre-invalidation retention WARN intact`)}</code></pre>
+<p>A staging detail worth recording: a plain fast burn on v0.99.257 (clean straight to lost, no sampled in-condition tick) emits <em>nothing</em> at all — reproducing the audit's exact false-clear shape needs the staged burn, one retention tick first.</p>
+
+<h2 id="fix-shape">The fix's shape — and its two siblings</h2>
+<p>The repair is instructive beyond the one bug. First, dispatch on <code>wal_status</code> <em>before</em> any percentage math: <code>lost</code> pages CRITICAL exactly once and latches — never repeats, never clears — because the state is terminal by definition. But <code>unreserved</code> pages CRITICAL and stays <em>clearable</em>, because Postgres documents that an unreserved slot can recover; latching a recoverable state would re-create the inversion in the other direction (a stale alarm the operator learns to ignore). Truthful alerting cuts both ways.</p>
+<p>Two siblings shipped in the same pass, both variations on &ldquo;the net must be truthful at the terminal event&rdquo;:</p>
+<ul>
+  <li><strong>A probe that fails silently is a disabled net.</strong> A revoked role or killed connection had the health probe logging DEBUG forever while the operator believed the alerting was live. Now five consecutive probe failures escalate to a WARN — &ldquo;retention/invalidation alerts are blind until it recovers&rdquo; — once per streak, with a recovery INFO. The cycle proved it live: <code>REVOKE SELECT ON pg_catalog.pg_replication_slots</code>, CDC keeps applying while the probe is blind, the WARN fires at exactly <code>consecutive_failures=5</code>.</li>
+  <li><strong>An edge-once latch must advance on delivery, not on decision.</strong> The schema-drift page's once-per-stall latch advanced <em>before</em> the notification was sent, so one transient sink error (a 502 at the stall moment) permanently swallowed the only page a persistent stall would ever get. The latch now advances only on successful delivery.</li>
+</ul>
+<p>Plus one-tick hysteresis on threshold downgrades, so a catch-up hovering at the 85% boundary doesn't page every 30 seconds in both directions.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Throwaway container, ~5 minutes (this is the regression-cycle recipe):</p>
+<pre><code>${esc(`docker run -d --name slotpg -e POSTGRES_PASSWORD=x -p 5460:5432 postgres:16 \\
+  -c wal_level=logical -c max_slot_wal_keep_size=1MB
+
+-- create a logical slot, attach a consumer (sluice sync or pg_recvlogical), then stall it
+-- burn WAL past the cap and force recycling:
+SELECT pg_switch_wal(); CHECKPOINT;   -- repeat with junk writes until:
+SELECT active, wal_status, safe_wal_size FROM pg_replication_slots;
+--  f | lost | NULL          <- the terminal row: status text, NULL numbers`)}</code></pre>
+<p>Any monitor that computes pressure from the lag/<code>safe_wal_size</code> columns and treats NULL as zero will read that row as 0% — sluice &le; v0.99.257 logged &ldquo;condition cleared&rdquo; on it; &ge; v0.99.258 pages terminal CRITICAL once. To see the false clear specifically, let the monitor sample one in-condition tick before the burn crosses the cap.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When a monitored resource dies, its metrics don't spike — they vanish. Check the status column before the arithmetic, and treat absent data as &ldquo;cannot assert health,&rdquo; never as zero. Then audit the alert lifecycle at its edges: a terminal state should latch (one page, no clears, no repeats), a documented-recoverable state should not, a probe that can't see must say so, and a once-only notification must not mark itself sent until it was. Every one of those edges defaults to the quiet-and-wrong behavior if unexamined — and the quiet failure of an alerting net is indistinguishable from good news.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://www.postgresql.org/docs/current/view-pg-replication-slots.html">PostgreSQL documentation — <code>pg_replication_slots.wal_status</code></a> (<code>lost</code>: &ldquo;this slot can no longer be used&rdquo;; the lag/<code>safe_wal_size</code> columns go NULL) and <code>max_slot_wal_keep_size</code>.</li>
+  <li>sluice v0.99.258 changelog — the lost/unreserved dispatch, probe-outage escalation, delivery-gated drift latch, and downgrade hysteresis; the 2026-07-15 audit findings MED-D0-9/10/11.</li>
+  <li>sluice-testing session report v0.99.258 (F4/F4b) — the staged false-clear differential and the exactly-once terminal page, live on PG16.</li>
+  <li>Companion field notes — <a href="/field-notes/postgres-slot-leaks/">postgres-slot-leaks</a> and <a href="/field-notes/postgres-idle-slot-failover/">postgres-idle-slot-failover</a> (how slots die; this note covers how their death reads as good news to your alerting).</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: same document, different winner ---------------------------
+write(
+  "field-notes/same-document-different-winner",
+  page({
+    slug: "field-notes/same-document-different-winner",
+    title: "Same document, different winner — SQLite reads the FIRST duplicate JSON key, Postgres jsonb keeps the LAST",
+    subtitle: "RFC 8259 declines to define what a duplicate object key means, and two mainstream engines quietly picked opposite answers. So \"this text column validated as JSON, promote it to jsonb\" silently changes which value every future query reads — at exit 0, with the stored bytes looking fine in any spot check. The sharpest edge: the promotion's validator was SQLite's own json_valid, a validator that happily accepts exactly what the target type destroys.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — the 2026-07-15 repo audit (MED-D0-3) against sluice's <code>--infer-types</code> jsonb promotion, with the Postgres half verified on a real PG 16.14 and the value flip exhibited live on the shipped v0.99.257 binary by the v0.99.258 regression cycle. Fixed in v0.99.258: a column holding any duplicate-key document is never promoted. Both engine behaviors are documented or by-design — there is nothing to file upstream; the bug was ours, in assuming &ldquo;valid&rdquo; meant &ldquo;preservable.&rdquo;</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>JSON's spec has a deliberate hole: RFC 8259 says object names &ldquo;SHOULD be unique&rdquo; and leaves the behavior for duplicates undefined. Every implementation picked something:</p>
+<ul>
+  <li><strong>SQLite</strong> says <code>{"a":1,"a":2}</code> is valid (<code>json_valid(&hellip;)</code> returns 1) and <code>json_extract(&hellip;, '$.a')</code> returns <strong>1</strong> — the first duplicate wins.</li>
+  <li><strong>Postgres <code>jsonb</code></strong> parses the same bytes and stores <code>{"a": 2}</code> — the last duplicate wins, documented behavior, verified on PG 16.14 (nested objects included).</li>
+</ul>
+<p>sluice's <code>--infer-types</code> path (auto-engaged for CSV/TSV/NDJSON sources, which stage through SQLite) offered an innocuous-looking upgrade: if every value in a JSON-hinted text column validates as JSON, promote the target column to <code>jsonb</code>. The validator was SQLite's <code>json_valid</code>. So a document with duplicate keys sailed through validation, landed in <code>jsonb</code>, and Postgres silently rewrote which value the document carries — while the disclosure sluice printed affirmatively described the transform as mere &ldquo;whitespace/key-order&rdquo; normalization. Most documents carry no duplicates, so any spot check looks clean; the one that does is precisely the one the promotion corrupts.</p>
+
+<h2 id="differential">The live differential</h2>
+<p>The v0.99.258 regression cycle ran a CSV with a jsonb-hinted <code>payload</code> column carrying <code>{"a":1,"a":2}</code> (plus a clean <code>settings</code> control column) through <code>--infer-types</code> on both shipped binaries:</p>
+<pre><code>${esc(`binary       payload column    stored value
+---------    --------------    ------------------------------------------
+v0.99.257    jsonb             {"a": 2} — the first duplicate silently
+                               dropped, rc=0, no signal
+v0.99.258    text              {"a":1,"a":2} byte-exact; the disclosure
+                               names the dup-key class and the column;
+                               the clean sibling still promotes to jsonb`)}</code></pre>
+<p>The gate is per-column: one poisoned column doesn't demote the rest.</p>
+
+<h2 id="why">Why &ldquo;is it valid?&rdquo; was the wrong question</h2>
+<p>The two predicates look interchangeable and aren't:</p>
+<ul>
+  <li><em>Is this valid JSON?</em> — what <code>json_valid</code> answers. Duplicate keys: yes.</li>
+  <li><em>Does the target's JSON type preserve this document?</em> — what a promotion actually needs. Duplicate keys under <code>jsonb</code>: no. (<code>jsonb</code> is a parsed binary representation; last-wins is the price of key deduplication. Postgres's plain <code>json</code> type, which stores text verbatim, would preserve it — <code>jsonb</code> does not.)</li>
+</ul>
+<p>Duplicate keys are the one place the same document legally means two different things in two engines: a reader pointed at the SQLite staging copy sees <code>a = 1</code>; a reader pointed at the promoted Postgres column sees <code>a = 2</code>. Nothing errored anywhere. The fix therefore had to be a scan, not a validator swap: sluice now runs a <code>json_tree</code> per-parent duplicate-key aggregate over every nesting depth (escaped key spellings included) and refuses to promote any column holding even one duplicate-key document — it stays <code>text</code>, source bytes intact, and the promotion disclosure names the collapse instead of calling it normalization.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>No sluice required to see the engine disagreement:</p>
+<pre><code>${esc(`-- SQLite
+SELECT json_valid('{"a":1,"a":2}');              -- 1 (valid)
+SELECT json_extract('{"a":1,"a":2}', '$.a');     -- 1 (FIRST wins)
+
+-- Postgres (verified on 16.14)
+SELECT '{"a":1,"a":2}'::jsonb;                   -- {"a": 2} (LAST wins)
+SELECT '{"x":{"a":1,"a":2}}'::jsonb;             -- {"x": {"a": 2}} (nested too)`)}</code></pre>
+<p>And the migration-shaped consequence, with sluice (this is the regression-cycle fixture):</p>
+<pre><code>${esc(`cat > docs.csv <<'EOF'
+id,payload,settings
+1,"{""a"":1,""a"":2}","{""ok"":true}"
+EOF
+
+sluice migrate --source-driver csv --source ./docs.csv --csv-header \\
+  --target-driver postgres --target '<dsn>'
+# <= v0.99.257: payload promoted to jsonb, PG stores {"a": 2}, rc=0
+# >= v0.99.258: payload stays text, byte-exact; settings still promotes;
+#               the disclosure names the duplicate-key column`)}</code></pre>
+<p>(Column names matter: the promotion only considers JSON-hinted names — <code>settings</code>, <code>metadata</code>, <code>payload</code>, <code>attributes</code>, <code>*_json</code>.)</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>&ldquo;Is it valid X?&rdquo; and &ldquo;does the target's X type preserve it?&rdquo; are different predicates, and the gap between them is exactly where a format's undefined corners live. When a spec says SHOULD and stays silent on the consequences, every engine's answer is a coin flip you have to look up — and any pipeline that upgrades a value into a <em>parsed</em> representation (jsonb, a binary protobuf, a normalized XML store) needs to scan for the inputs where parsing is lossy, not just the inputs where parsing fails. Validate with the destroyer, and you will bless exactly what it destroys.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://datatracker.ietf.org/doc/html/rfc8259#section-4">RFC 8259 §4</a> — object names &ldquo;SHOULD be unique&rdquo;; behavior for duplicates is explicitly implementation-defined.</li>
+  <li><a href="https://www.postgresql.org/docs/current/datatype-json.html">PostgreSQL documentation — jsonb</a>: &ldquo;duplicate object keys&hellip; only the last value is kept.&rdquo;</li>
+  <li><a href="https://sqlite.org/json1.html">SQLite json1 documentation</a> — <code>json_valid</code> and <code>json_extract</code> (first-key behavior observable directly).</li>
+  <li>sluice v0.99.258 changelog — the duplicate-key non-promotion and the corrected disclosure; the 2026-07-15 audit finding MED-D0-3; sluice-testing session report v0.99.258 (F5, the live value flip).</li>
+  <li>Companion field notes — <a href="/field-notes/mysql-json-where-cast/">mysql-json-where-cast</a> (cross-engine JSON surprises) and <a href="/field-notes/int64-json-boundary/">int64-json-boundary</a> (another of JSON's unspecified corners biting databases).</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the JSON cursor teleport ----------------------------------
+write(
+  "field-notes/json-cursor-teleport",
+  page({
+    slug: "field-notes/json-cursor-teleport",
+    title: "Persist a resume cursor as JSON and it silently teleports",
+    subtitle: "A resumable keyset walk persists its last-processed PK between runs, and the obvious store is JSON — which quietly rewrites database values on the way through. We saw half the class at design time ([]byte → base64, time.Time → RFC 3339) and normalized it. The half we missed fired live: Go's json.Marshal replaces invalid-UTF-8 bytes with U+FFFD, and numbers ride float64 past 2^53 — so a resumed walk skipped 73,100 of 100,000 rows at exit 0. Resume state is a codec too, and ours had zero coverage.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — in two acts. Act one caught at design time while building <code>sluice backfill</code>'s resume path (ADR-0159, v0.99.244) and normalized before ship. Act two found by the 2026-07-15 repo audit (CRITICAL-2 and HIGH-1, both confirmed on live MySQL) and then exhibited on the shipped binaries by the v0.99.257 regression cycle with exact magnitudes — the numbers below are from real differential runs. Fixed in v0.99.257 with a typed envelope. The exposure was sluice's own: backfill resume since v0.99.244, and the migrate copy-resume cursor rode the same store.</p>
+
+<h2 id="act-one">Act one: the halves we saw</h2>
+<p>A keyset walk — backfill, chunked copy, verify — persists a cursor between runs: the last-processed primary-key tuple, re-bound into the resume predicate <code>WHERE (pk&hellip;) &gt; (cursor&hellip;)</code>. The obvious store for a heterogeneous tuple is JSON, and Go's <code>encoding/json</code> rewrites two whole type families on the way through:</p>
+<ul>
+  <li><code>[]byte</code> marshals as base64. A binary PK cursor comes back as its base64 text — a syntactically valid comparison value that lands nowhere near the real key.</li>
+  <li><code>time.Time</code> marshals as RFC 3339 (<code>2026-07-14T10:30:00Z</code>). MySQL does not reliably parse the <code>T</code>/<code>Z</code> shape inside a comparison.</li>
+</ul>
+<p>Both re-bound values are <em>valid</em> — no parse error, no refusal — just a walk that resumes from somewhere other than where it stopped. A misplaced cursor is the worst failure class for resumable work because the loss shows up as position, not as a message. The v0.99.244 design saw this and normalized at the scan boundary: <code>[]byte</code> to its raw string form, <code>time.Time</code> to the engine's own comparable literal, pinned by unit tests in both engines.</p>
+
+<h2 id="act-two">Act two: the halves we missed</h2>
+<p>The audit's finding was that the normalization itself handed <code>encoding/json</code> a Go string of <strong>raw bytes</strong> — and <code>json.Marshal</code> silently replaces every invalid-UTF-8 byte with U+FFFD (<code>EF BF BD</code>). A BINARY PK cursor <code>0x9F8041FE10</code> round-trips to <code>0xEFBFBDEFBFBD41EFBFBD10</code>: 5 bytes become 11, and the mangled value sorts bytewise <em>greater</em> — so on live MySQL the resumed predicate <code>(id) &gt; (&lt;mangled&gt;)</code> skips every PK range between the true cursor and the imposter. BINARY(16) UUID keys are mainstream; the run reports success; <code>--verify</code> is optional; and a following contract step (DROP the old column) makes the loss permanent.</p>
+<p>The second missed half was the documented one: <code>TableProgress</code> decoded its JSON with a plain decoder — no <code>UseNumber</code> — so every number rode float64. A persisted cursor of <code>9007199254740995</code> decoded as <code>&hellip;996</code> (+1: a row skipped forever); a snowflake-magnitude <code>1750000000000000123</code> drifted &minus;123 (float64 granularity &asymp;256 up there), replaying past the documented at-most-one-chunk bound.</p>
+<p>The regression cycle put exact magnitudes on all of it, running the shipped binaries against each other:</p>
+<pre><code>${esc(`shape                          v0.99.256 (before)                    v0.99.257 (after)
+---------------------------    ----------------------------------    -----------------------------
+backfill, BINARY(16) PKs       resumes its own mangled cursor at     coded SLUICE-E-BACKFILL-
+(every key leading 0x80)       rc=0, marks the run complete —        CORRUPT-CURSOR, rc=3, names
+                               73,100 of 100,000 rows NEVER          --restart + the U+FFFD
+                               visited (exactly 100,000 minus        fingerprint, writes nothing;
+                               the 26,900 persisted as copied)       --restart heals, 100,000 exact
+backfill, PG BIGINT dense      cursor 1152921504606879676 rounds     envelope cursor; resume exact
+near 2^60                      up +68; EXACTLY the predicted 68
+                               rows skipped, row-for-row
+migrate --resume, bytea PK     its own writer persisted base64       WARN "persisted resume cursor
+                               text; resume rc=0, complete,          is not trustworthy; truncating
+                               46,000 of 200,000 rows never          and re-copying" → 200,000
+                               copied                                exact, checksum == source`)}</code></pre>
+<p>The float64 row deserves a second look: the skip window matched the drift arithmetic <em>row-for-row</em>. This class isn't flaky — it's deterministic corruption of position, which is why it survives every rerun.</p>
+
+<h2 id="owned-fix">The part that stings: we already owned the fix</h2>
+<p>sluice's backup values had been protected from exactly these rewrites since v0.99.159 — Bug 172 introduced a tagged-envelope codec (<code>{"_t":"i64"}</code>-style) precisely because JSON mangles bytes and big integers. The value path also had a year of the family-matrix test discipline: pin every type family, not one representative. The cursor store got neither: it stayed a bare <code>json.Marshal</code>, and its one resume integration pin exercised only INT primary keys. Checkpoint state is a codec with all the same failure modes as the data path — it just corrupts <em>where you are</em> instead of <em>what you have</em>.</p>
+<p>The v0.99.257 fix applies the owned remedy: cursor slices persist as typed envelopes (<code>{"_t":"i64"|"u64"|"bytes"|"f64"|"time"}</code>); valid-UTF-8 strings, bools, and nulls stay bare, and a string containing U+FFFD is enveloped as bytes so mangled and legitimate stay distinguishable. Legacy bare cursors parse exact-int64-first (including <code>BIGINT UNSIGNED</code> above MaxInt64), so pre-envelope integer cursors keep resuming losslessly — the cycle proved a v0.99.256-written cursor resumes under v0.99.257 with no refusal. Provably-mangled legacy cursors are handled where the PK types are known: backfill refuses with a coded error naming <code>--restart</code>; migrate self-heals through its existing truncate-and-redo disposition. And resume fidelity is now integration-pinned per orderable PK family — large-int, binary, composite, temporal, multibyte string — on real MySQL and Postgres.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>The rewrites are visible in a few lines of Go — no database required:</p>
+<pre><code>${esc(`cursor := map[string]any{
+    "pk": string([]byte{0x9F, 0x80, 0x41, 0xFE, 0x10}), // raw bytes as string
+    "n":  int64(9007199254740995),
+    "ts": time.Date(2026, 7, 14, 10, 30, 0, 0, time.UTC),
+}
+b, _ := json.Marshal(cursor)
+fmt.Println(string(b))
+// "pk" is now U+FFFD-riddled (5 bytes -> 11), "ts" is a T/Z literal MySQL
+// won't compare; decode "n" without UseNumber and it comes back ...996`)}</code></pre>
+<p>The end-to-end shape, on sluice: create a table with a <code>BINARY(16)</code> PK whose keys lead with <code>0x80</code>+ bytes, start <code>sluice backfill</code> (or an interrupted <code>migrate</code>) against v0.99.256, kill it mid-walk, and resume: rc=0, &ldquo;complete,&rdquo; and every row above the true cursor's mangled ghost untouched — the NULL-visible fixture (<code>--set 'new = old + 1' --where 'new IS NULL'</code>) makes the skipped rows countable. The same states under &ge; v0.99.257 refuse coded or self-heal.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>JSON is a lossy wire format for database values — it base64s or replacement-characters bytes, reformats times, and floats integers — and checkpoint/resume state is where those rewrites do maximum damage, because a corrupted cursor doesn't corrupt a cell you might notice: it relocates the walk, silently, at exit 0. Treat resume state as a codec: give every type family crossing the boundary an explicit representation decision (a tagged envelope beats per-type normalization — our normalization was itself the vector for the missed half), decode integers exactly, and pin the round-trip per PK family on real engines. And when your data path already has a hardened codec and a testing discipline, ask what other stores in the system quietly round-trip the same values without either — ours was the one that decides which rows get processed at all.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://pkg.go.dev/encoding/json">Go encoding/json</a> — invalid UTF-8 in strings is replaced with U+FFFD on marshal; numbers decode as float64 without UseNumber; <code>[]byte</code> marshals as base64; <code>time.Time</code> as RFC 3339.</li>
+  <li>The 2026-07-15 repo audit, CRITICAL-2 and HIGH-1 — both observed on live MySQL 8.0, including the <code>0x9F8041FE10</code> &rarr; <code>0xEFBFBDEFBFBD41EFBFBD10</code> round trip.</li>
+  <li>sluice v0.99.257 changelog — the tagged cursor envelope, exact-integer-first legacy parse, coded <code>SLUICE-E-BACKFILL-CORRUPT-CURSOR</code>, and the per-PK-family integration pins; ADR-0159 for the act-one normalization.</li>
+  <li>sluice-testing session report v0.99.257 (F2, 71/71) — the live differential magnitudes: 73,100/100,000, the exact-68-row float64 window, 46,000/200,000 on the migrate path, and the legacy-trust proof.</li>
+  <li>Companion field note — <a href="/field-notes/int64-json-boundary/">2<sup>53</sup> is a database boundary now</a>: the same family where the damage lands on a value instead of a position.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the MySQL escapes that keep their backslash ---------------
+write(
+  "field-notes/mysql-like-escapes-keep-backslash",
+  page({
+    slug: "field-notes/mysql-like-escapes-keep-backslash",
+    title: "The two MySQL escapes that keep their backslash",
+    subtitle: "MySQL's string-literal escape table has a trap in its last two rows: \\% and \\_ do not evaluate to % and _ — they evaluate to the two bytes \\% and \\_, backslash included. Every other unrecognized escape drops the backslash. A uniform unescaper — which is what almost every hand-rolled MySQL-literal decoder is — silently shortens data containing literal backslash-percent sequences by one byte.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — building sluice's mydumper flat-file source engine (ADR-0161, fixed in the shared quoted-string decoder, v0.99.247). The wrong rule was unreachable on sluice's live read paths — MySQL's own literal printing never emits <code>\\%</code> or <code>\\_</code> — and became load-bearing the moment arbitrary dump files entered the picture.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>MySQL string literals have a short table of named escapes (<code>\\0</code>, <code>\\b</code>, <code>\\n</code>, <code>\\r</code>, <code>\\t</code>, <code>\\Z</code>, <code>\\\\</code>, <code>\\'</code>, <code>\\"</code>) and a general rule for everything else: an unrecognized <code>\\x</code> evaluates to <code>x</code> — the backslash is dropped. Nearly every hand-rolled decoder implements the table plus the general rule and stops.</p>
+<p>The actual grammar has two more rows. <code>\\%</code> evaluates to the two bytes <code>\\%</code> and <code>\\_</code> to <code>\\_</code> — backslash kept. They're LIKE-pattern escapes: preserved so that a pattern-matching wildcard escape survives the trip through a string literal into a LIKE context. Outside any LIKE, in plain data, the parser still applies that rule — so a stored value containing a literal backslash-percent must be written as <code>'\\%'</code> in a dump, and must decode back to backslash-percent, not percent.</p>
+<p>A decoder applying the uniform drop-the-backslash rule to those two sequences silently emits one byte fewer. No error, no warning — the string is simply shorter, and almost-right: <code>\\%discount\\%</code> becomes <code>%discount%</code>, plausible enough to pass any casual inspection.</p>
+
+<h2 id="why-hidden">Why it stayed hidden, and where it bit</h2>
+<p>The correctness oracle for reading a dump file is precise: decode exactly the bytes MySQL's parser would store if myloader replayed this literal. sluice's shared quoted-string decoder predated the dump reader and carried the uniform rule — harmlessly, because its inputs were MySQL's own literal output (<code>information_schema</code> defaults and the like), and MySQL's literal printer never produces <code>\\%</code> or <code>\\_</code>. Dump files broke that assumption: a dump is arbitrary literals headed for MySQL's grammar, covering the entire escape surface, including the two rows the uniform rule gets wrong. The fix landed in the shared decoder, with pins for both sequences in every quoting shape the dump family produces.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<pre><code>${esc(`mysql> CREATE TABLE t (s VARCHAR(20));
+mysql> INSERT INTO t VALUES ('50\\%');    -- literal evaluates to: 50\\%
+mysql> SELECT s, LENGTH(s) FROM t;
+-- 50\\%   4         <- backslash kept: four bytes, not three`)}</code></pre>
+<p>Now dump the table (mydumper or mysqldump both re-emit the value as the literal <code>'50\\%'</code>) and run the dump through any decoder that applies the uniform drop-the-backslash rule to unknown escapes — it emits <code>50%</code>, three bytes, one silently gone. The diff oracle is the server itself: replay the dump into MySQL (myloader/mysql client), <code>SELECT LENGTH(s)</code>, and compare against your decoder's output length; MySQL says 4, the naive unescaper says 3.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When you implement a decoder for someone else's literal grammar, the exceptions to the general rule are the entire job — the general rule is the easy 95% that every implementation gets right, and the two rows that contradict it are where the silent byte-level corruption lives. Read the grammar's table to the end, and test the decoder against the oracle that matters: not &ldquo;does it look right,&rdquo; but &ldquo;does it produce exactly the bytes the original parser would store.&rdquo; One-character mechanism, silent-corruption consequence — the cheapest class of bug to prevent and among the hardest to notice after the fact.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://dev.mysql.com/doc/refman/8.0/en/string-literals.html">MySQL Reference Manual — String Literals</a>: the escape-sequence table, including <code>\\%</code> and <code>\\_</code> evaluating to <code>\\%</code> and <code>\\_</code> (&ldquo;used to search for literal instances of % and _ in pattern-matching contexts&rdquo;), and the drop-the-backslash rule for other unrecognized escapes.</li>
+  <li>sluice ADR-0161 §4 — the shared quoted-string decoder and the keep-the-backslash fix, pinned across the dump family's quoting shapes.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: mydumper chunk numbers are PK ranges ----------------------
+write(
+  "field-notes/mydumper-chunk-numbers-pk-ranges",
+  page({
+    slug: "field-notes/mydumper-chunk-numbers-pk-ranges",
+    title: "mydumper chunk numbers are PK ranges, not a sequence",
+    subtitle: "Every consumer's instinct says numbered chunk files — table.00000.sql, 00001, … — form a sequence, so a missing file is detectable as a gap. Ground truth from real mydumper: the numbers are derived from primary-key ranges. Healthy dumps have gaps, -r dumps start at 00001, and a deleted trailing chunk leaves no gap at all — so contiguity is neither necessary nor sufficient. Meanwhile a deleted middle chunk streams silently short at exit 0, and the loss detector the format actually ships is the metadata everyone skips as informational.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — the 2026-07-15 repo audit (MED-D0-2: a dump with chunks 00000+00002 streamed 2 of 3 rows at exit 0, zero WARNs, and verify re-counted the same directory) plus a ground-truth probe against real mydumper v1.0.3 in Docker during the fix work. The silent short-stream was sluice's own gap — the reader explicitly dropped the dump's <code>-metadata</code>/<code>-checksum</code> companions as &ldquo;informational only.&rdquo; Two detection nets shipped in v0.99.258 and were proven both-sides by the regression cycle (numbers below). mydumper's numbering itself is by design; nothing to file upstream.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Delete one data chunk from the middle of a mydumper dump and restore it. What should happen: an error, or at least a warning. What did happen through sluice v0.99.257: the remaining chunks stream, every row in them lands, exit 0, no signal anywhere. The regression cycle's fixture — three chunks, 15 rows total, <code>rm</code> the middle one — landed 10 rows with zero WARNs. A verifier re-scanning the same directory confirms the short count. Chunk-file-level loss is maximally quiet because each chunk is a complete, well-formed SQL file; nothing about the survivors reveals the absence.</p>
+<p>The obvious net is a contiguity check on the chunk numbers. That's where the ground-truth probe earned its keep, because the obvious net is wrong:</p>
+<ul>
+  <li>Chunk numbers are <strong>derived from PK ranges</strong>, not a counter. A table with sparse primary keys legitimately dumped as <code>00001&ndash;00003</code> plus <code>450001&ndash;450003</code> on real v1.0.3 — observed once, on one probe, but it only takes one healthy dump with gaps to make a contiguity <em>refusal</em> reject good data.</li>
+  <li>Dumps taken with <code>-r</code> (rows-per-chunk) start at <code>00001</code>, not <code>00000</code>.</li>
+  <li>A deleted <strong>trailing</strong> chunk leaves no gap at all — the numbering just ends earlier.</li>
+</ul>
+<p>So contiguity is neither necessary (healthy dumps have gaps) nor sufficient (trailing loss shows no gap). An alarm built on the assumed semantics would have both false-alarmed and under-detected.</p>
+
+<h2 id="the-net">The net was inside the dump the whole time</h2>
+<p>mydumper records per-table row counts in its own metadata — <code>rows = N</code> entries in the modern dump-wide ini form, bare-integer <code>-metadata</code> companion files on older versions. The probe found the modern counts <strong>exact</strong> on v1.0.3. That's the free cross-check that catches chunk-level loss regardless of numbering: count what you streamed, compare with what the producer said it wrote. sluice's reader had been explicitly discarding those companions as &ldquo;informational only&rdquo; — forfeiting the only loss detector the format ships.</p>
+<p>v0.99.258 added both nets, deliberately as WARNs rather than refusals (cross-producer metadata fidelity is unverified, and gaps can be legitimate): a non-contiguous chunk-number WARN at open naming the gap, and the decisive post-stream row-count tripwire on both the bulk-copy and verify-count doors. The regression cycle's differential, same deleted-middle-chunk fixture:</p>
+<pre><code>${esc(`binary       outcome
+---------    ----------------------------------------------------------
+v0.99.257    rc=0, 10 of 15 rows, ZERO warns — the silent short-stream
+v0.99.258    rc=0, same 10 rows, BOTH nets fire: the contiguity WARN
+             (gap_after_chunk=0 next_chunk=2) and the count WARN
+             naming metadata_rows=15 chunk_rows=10`)}</code></pre>
+<p>One honest residual, stated because it's exactly the class this note is about: pscale-dump (the PlanetScale producer of the same format family) writes <em>empty</em> metadata companions, which sluice ignores leniently — so on that producer, a deleted trailing chunk leaves neither a gap nor a count mismatch. The net is only as good as the producer's metadata, per producer.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Real mydumper via Docker, any MySQL:</p>
+<pre><code>${esc(`docker run --rm --network host mydumper/mydumper:v1.0.3-1 \\
+  mydumper -h 127.0.0.1 -u root -p secret -B mydb -o /dump -r 5   # small -r forces multiple chunks
+
+ls dump/mydb.t.*.sql          # note: -r dumps start at 00001; sparse-PK tables can jump
+grep -A2 '\\[\`mydb\`.\`t\`\\]' dump/metadata   # the dump's own per-table "rows = N"
+
+rm dump/mydb.t.00002.sql      # delete a middle chunk
+
+sluice migrate --source-driver=mydumper --source ./dump --target-driver=mysql --target '<dsn>'
+# <= v0.99.257: rc=0, silently short, no signal
+# >= v0.99.258: rc=0 + the gap WARN + "metadata records a different row count" naming both numbers`)}</code></pre>
+<p>To see the numbering semantics directly: dump a table whose PKs live in two distant bands (say 1&ndash;1000 and 450000&ndash;451000) and observe the chunk numbers jump with the keyspace.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Two lessons stacked. First: an identifier derived from data is not a sequence — before you alarm on a producer's numbering, verify what the numbers <em>mean</em>, on the real producer, or your check will reject healthy inputs and miss unhealthy ones. (The verification cost here was one Docker probe; the alternative was a contiguity refusal that false-alarms on every sparse-PK dump.) Second, the sharper one: the metadata your reader skips as &ldquo;informational&rdquo; may be the only loss detector the format ships. A dump format's row counts, checksums, and manifests exist because the producer knew exactly what it wrote — a consumer that discards them is choosing to verify nothing against the one party with ground truth.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://mydumper.github.io/mydumper/">mydumper documentation</a> and observed v1.0.3 behavior — chunk numbering (PK-range-derived; <code>-r</code> starts at 00001; sparse keyspaces produce non-contiguous numbers, observed once on the fix's Docker probe) and the metadata <code>rows =</code> entries (exact on v1.0.3).</li>
+  <li>sluice v0.99.258 changelog — the gap WARN + row-count tripwire, including the ground-truth note (&ldquo;chunk numbers are PK-range-derived, so gaps can be legitimate — the row-count tripwire is the real net&rdquo;); the 2026-07-15 audit finding MED-D0-2.</li>
+  <li>sluice-testing session report v0.99.258 (F3) — the deleted-middle-chunk differential live on both binaries.</li>
+  <li>Companion field notes — <a href="/field-notes/mydumper-format-family/">mydumper-format-family</a> (producer forks in the same format, including pscale-dump's empty metadata) and <a href="/field-notes/verifier-rode-the-same-reader/">verifier-rode-the-same-reader</a> (statement-level skips through the same reader).</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: mydumper FLOAT display rounding ---------------------------
+write(
+  "field-notes/mydumper-float-display-rounding",
+  page({
+    slug: "field-notes/mydumper-float-display-rounding",
+    title: "Your dump already rounded your floats",
+    subtitle: "mydumper renders single-precision FLOAT through mysqld's ~6-significant-digit float-to-text formatter: 8388608 lands in the dump file as 8.38861e6, which parses back to a different float32 — while DOUBLE columns in the very same run dump at full round-trip precision. The loss is in the file, at dump time. Restore it, archive it, trust it: the low bits are already gone.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — building sluice's mydumper flat-file source engine (ADR-0161, v0.99.247), caught by the real-dump oracle: comparing rows read from an actual mydumper v1.0.3 dump against the same table read live. Every value matched except single-precision FLOATs.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>We built a reader for mydumper-format dump directories, and its central test is an equivalence oracle: dump a corpus with real mydumper, read the dump with sluice, migrate the same source live with sluice's MySQL engine, and compare row by row. The oracle flagged FLOAT.</p>
+<p>A FLOAT column holding 8388608 (2<sup>23</sup> — a value a float32 represents exactly) appears in the <code>.sql</code> chunk as <code>8.38861e6</code>. Parse that back and you get 8388610, a different float32 — float32 spacing at 2<sup>23</sup> is 1.0, so the six-digit rendering steps to a neighboring representable value. Meanwhile, in the same run, the same dump, DOUBLE columns holding <code>3.141592653589793</code>, <code>0.1</code>, and <code>1.7976931348623157e308</code> all dump at full shortest-round-trip precision. That FLOAT/DOUBLE split was proven, not assumed — the corpus carries beyond-6-digit DOUBLE values precisely so a regression in the sibling family would be caught.</p>
+<p>The split is the trap. The natural spot-check for &ldquo;does my dump preserve float precision?&rdquo; is to eyeball a DOUBLE column — doubles are where people expect precision to live — and the DOUBLE evidence says full precision. The FLOAT columns, silently, are already rounded in the bytes on disk, with no warning anywhere in the toolchain: not from mydumper, not from myloader on the way back in, not from the server.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>mydumper reads with a bare SELECT, which means values arrive as text formatted by mysqld's float-to-text path — and MySQL's display conversion for single-precision FLOAT renders roughly six significant digits (a very old server-side behavior; MySQL Bug #43262 is the long-lived upstream thread), while DOUBLE gets a full-precision rendering. So the divergence isn't in mydumper's own code; it inherits the server's formatter, and the dump faithfully records the formatter's output rather than the column's value.</p>
+<p>We've written about this exact formatter class before, live: <a href="/field-notes/vstream-float-precision/">Vitess's VStream COPY phase delivers FLOATs through the same server-side text conversion</a>, rounded, while its binlog phase delivers exact bits — same value, two precisions, depending on the phase. This note is the same class at rest: one of the most widely used MySQL logical-dump tools, writing the rounded rendering into the archive itself. As of this writing we have not filed it upstream with mydumper; the mechanism sits in the server's formatter, and the sibling Vitess report is pending the same filing decision.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Any MySQL plus the mydumper container (v1.0.3 is what we ground-truthed):</p>
+<pre><code>${esc(`mysql> CREATE TABLE f (v FLOAT, d DOUBLE);
+mysql> INSERT INTO f VALUES (8388608, 3.141592653589793);
+
+$ docker run --rm -v $PWD/dump:/dump mydumper/mydumper \\
+    mydumper -h <host> -u <user> -p <pass> -B testdb -o /dump
+
+$ grep -o '([^)]*)' dump/testdb.f.00000.sql
+(8.38861e6,3.141592653589793)
+--  ^ FLOAT: six significant digits — parses back to 8388610, a
+--    different float32          ^ DOUBLE: full precision, same run`)}</code></pre>
+<p>The side-by-side is the point: check only the DOUBLE column and the dump looks lossless. 8388608 is 2<sup>23</sup>, chosen because float32 spacing there is exactly 1.0 — the re-parsed 8388610 is provably a different value, not a rendering nicety.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>A reader cannot re-read precision the file never contained, so sluice does the only honest thing: on a mydumper-format source, it WARNs once per table naming the FLOAT columns and pointing at the remedy — migrate that table from the live server (where sluice's reader fetches exact bits) rather than from the dump. DOUBLEs are read from the dump at full fidelity. The WARN is pinned in tests so it can't silently vanish.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A logical backup is only as faithful as the value-to-text formatter that produced it, and FLOAT is the family that formatter rounds on MySQL. If your archival or migration path runs through a SQL-text dump, audit the single-precision columns specifically — checking DOUBLE tells you nothing about FLOAT, because the two families take different formatting paths in the same run. And if you build tooling on dumps: when the file provably can't carry the fidelity you promise, warn on the family and name the columns; silence here is a rounded archive that someone will trust years from now.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://bugs.mysql.com/bug.php?id=43262">MySQL Bug #43262</a> — FLOAT displayed at reduced precision through the server's float-to-text conversion (the upstream root of the class).</li>
+  <li><a href="https://mydumper.github.io/mydumper/">mydumper</a> — reads via SELECT, so dumped values are the server formatter's text output (v1.0.3 ground-truthed).</li>
+  <li>Companion field note — <a href="/field-notes/vstream-float-precision/">Vitess copy phase rounds your FLOATs</a>: the same formatter class, streaming instead of at rest.</li>
+  <li>sluice ADR-0161 §4 — the named FLOAT display-rounding wart, the per-table WARN, and the DOUBLE-proven-unaffected oracle.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: "mydumper format" is a family -----------------------------
+write(
+  "field-notes/mydumper-format-family",
+  page({
+    slug: "field-notes/mydumper-format-family",
+    title: "\"mydumper format\" is a family, not a spec",
+    subtitle: "pscale database dump produces \"mydumper format\" — same metadata file, same schema files, same ~1 MB extended-INSERT chunks, byte-compatible enough that one reader serves both. The shared layout hides three producer forks: binary travels differently, string quoting differs, and TIMESTAMP semantics hinge on a header one producer always writes and the other never does.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — building and validating sluice's mydumper-family source engine (ADR-0161, v0.99.247): real mydumper v1.0.3 dumps (including a probe against a +08:00 server), a survey of the planetscale/cli dumper source, and a live <code>pscale database dump</code> of a seeded corpus verified byte-identical end to end against the live server (2026-07-15).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>There is no mydumper spec — there is mydumper's output, and there are other tools that produce &ldquo;the same format.&rdquo; PlanetScale's <code>pscale database dump</code> is the important sibling: same directory layout, same file naming, same statement shapes. One reader can serve both, and ours does. But calibrating that reader surfaced three places where &ldquo;the same format&rdquo; quietly forks by producer.</p>
+<p><strong>Fork one: binary encoding.</strong> Vanilla mydumper can emit binary columns as hex-blob literals (<code>0x&hellip;</code>) — unambiguous, escape-free. The pscale writer has no hex path at all: every BLOB byte rides on backslash-escape fidelity through a quoted string. A reader tested only against hex-blob dumps has never exercised the code that pscale dumps depend on entirely — and escape decoding is exactly where the subtle bugs live (see our companion note on <a href="/field-notes/mysql-like-escapes-keep-backslash/">the two MySQL escapes that keep their backslash</a>). Same format on the label; disjoint fidelity paths underneath.</p>
+<p><strong>Fork two: string quoting.</strong> mydumper emits single-quoted string literals; the pscale writer double-quotes, with backslash escapes for quotes. Both are valid MySQL literal spellings (barring ANSI_QUOTES servers), and a reader must decode both — we found this fork only by probing a real pscale dump.</p>
+<p><strong>Fork three, the one with instant-shift stakes:</strong> TIMESTAMP semantics are per-chunk, not per-format. mydumper v1.0.3 unconditionally converts TIMESTAMPs to UTC and stamps every file with <code>/*!40103 SET TIME_ZONE='+00:00' */</code> — probed against a +08:00 server to be sure. The format, however, merely permits that header. The pscale dumper emits no TIME_ZONE header anywhere — no SET statements at all, and its metadata file is literally empty, zero bytes. A chunk with no header carrying server-local instants is byte-indistinguishable from one carrying UTC instants: the same digits, a silent hours-wide shift, wearing the same file extension.</p>
+<p>For real pscale dumps the story ends well: PlanetScale sessions are UTC-pinned, so the header-less chunks do carry UTC and an assume-UTC reader is correct — our end-to-end probe (dump &rarr; sluice &rarr; MySQL, all 18 corpus columns, five rows, byte-identical against the live oracle, including the escape and binary edge cases) confirms it. But that correctness is a fact about one producer's server configuration, not about the format.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Trust only what the file declares. The reader decodes both binary shapes and both quoting shapes through one decoder pinned against both producers. A TIME_ZONE header other than UTC refuses loudly — in every spelling MySQL accepts (SESSION/GLOBAL/LOCAL, <code>@@time_zone</code>, <code>@@session.time_zone</code>), so no qualified form slips the gate. And a table with TIMESTAMP columns whose chunks declared no time zone gets a once-per-table WARN naming the columns: on a pscale dump that WARN is the normal case and the assumption is right; on an unknown producer's dump it's the only signal the operator will ever get that an instant shift is possible.</p>
+<p>(The family forks on the consumer side too: the vendor's own restore tool executes statements verbatim, silently skips compressed and csv/json data files, and hard-errors on real mydumper output — a story for another note.)</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>The producer forks are directly observable by diffing the two tools' output over the same table (mydumper: any MySQL + the mydumper/mydumper image; pscale dump: a PlanetScale account):</p>
+<pre><code>${esc(`$ mydumper -B db -o ./md-dump            # vanilla mydumper v1.0.3
+$ pscale database dump <db> <branch> --output ./ps-dump
+
+$ grep -r "TIME_ZONE" md-dump/ | head -1
+md-dump/db.t.00000.sql:/*!40103 SET TIME_ZONE='+00:00' */;
+$ grep -rc "TIME_ZONE" ps-dump/          # 0 matches, every file
+$ wc -c ps-dump/metadata                 # 0 bytes — literally empty
+
+$ grep -o "VALUES.*" md-dump/db.t.00000.sql | head -1    # single-quoted strings
+$ grep -o "VALUES.*" ps-dump/db.t.00001.sql | head -1    # double-quoted strings`)}</code></pre>
+<p>For the TZ stakes specifically, run mydumper against a server with <code>time_zone</code> set to +08:00 and confirm the dumped TIMESTAMP values converted to UTC under the stamped header — that's the probe that established the flagship's behavior the header-less sibling can't declare.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A dump format defined by a flagship tool's output forks per producer, in exactly the places the layout doesn't show: binary encoding, literal quoting, and session-dependent semantics like time zones. A reader that generalizes from one producer's dumps has tested a sibling format, not the family. Calibrate against every producer you claim to read, with real output from each; refuse loudly what a file declares and you can't honor; and where the file declares nothing, warn rather than silently inherit the flagship's behavior — the absence of a header is information about the producer, not permission to assume.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://mydumper.github.io/mydumper/">mydumper</a> — output layout and the <code>SET TIME_ZONE='+00:00'</code> header (v1.0.3, ground-truthed including a non-UTC server probe).</li>
+  <li><a href="https://github.com/planetscale/cli">planetscale/cli</a> — internal/dumper (the writer surveyed: escape-only binary, double-quoted strings, no SET headers, empty metadata).</li>
+  <li>sluice ADR-0161 — the mydumper-family source engine: both-shape binary decode, the all-spellings TIME_ZONE gate, and the missing-header WARN.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: CSV has no NULL -------------------------------------------
+write(
+  "field-notes/csv-has-no-null",
+  page({
+    slug: "field-notes/csv-has-no-null",
+    title: "CSV has no NULL — and in a one-column file, the \"blank line\" you skip was a NULL row",
+    subtitle: "RFC 4180 defines quoting, delimiters, and line endings, and says nothing about NULL. NULL-vs-empty is pure producer convention riding on the quoted/unquoted distinction — which Go's encoding/csv collapses. And at exactly one column wide, the universal skip-blank-lines convention is byte-indistinguishable from a legitimate record whose only field is empty.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — building sluice's CSV/TSV source drivers (ADR-0163, v0.99.250). The one-column silent row drop was caught by the pre-land value-fidelity review and was never in any published version — a caught-before-ship story, which is part of the point.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>CSV's spec has a hole where NULL should be. RFC 4180 never mentions it, so every producer invents a convention, and the most important one — Postgres <code>COPY &hellip; CSV</code> — encodes the distinction in quoting: NULL is written as an unquoted empty field, empty string as <code>""</code>. Which means the quoted/unquoted distinction is load-bearing data.</p>
+<p>Go's <code>encoding/csv</code>, like many standard-library parsers, erases it: <code>a,,b</code> and <code>a,"",b</code> come back as the same record. A reader built on it literally cannot implement the COPY convention, no matter how careful the code above it is. That alone forced sluice's flat-file driver to carry its own strict RFC 4180 lexer.</p>
+<p>The sharper edge showed up in review. sluice's contract is that NULL representation must be declared, never sniffed: <code>--csv-null=''</code> adopts the COPY convention, <code>--csv-null='\\N'</code> declares that literal, and with no declaration an unquoted empty field refuses loudly rather than guessing. The pre-land review asked what happens in a one-column file — and found that the near-universal skip-blank-lines convention (which <code>encoding/csv</code> also bakes in) fired first. In a one-column CSV, a legitimate record whose single field is empty is a blank line, byte for byte. The skip consumed it before any NULL logic ran: under <code>--csv-null=''</code> a NULL row was silently dropped, and with no declaration the promised ambiguity refusal was silently bypassed. Exit 0, one row short per NULL.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>Three facts stack:</p>
+<ul>
+  <li>The format has no NULL, so NULL semantics live in producer convention — and the dominant convention hangs on quoting.</li>
+  <li>A widely used parser layer collapses the quoting distinction, so the convention is unimplementable on top of it.</li>
+  <li>&ldquo;Skip blank lines&rdquo; is safe at every record width except one. At width &ge; 2 a blank line can't be a record (it would be ragged). At width 1, an empty line is exactly a one-empty-field record, and skipping it is a silent row drop.</li>
+</ul>
+<p>The fix keys blank-line handling on the established record width: at width 1, an empty line is a record and flows through the declared NULL contract like any other field (a blank line before the first record, when width is not yet established, is still skipped). Everything else in the contract stays strict: a quoted field is always data (<code>"NULL"</code> is a four-character string), the representation must be declared by the operator, and an undeclared ambiguity is a coded refusal naming the record and column.</p>
+
+<h2 id="generalizes">Where the class generalizes</h2>
+<p>The same bare-token-versus-quoted-string line shows up wherever a text format smuggles typing through quoting: in SQL dumps, <code>NULL</code> the keyword is SQL NULL while <code>'NULL'</code> is a string, and sluice's dump reader draws exactly the same line. Any layer that normalizes the two spellings — a parser, a pretty-printer, a well-meaning cleanup script — destroys the only bit that distinguishes absence from empty.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>The whole class fits in a five-byte-wide file. Save this as <code>one.csv</code> — a one-column file: header, a row, a blank line, a row (under the COPY convention that blank line is a NULL row, not filler):</p>
+<pre><code>${esc(`a
+1
+
+2`)}</code></pre>
+<p>Then run the flag matrix against sluice &ge; v0.99.250 (any target):</p>
+<pre><code>${esc(`sluice migrate --source-driver csv --source ./one.csv --csv-header --csv-null='' ...
+# 3 rows land: '1', NULL, '2'  — the blank line is a record
+
+sluice migrate --source-driver csv --source ./one.csv --csv-header ...
+# refused: SLUICE-E-CSV-NULL-AMBIGUOUS naming the record — no declaration, no guess
+
+sluice migrate --source-driver csv --source ./one.csv --csv-header --csv-null='\\N' ...
+# 3 rows land: '1', '' (empty string), '2' — declared repr resolves the ambiguity`)}</code></pre>
+<p>A reader built on Go's <code>encoding/csv</code> cannot pass the first case: it both collapses <code>a,"",b</code> into <code>a,,b</code> at width &gt; 1 and skips the blank line here before any NULL logic runs — the row silently vanishes.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Two lessons, one per half. First: when a format leaves a semantic undefined, make the operator declare it — sniffing NULL conventions from data is guessing with confidence, and the honest posture for an undeclared ambiguity is a loud refusal. Second: every &ldquo;obviously skippable&rdquo; input shape deserves the question <em>at what record width does this stop being skippable?</em> Degenerate widths — one column, zero rows, a single field — are where whitespace conventions and record semantics collide, and the collision is silent precisely because both interpretations are byte-identical.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://datatracker.ietf.org/doc/html/rfc4180">RFC 4180</a> — Common Format and MIME Type for CSV Files (note the absence: no NULL representation).</li>
+  <li><a href="https://www.postgresql.org/docs/current/sql-copy.html">PostgreSQL documentation — <code>COPY &hellip; CSV</code></a>: NULL as unquoted empty by default, quoted empty as empty string.</li>
+  <li><a href="https://pkg.go.dev/encoding/csv">Go encoding/csv</a> — quoted and unquoted fields are returned identically; blank lines are skipped.</li>
+  <li>sluice ADR-0163 — the flat-file CSV/TSV/NDJSON source drivers; the declared-never-sniffed NULL contract and the width-1 finding.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the Parquet library nulled every false --------------------
+write(
+  "field-notes/parquet-zero-value-null",
+  page({
+    slug: "field-notes/parquet-zero-value-null",
+    title: "The Parquet library nulled every false — and the round-trip test couldn't see it",
+    subtitle: "Hand parquet-go rows as map[string]any and it decides NULL-vs-present for optional columns by asking whether the Go value is the zero value — so false, 0, -0.0, \"\", the epoch, and midnight all silently export as NULL. The sharper half is why nobody notices: a Parquet NULL's accessors read back as exactly the Go zero value, so a naive write-then-read test writes false, reads false, and goes green while the file says NULL.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — building sluice's backup export-as-parquet surface (ADR-0164, v0.99.251), against parquet-go/parquet-go v0.30.1. Caught at implementation and independently re-verified by the pre-land value-fidelity review; the silent-null shape was never in any published version of sluice.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>sluice's Parquet export feeds rows to parquet-go as <code>map[string]any</code> — the natural shape when your rows are dynamically typed. parquet-go's map-row deconstruction has to decide, for each optional column, whether the entry is present or NULL, and it decides with <code>reflect.Value.IsZero</code>: a Go zero value in an optional column is treated as parquet NULL.</p>
+<p>That single inference nulls an entire family of perfectly legitimate SQL values: boolean <code>false</code>, integer 0, float 0.0 and -0.0, the empty string, the zero time (and with it any epoch instant or midnight time-of-day that encodes to it), day-zero dates, an unscaled-zero decimal. Every one of them is a real, present value in the source database. Every one of them would have exported as NULL.</p>
+
+<h2 id="why-blind">Why the obvious test is blind</h2>
+<p>The reason this class survives testing is structural, not sloppiness. In Parquet, a NULL value's accessors return the type's default — which in Go-shaped terms is exactly the zero value. So the naive round-trip oracle:</p>
+<pre><code>${esc(`write false  ->  read back  ->  got false  ->  green`)}</code></pre>
+<p>passes perfectly while the file durably says NULL. The test is blind at precisely the values the bug eats, because at the accessor layer NULL and zero are indistinguishable. The only honest oracle reads below the accessor layer, where presence is first-class — parquet-go's raw column values expose <code>value.IsNull()</code>, and any downstream engine (DuckDB, Spark) will show you the NULL too. It's the columnar cousin of a discipline we learned the hard way on database targets: ground-truth on the layer where the two outcomes actually differ, not on a layer that collapses them.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The fix is one named wart at one chokepoint: <code>boxLeafValue</code> wraps every scalar leaf value in a pointer before it enters the writer. A non-nil pointer is never &ldquo;zero,&rdquo; so the presence signal becomes what SQL semantics demand — nil means NULL, everything else means the value. (List elements are unaffected; parquet-go's repeated path doesn't zero-collapse, and that's pinned too.)</p>
+<p>Two kinds of test keep it honest. First, <code>IsNull()==false</code> pins on every zero-shaped value in every type family, asserted on the raw column values, at both the unit level and against a live-Postgres integration corpus. Second — and this is the part we'd argue for anywhere — a tripwire that proves the wart is real in the pinned library version: it deliberately bypasses the boxing, writes a bare <code>false</code>, and asserts it comes back NULL. If a future parquet-go upgrade changes the upstream semantics, that test fails loudly and says so, instead of leaving <code>boxLeafValue</code> behind as cargo-cult defensive code nobody remembers the reason for. Assert your workaround's necessity, not just its effect.</p>
+<p>As of this writing the behavior is unfiled upstream with parquet-go (pinned v0.30.1). It may well be intended map-row semantics — at this API level there is no presence opt-out akin to <code>omitempty</code> — which is a design question for upstream, but the trap for integrators is real either way.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Minimal Go program against parquet-go v0.30.1 (adapted from sluice's tripwire pin), then let DuckDB be the below-the-accessors oracle:</p>
+<pre><code>${esc(`package main
+
+import (
+    "os"
+    "github.com/parquet-go/parquet-go"
+)
+
+func main() {
+    schema := parquet.NewSchema("row", parquet.Group{
+        "v": parquet.Optional(parquet.Leaf(parquet.BooleanType)),
+    })
+    f, _ := os.Create("out.parquet")
+    w := parquet.NewGenericWriter[map[string]any](f, schema)
+    w.Write([]map[string]any{{"v": false}})   // a bare Go zero value
+    w.Close()
+    f.Close()
+}
+
+$ duckdb -c "SELECT v, v IS NULL FROM 'out.parquet'"
+-- v = NULL, IS NULL = true      <- the false was exported as NULL`)}</code></pre>
+<p>Read the same file back through parquet-go's row accessors and you get <code>false</code> — green to any naive round-trip. Boxing the value as a pointer (<code>map[string]any{"v": &amp;b}</code>) exports it present. (DuckDB also confirms the fix: <code>v = false, IS NULL = false</code>.)</p>
+
+<h2 id="refused">The same export refused another silent-loss shape</h2>
+<p>A supporting beat from the same chunk: Postgres does not declare array dimensionality in the type system — <code>int[]</code> and <code>int[][]</code> are one and the same column type — so a Parquet schema derived from the catalog can only ever say <code>LIST&lt;element&gt;</code>. When a multi-dimensional value shows up at export time, the faithful options are refuse or flatten, and flatten is exactly the silent dimensionality collapse we've been burned by before (<a href="/field-notes/numeric-array-flatten/">a numeric[][] that quietly became one-dimensional through a different codec</a>). The export refuses loudly. If your schema-derivation step can't know the shape, the value-encoding step must not guess it.</p>
+<p>(A cheerful aside for the analytics-minded: sluice's backup chunks are JSON-Lines under gzip, which DuckDB reads directly via <code>read_json_auto</code> — the zero-export path. The Parquet surface exists for when you want columnar files; the wart above is what it cost to make them faithful.)</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A serialization library that infers presence from value shape makes every zero-shaped value a silent-loss candidate — <code>false</code>, 0, <code>""</code>, and the epoch are data, not absence, and any bridge from SQL to such a library needs an explicit presence signal (a pointer, an option type, a validity bit) rather than trusting the value to speak for itself. And test it at the layer where NULL and zero are distinguishable: round-trip tests that read through accessors will wave this entire class through, green, forever.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://github.com/parquet-go/parquet-go">parquet-go</a> — GenericWriter over <code>map[string]any</code> rows and the raw column-value API (<code>Value.IsNull</code>) used as the honest oracle.</li>
+  <li><a href="https://parquet.apache.org/docs/file-format/nulls/">Apache Parquet format — definition levels</a>: presence in an optional column is first-class metadata, distinct from any default value.</li>
+  <li>sluice ADR-0164 — backup export-as-parquet; &ldquo;The zero-value-as-null wart (named, pinned)&rdquo;.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the INHERITS parent that returns rows it doesn't own ------
+write(
+  "field-notes/inherits-rows-it-doesnt-own",
+  page({
+    slug: "field-notes/inherits-rows-it-doesnt-own",
+    title: "The parent table that returns rows it doesn't own",
+    subtitle: "Old-style Postgres inheritance presents parent and children to information_schema as ordinary, unrelated BASE TABLEs — while a SELECT on the parent, without ONLY, also returns every child's rows. The standard migration recipe (enumerate BASE TABLEs, copy each) therefore lands the child data twice: flattened into the parent's target table and again in each child's. Silently, exit 0; the only symptom is a row count that's too big.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — a preflight-gap review comparing sluice's Postgres census against a vendor discovery tool's (roadmap item 68, 2026-07-15; refused loudly since v0.99.253), then proven live by the post-release regression cycle in a before/after differential on the last unguarded release — the numbers are below. This one is a confession as much as a note: the silent-duplication window was every prior sluice release with a Postgres source. The declarative-partition twin of the same trap was guarded back in v0.92.0; the legacy twin never was, and our own changelog now advises anyone who migrated an INHERITS hierarchy through v0.99.252 to verify their target for duplicated child rows.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Postgres has two table-hierarchy mechanisms. Declarative partitioning (<code>PARTITION BY</code>) is the modern one; old-style inheritance (<code>CREATE TABLE child () INHERITS (parent)</code>) is the pre-PG-10 ancestor, still fully supported and still in the wild. Both share the query-time behavior that matters here: reading the parent without the <code>ONLY</code> keyword returns the children's rows too.</p>
+<p>Where they differ is catalog visibility, and that difference decided which trap got caught four months before the other. A declarative partition parent announces itself — it has a row in <code>pg_partitioned_table</code>, its relkind is <code>'p'</code>, and information_schema shows the children oddly enough to make you look. We hit that in v0.92.0 (Bug 100), saw the silent flatten-plus-duplicate shape, and shipped a loud refusal. An INHERITS parent announces nothing: parent and children all present to <code>information_schema.tables</code> as plain BASE TABLEs, relkind <code>'r'</code>, indistinguishable from any other tables. The only catalog signal that a hierarchy exists at all is a row in <code>pg_inherits</code> whose parent has relkind <code>'r'</code> — a system catalog the standard enumeration recipe never consults.</p>
+<p>So the recipe every migration tool starts from — <code>SELECT &hellip; FROM information_schema.tables WHERE table_type = 'BASE TABLE'</code>, copy each — does exactly the wrong thing: it copies each child as its own table, and it copies the parent with a SELECT that, lacking ONLY, sweeps in every child's rows again. The ground truth is compact enough to pin in one pair of queries (this is the real-PG assertion in our integration suite):</p>
+<pre><code>${esc(`-- one row inserted into the child, zero into the parent:
+SELECT count(*) FROM measurements;        -- 1  (parent SELECT sees the child's row)
+SELECT count(*) FROM ONLY measurements;   -- 0  (the parent owns nothing)`)}</code></pre>
+<p>An unguarded migration copies that row twice — once into the parent's target table, once into the child's.</p>
+
+<h2 id="differential">The live differential</h2>
+<p>The claim above started as a code-read plus that integration pin. The post-release regression cycle then ran the whole shape live, same source both times: a parent with 3 rows of its own, <code>child1 () INHERITS (parent)</code> with 4 rows, <code>child2</code> with 2 — so <code>SELECT count(*) FROM parent</code> reads 9 and <code>FROM ONLY parent</code> reads 3.</p>
+<pre><code>${esc(`binary       exit   target parent   duplication
+---------    ----   -------------   --------------------------------------
+v0.99.252    rc=0   9 rows          child1's 4 ids present TWICE on the
+                    (3 own + all    target (in parent AND in child1's own
+                    6 child rows)   table); no warning, no signal anywhere
+v0.99.253    rc=1   refused         pre-DDL: target database has 0 tables;
+                    (nothing        refusal names the parent, the double-
+                    landed)         land mechanism, all three recovery paths`)}</code></pre>
+<p>The unguarded run is the silent-loss shape in full: exit 0, every table &ldquo;migrated,&rdquo; and the only tell is that the parent's target count is 9 where the source's ONLY count is 3. The guarded run refuses before any DDL, so a refused migration leaves the target untouched rather than half-built. The same cycle also proved the recovery path (<code>--exclude-table</code> on the parent proceeds, child checksums source==target) and that the two hierarchy probes don't cross-fire: a declarative partition parent still refuses via the original Bug-100 wording with no INHERITS text — relkind <code>'r'</code> and <code>'p'</code> stay disjoint live, not just in the catalog query.</p>
+
+<h2 id="second-beat">The second beat: the same filter hides tables entirely</h2>
+<p>The same <code>table_type = 'BASE TABLE'</code> filter has an inverse failure. FDW foreign tables are relkind <code>'f'</code> — not BASE TABLEs — so they never enter the enumeration at all. That skip is arguably correct (a foreign table holds no local rows; materializing another server's data would be its own surprise), but it was silent: an FDW-fronted table simply vanished from the migration with no signal that data the application sees wasn't coming along. The census for those lives in <code>pg_foreign_table</code> joined to <code>pg_foreign_server</code> — again, system catalogs, not information_schema.</p>
+<p>Put together: for migration purposes, <code>information_schema.tables</code> both double-counts (inheritance parents return rows they don't own) and under-counts (foreign tables don't appear at all). The portable view is a flattened projection of a catalog whose relkind distinctions are exactly the ones a copy tool needs. This beat got its live differential too: on v0.99.252 a foreign table vanished from the run with no signal at all; on v0.99.253 the WARN names both the table and the foreign server its data actually lives on, the data outcome is identical, and excluding the table acknowledges and silences it.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Since v0.99.253, two disjoint relkind-aware probes. Inheritance parents (<code>pg_inherits</code> parents with relkind <code>'r'</code> — deliberately disjoint from Bug 100's relkind <code>'p'</code> probe) are a loud refusal at migrate and sync cold start, not a WARN: both outcomes of proceeding — duplication if parent and children are in scope, quiet hierarchy loss if not — are data-shape corruption an operator would only discover by counting rows. Foreign tables get a WARN naming each skipped table and the foreign server its data actually lives on; the skip itself stays, because the wart was the silence, not the skip. Both are filter-aware — excluding the offending tables acknowledges and silences them.</p>
+<p>The refusal's recovery paths carry one more trap worth spelling out. The obvious fix — exclude the parent, copy the children individually — is only safe if the parent stores no rows of its own, so the refusal tells the operator to check <code>SELECT count(*) FROM ONLY parent</code> first: a non-zero count means the parent's own rows would silently vanish from the migration instead. The guard against double-counting must not become an instrument of under-counting.</p>
+
+<h2 id="repro">Reproducing it</h2>
+<p>Any Postgres, no special setup — this is the exact fixture the regression cycle ran:</p>
+<pre><code>${esc(`CREATE TABLE parent (id int PRIMARY KEY, note text);
+CREATE TABLE child1 () INHERITS (parent);
+CREATE TABLE child2 () INHERITS (parent);
+INSERT INTO parent VALUES (1,'p'),(2,'p'),(3,'p');
+INSERT INTO child1 VALUES (11,'c1'),(12,'c1'),(13,'c1'),(14,'c1');
+INSERT INTO child2 VALUES (21,'c2'),(22,'c2');
+
+SELECT count(*) FROM parent;        -- 9  (children included)
+SELECT count(*) FROM ONLY parent;   -- 3  (what the parent owns)`)}</code></pre>
+<p>Now migrate with any tool that enumerates information_schema BASE TABLEs and copies each — sluice &le; v0.99.252 (<code>sluice migrate --source 'postgres://...' --target ...</code>) exhibits it: exit 0, target parent has 9 rows, and child1's four ids exist twice on the target (<code>SELECT count(*) FROM parent p JOIN child1 c USING (id)</code> on the target = 4). sluice &ge; v0.99.253 refuses rc=1 before any DDL. The ONLY-count check above is also the guard to run before taking the exclude-the-parent recovery path.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>If you enumerate Postgres tables for any copy-shaped purpose, information_schema is not enough: consult <code>pg_inherits</code> and relkind, or you will double-count inheritance hierarchies and never see foreign tables at all. The meta-lesson is about catalog signals and time-to-detection: we caught the declarative twin of this bug four months earlier not because it was worse but because its catalog signal exists — the trap with no signal is the one that ships. When you fix a class, ask which of its siblings differs only in being quieter; and when your recovery advice says &ldquo;just exclude the parent,&rdquo; check what the parent owns before you drop it from the copy.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><a href="https://www.postgresql.org/docs/current/ddl-inherit.html">PostgreSQL documentation — inheritance</a> (SELECT on a parent includes children unless ONLY is used) and the <code>pg_inherits</code>, <code>pg_class</code> (relkind), <code>pg_foreign_table</code>, and <code>pg_foreign_server</code> catalogs.</li>
+  <li><a href="https://www.postgresql.org/docs/current/infoschema-tables.html">PostgreSQL documentation — <code>information_schema.tables</code></a> (foreign tables are not BASE TABLE; inheritance is not represented).</li>
+  <li>sluice v0.99.253 changelog — the INHERITS refusal and foreign-table WARN census, including the verify-your-target advice for prior releases; the v0.92.0 changelog for the declarative twin (Bug 100).</li>
 </ul>
 `,
   })
