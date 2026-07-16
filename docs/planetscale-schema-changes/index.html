@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Online schema changes on PlanetScale with sluice — sluice docs</title>
+<meta name="description" content="The expand→migrate→contract pattern as one gated command, the standalone resumable backfill with its verify gate, the deploy-ddl governed channel for safe-migrations branches, and the freshness gates that guard your production schema.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/planetscale-schema-changes/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk active" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Online schema changes on PlanetScale with sluice</h1>
+    <p class="subtitle">The expand→migrate→contract pattern as one gated command, the standalone resumable backfill with its verify gate, the deploy-ddl governed channel for safe-migrations branches, and the freshness gates that guard your production schema.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#expand-contract">The full pattern: sluice expand-contract</a></li><li><a href="#backfill">The middle step alone: sluice backfill</a></li><li><a href="#deploy-ddl">Safe-migrations branches: deploy-ddl + the control-tables bootstrap</a></li><li><a href="#safe-migrations-posture">Safe-migrations posture: sluice never touches the toggle</a></li><li><a href="#freshness-gate">The stale-base freshness gate</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>sluice ships a family of schema-change commands that drive the classic <strong>expand → migrate → contract</strong> pattern against PlanetScale: <a href="/docs/commands/#expand-contract"><code>expand-contract</code></a> (all three legs, one command), <a href="/docs/commands/#backfill"><code>backfill</code></a> (the data-migration middle step on its own — this one also works on plain MySQL, Vitess, and Postgres), and <a href="/docs/commands/#deploy-ddl"><code>deploy-ddl</code></a> + <a href="/docs/commands/#control-tables"><code>control-tables ddl</code></a> (the governed DDL channel and bootstrap for branches with safe migrations enabled). Every leg was live-validated against real PlanetScale, and the pattern has been exercised at 131,072-row backfill scale. What sluice deliberately is <em>not</em>: a versioned-migration tool — no history table, no down-migrations. Atlas / Flyway / sqitch own that layer; your migration tool decides <em>what</em> changes, and these commands are a safe way to <em>execute</em> it.</p>
+
+<h2 id="expand-contract">The full pattern: sluice expand-contract <a class="hlink" href="#expand-contract" aria-label="Permalink to this section">#</a></h2>
+<p>Add the new column (expand), backfill the data (migrate), drop the old column (contract) — each DDL leg shipped through a PlanetScale dev branch + deploy request, the data leg run as a resumable keyset-chunked backfill, and a verify gate between backfill and the destructive drop:</p>
+<pre><code>export PLANETSCALE_SERVICE_TOKEN_ID='...'   # service token: branch + deploy-request scopes
+export PLANETSCALE_SERVICE_TOKEN='...'      # env, never argv — these never land in shell history
+
+<span class="k">sluice</span> expand-contract \
+    <span class="f">--org</span> myorg <span class="f">--database</span> mydb <span class="f">--branch</span> main \
+    <span class="f">--dsn</span> "$PROD_BRANCH_DSN" <span class="f">--table</span> users \
+    <span class="f">--expand-ddl</span>   'ALTER TABLE users ADD COLUMN full_name VARCHAR(255)' \
+    <span class="f">--set</span>          'full_name = CONCAT(first_name, " ", last_name)' \
+    <span class="f">--where</span>        'full_name IS NULL' \
+    <span class="f">--contract-ddl</span> 'ALTER TABLE users DROP COLUMN first_name' \
+    <span class="f">--yes</span></code></pre>
+<p>The load-bearing semantics:</p>
+<ul>
+  <li><strong><code>--where</code> is required and doubles as the verify gate.</strong> Make it self-describing (<code>new_col IS NULL</code>): after the backfill, sluice counts rows still matching it across the whole table, and <em>only a count of 0 authorizes the contract leg</em>. A nonzero count fails with <code>SLUICE-E-BACKFILL-INCOMPLETE</code> — re-run to catch the stragglers, then verify again.</li>
+  <li><strong><code>--yes</code> is the contract confirmation.</strong> The contract leg is a <code>DROP COLUMN</code> deploy request against your production branch; without <code>--yes</code> (or without <code>--contract-ddl</code>) the run stops after verify <em>as a success</em> and prints the exact resume command. <code>--dry-run</code> and <code>--yes</code> are mutually exclusive by construction — a plan can never confirm a drop.</li>
+  <li><strong><code>--dry-run</code> prints the full plan</strong> — branches, deploy requests, the rendered backfill statement, the gates — with zero control-plane calls and zero writes.</li>
+  <li><strong>Interrupted runs resume with <code>--resume-from expand|migrate|contract</code>.</strong> The backfill leg is natively resumable via its persisted cursor; verify always re-runs before contract.</li>
+  <li><strong>A deploy request that outwaits <code>--deploy-timeout</code> un-deployed keeps its dev branch</strong> (deleting the branch would close the still-open deploy request your org's review queue was just asked to approve); the message names the kept branch — delete it yourself once the request closes. Every other failure path cleans up.</li>
+</ul>
+
+<h2 id="backfill">The middle step alone: sluice backfill <a class="hlink" href="#backfill" aria-label="Permalink to this section">#</a></h2>
+<p>When the schema change itself is already handled — or you're not on PlanetScale — the batched, resumable, online-safe in-place data migration stands alone. It is single-endpoint (reads and updates one database) and walks the table's primary key issuing one bounded <code>UPDATE</code> per chunk, so no statement approaches PlanetScale/Vitess's synchronous-transaction wall (errno 3024) or holds long locks on any engine:</p>
+<pre><code><span class="k">sluice</span> backfill \
+    <span class="f">--driver</span> planetscale <span class="f">--dsn</span> "$DSN" \
+    <span class="f">--table</span> users \
+    <span class="f">--set</span>   'full_name = CONCAT(first_name, " ", last_name)' \
+    <span class="f">--where</span> 'full_name IS NULL' \
+    <span class="f">--verify</span></code></pre>
+<ul>
+  <li><strong>Engines</strong>: <code>--driver</code> is one of <code>mysql</code>, <code>planetscale</code>, <code>vitess</code>, <code>postgres</code>; SQLite/D1 refuse with <code>SLUICE-E-BACKFILL-UNSUPPORTED-ENGINE</code>. <code>--set</code> / <code>--where</code> are native SQL for that engine, emitted verbatim; <code>--set</code> splits at the <em>first</em> <code>=</code>, so CASE arms pass through.</li>
+  <li><strong>Resume is automatic.</strong> The cursor persists in the same database's control tables, keyed by a hash of the spec (<code>--set</code> + <code>--where</code>); a killed run resumes where it stopped, replaying at most one chunk — which is why the <code>--where</code> guard should self-describe doneness, so the replay is a no-op. <code>--restart</code> discards the cursor; <code>--batch-size</code> is excluded from the spec hash, so retuning it never orphans a cursor.</li>
+  <li><strong><code>--verify</code></strong> runs a whole-table remaining-count on <code>--where</code> after the walk: 0 prints the safe-to-contract signal; &gt;0 exits with <code>SLUICE-E-BACKFILL-INCOMPLETE</code> (rows written behind the walk's cursor during the run — re-run, then verify again). <strong><code>--verify-only</code></strong> is the standalone scriptable gate for deploy pipelines: no walk, no UPDATEs, no control-table writes, no primary-key requirement, <code>--set</code> optional.</li>
+  <li><strong>The concurrent-run guard.</strong> A spec whose state row is still walking with a heartbeat fresher than 5 minutes refuses with <code>SLUICE-E-BACKFILL-CONCURRENT-RUN</code> — typically an overlapping cron invocation. Two concurrent walks of one spec would interleave cursor writes, so sluice refuses before touching anything (including a <code>--restart</code>, which would clear the state out from under the live walker). Wait for the other run to finish or its heartbeat to go stale, then re-run.</li>
+  <li><strong>The other refusals are equally deliberate</strong>: no orderable primary key → <code>SLUICE-E-BACKFILL-NO-PRIMARY-KEY</code> (there is intentionally no force flag — an unbounded UPDATE is the exact shape the command exists to avoid); a <code>--set</code> column that doesn't exist → <code>SLUICE-E-BACKFILL-UNKNOWN-COLUMN</code> before any UPDATE runs; a cursor written by an older sluice that provably mangled it → <code>SLUICE-E-BACKFILL-CORRUPT-CURSOR</code> (re-run with <code>--restart</code>).</li>
+</ul>
+
+<h2 id="deploy-ddl">Safe-migrations branches: deploy-ddl + the control-tables bootstrap <a class="hlink" href="#deploy-ddl" aria-label="Permalink to this section">#</a></h2>
+<p>A PlanetScale branch with <strong>safe migrations</strong> enabled refuses every direct DDL statement (Error 1105, &ldquo;direct DDL is disabled&rdquo;) — including sluice's own <code>CREATE TABLE IF NOT EXISTS</code> for its control tables, and the user-table CREATEs a fresh <code>migrate</code> or sync cold-start issues. sluice's ensure paths are detect-first (no DDL at all when the tables are current), and when DDL is genuinely needed the refusal is the coded <code>SLUICE-E-PS-DIRECT-DDL-BLOCKED</code>, echoing the exact refused statement. The way through is the governed channel, one command per statement:</p>
+<pre><code><span class="c"># 1. Print the exact CREATE statements for sluice's control tables (read-only, no credentials)</span>
+<span class="k">sluice</span> control-tables ddl
+
+<span class="c"># 2. Ship each statement via a deploy request (dev branch -&gt; apply -&gt; deploy -&gt; cleanup, one command)</span>
+<span class="k">sluice</span> deploy-ddl <span class="f">--org</span> myorg <span class="f">--database</span> mydb <span class="f">--ddl</span> '&lt;one statement from step 1&gt;'
+
+<span class="c"># 3a. For sync: pre-create the USER tables the same way, then skip schema-apply</span>
+<span class="k">sluice</span> schema preview <span class="f">--source-driver</span> mysql <span class="f">--source</span> "$SRC" <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$DST"
+<span class="k">sluice</span> deploy-ddl <span class="f">--org</span> myorg <span class="f">--database</span> mydb <span class="f">--ddl</span> '&lt;one CREATE from the preview&gt;'   # per table
+<span class="k">sluice</span> sync start ... <span class="f">--schema-already-applied</span>
+
+<span class="c"># 3b. For a one-time migrate: pre-create the user tables via deploy-ddl as in 3a, then just run it</span>
+<span class="k">sluice</span> migrate <span class="f">--source-driver</span> mysql <span class="f">--source</span> "$SRC" <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$DST"</code></pre>
+<p><code>deploy-ddl</code> wraps ONE verbatim statement in the full safety machinery — safe-migrations preflight, dev branch with the freshness gate below, apply, deploy request, deploy, skip-revert finalize, always-cleanup — and <code>--dry-run</code> makes zero control-plane calls. It is also the general escape hatch for any ad-hoc schema change on a safe-migrations branch. Ship the control-table statements once, and <code>backfill</code> runs normally against the branch.</p>
+<div class="note"><strong>The shape gate: bootstrap → fresh migrate just works.</strong> In step 3b, <code>migrate</code> needs no flag at all: its pre-create shape gate detects each pre-created table, verifies its column shape matches what the migration would create (names, types, nullability — deploy-ddl-shipped indexes are fine, they're outside the compare), and skips the refused CREATE with an INFO. A pre-existing table whose shape does NOT match refuses upfront with <code>SLUICE-E-TARGET-TABLE-SHAPE-MISMATCH</code>, before any data moves. <code>sync</code> takes <code>--schema-already-applied</code> instead, skipping its schema-apply phase.</div>
+<p>One more place safe migrations can bite: the deferred index build after a large copy (on <code>migrate</code>, <code>restore</code>, and sync cold-start alike). Arm the automatic deploy-request index-build fallback with <code>--planetscale-org</code> plus the service-token env vars on whichever command you're running, and still-pending indexes build through a dev branch + deploy request on the already-copied data — no re-copy. Unarmed, the refusal is <code>SLUICE-E-INDEX-DIRECT-DDL-DISABLED</code> (or <code>SLUICE-E-INDEX-STATEMENT-TIME-LIMIT</code> for the ~900&nbsp;s statement wall), and <code>--resume</code> finishes just the indexes.</p>
+
+<h2 id="safe-migrations-posture">Safe-migrations posture: sluice never touches the toggle <a class="hlink" href="#safe-migrations-posture" aria-label="Permalink to this section">#</a></h2>
+<p>sluice <strong>never enables or disables safe migrations</strong> on your branch. It is a behaviour change on production (direct DDL becomes blocked from then on), and the enable/disable propagation lag makes toggling it around a run unsafe. So:</p>
+<ul>
+  <li><code>expand-contract</code> / <code>deploy-ddl</code> <strong>require it ON</strong> and refuse with <code>SLUICE-E-PS-SAFE-MIGRATIONS-DISABLED</code> when it's off — with it off, direct DDL works and you don't need them.</li>
+  <li><code>migrate</code> / <code>sync</code> / <code>backfill</code> work either way: with it ON, bootstrap via the flow above; with it OFF they issue DDL directly, as on any MySQL.</li>
+  <li>If you hit <code>SLUICE-E-PS-DIRECT-DDL-BLOCKED</code>, the remedy is the governed channel (or a deliberate operator decision to disable safe migrations for a migration window) — never sluice flipping the toggle for you.</li>
+</ul>
+
+<h2 id="freshness-gate">The stale-base freshness gate <a class="hlink" href="#freshness-gate" aria-label="Permalink to this section">#</a></h2>
+<p>A newly created PlanetScale dev branch's schema can lag the production branch it was created from — observed live: a branch created 14 minutes after a deploy still lacked the deployed column, while another created 1 minute after was current; the lag is intermittent and its timing undocumented. A deploy request from such a branch silently proposes <em>reverting</em> the missing schema — on the contract leg, that would drop the freshly backfilled expand column. So <code>expand-contract</code>, <code>deploy-ddl</code>, and the index-build fallback all compare every dev branch's schema against production <em>before</em> applying any DDL, self-heal a stale base once (delete the branch → take an on-demand backup → recreate), and refuse with <code>SLUICE-E-PS-BRANCH-STALE-BASE</code> only if it's still stale after the rebase. Two more gates ride the same machinery: the deploy request's computed diff is fetched and refused if it touches any object the leg never intended, and production's schema is re-verified after a long review wait (a request that sat in a review queue while production moved would otherwise deploy against the old schema).</p>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong><code>SLUICE-E-BACKFILL-INCOMPLETE</code></strong> — the verify gate found rows still matching the <code>--where</code> guard; the contract step stays locked until a re-run brings the count to 0.</li>
+  <li><strong><code>SLUICE-E-BACKFILL-NO-PRIMARY-KEY</code></strong> / <strong><code>SLUICE-E-BACKFILL-UNKNOWN-COLUMN</code></strong> / <strong><code>SLUICE-E-BACKFILL-CORRUPT-CURSOR</code></strong> / <strong><code>SLUICE-E-BACKFILL-CONCURRENT-RUN</code></strong> — the backfill refuses (rather than degrades) on an unbounded-UPDATE shape, a typo'd column, a provably mangled legacy cursor, or a live concurrent walk of the same spec.</li>
+  <li><strong><code>SLUICE-E-PS-SAFE-MIGRATIONS-DISABLED</code></strong> — deploy requests can't be created into a branch without safe migrations; sluice names it instead of toggling the setting for you.</li>
+  <li><strong><code>SLUICE-E-PS-DIRECT-DDL-BLOCKED</code></strong> — a refused direct DDL statement (control table or user table) is caught with the exact statement echoed and the governed-channel remedy.</li>
+  <li><strong><code>SLUICE-E-PS-BRANCH-STALE-BASE</code></strong> — a dev branch whose schema lags production is rebased once and refused if still stale, so a deploy request can never silently revert newer schema.</li>
+  <li><strong><code>SLUICE-E-PS-DEPLOY-REQUEST-FAILED</code></strong> — a deploy request that errors, closes undeployed, computes an empty or out-of-scope diff, or outwaits <code>--deploy-timeout</code> is named with its number, state, and URL — plus the leg-specific recovery.</li>
+  <li><strong><code>SLUICE-E-TARGET-TABLE-SHAPE-MISMATCH</code></strong> — a pre-created table whose column shape differs from what <code>migrate</code> would create refuses before any data moves.</li>
+  <li><strong><code>SLUICE-E-INDEX-DIRECT-DDL-DISABLED</code></strong> / <strong><code>SLUICE-E-INDEX-STATEMENT-TIME-LIMIT</code></strong> — a blocked deferred index build names the deploy-request fallback arming flags; the copied data is never lost, <code>--resume</code> finishes just the indexes.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/schema-changes/">Schema changes during a sync</a> — the other half of the problem: keeping a <em>running stream</em> aligned through source DDL.</li>
+  <li><a href="/docs/commands/#backfill">backfill</a>, <a href="/docs/commands/#expand-contract">expand-contract</a>, <a href="/docs/commands/#deploy-ddl">deploy-ddl</a>, <a href="/docs/commands/#control-tables">control-tables ddl</a> — the full flag references.</li>
+  <li><a href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a> — the migration this pattern usually follows.</li>
+  <li><a href="/field-notes/vitess-tx-killer-wan/">Field note: the 20-second guillotine over a WAN</a> — why bounded per-chunk UPDATEs are the only safe shape on Vitess.</li>
+  <li><a href="/field-notes/json-cursor-teleport/">Field note: persist a resume cursor as JSON and it silently teleports</a> — the story behind the corrupt-cursor refusal.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-rds-postgres/">← Migrating from AWS RDS Postgres</a><a class="next" href="/docs/schema-changes/">Schema changes during a sync →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/planetscale-schema-changes/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

@@ -73,11 +73,22 @@ const NAV = [
     ],
   },
   {
+    group: "Platform Guides",
+    items: [
+      { slug: "migrate-from-neon", label: "Migrating from Neon" },
+      { slug: "migrate-from-supabase", label: "Migrating from Supabase" },
+      { slug: "migrate-from-digitalocean-mysql", label: "Migrating from DigitalOcean MySQL" },
+      { slug: "migrate-from-rds-mysql", label: "Migrating from AWS RDS MySQL" },
+      { slug: "migrate-from-rds-postgres", label: "Migrating from AWS RDS Postgres" },
+    ],
+  },
+  {
     group: "PlanetScale Guides",
     items: [
       { slug: "planetscale-vitess", label: "PlanetScale & Vitess" },
       { slug: "mysql-to-planetscale", label: "Self-hosted MySQL → PlanetScale" },
       { slug: "foreign-keys-vitess", label: "Foreign keys on Vitess" },
+      { slug: "planetscale-schema-changes", label: "Online schema changes" },
       { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
       { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
       { slug: "planetscale-postgres-analytics-replica", label: "PlanetScale Postgres analytics replica" },
@@ -323,7 +334,13 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "redact-pii",
     "postgres-source-prep",
     "managed-postgres-slotless",
+    "migrate-from-neon",
+    "migrate-from-supabase",
+    "migrate-from-digitalocean-mysql",
+    "migrate-from-rds-mysql",
+    "migrate-from-rds-postgres",
     "planetscale-vitess",
+    "planetscale-schema-changes",
     "planetscale-region-move",
     "mysql-to-planetscale",
     "planetscale-postgres",
@@ -2868,6 +2885,366 @@ sluice sync start \\
   })
 );
 
+// nav-label: Migrating from Neon
+write(
+  "migrate-from-neon",
+  page({
+    slug: "migrate-from-neon",
+    title: "Migrating from Neon with sluice",
+    subtitle: "Direct vs -pooler endpoints (and why CDC needs the direct one), the irreversible enable_logical_replication project setting, TLS interop, and the live-validated migrate + continuous-sync recipe.",
+    body: `
+<p>Neon is managed Postgres, so sluice drives it with the vanilla <code>postgres</code> engine — no flavor, no special driver. It has been live-validated as a migration <strong>and</strong> CDC source (Neon → PlanetScale Postgres, 2026-07-15): fidelity was byte-identical on md5 ground truth including the hard value families — <code>NaN</code> inside <code>numeric[]</code>, &plusmn;Infinity, denormal floats, and 2-D arrays with NULL elements — and the snapshot&nbsp;→&nbsp;CDC handoff and post-handoff convergence were clean. What <em>is</em> Neon-specific is the endpoint model and how logical replication gets enabled. This guide covers both.</p>
+
+<h2 id="endpoints">Direct vs pooler endpoints — pick by workload</h2>
+<p>Every Neon branch has two hostnames for the same database:</p>
+<table>
+<thead><tr><th>Endpoint</th><th>Hostname shape</th><th class="desc">What it is</th></tr></thead>
+<tbody>
+<tr><td><strong>Direct</strong></td><td><code>ep-&lt;name&gt;-&lt;id&gt;.&lt;region&gt;.aws.neon.tech</code></td><td class="desc">A real Postgres backend connection.</td></tr>
+<tr><td><strong>Pooled</strong></td><td>same, with a <code>-pooler</code> suffix on the first label</td><td class="desc">pgbouncer in transaction mode.</td></tr>
+</tbody>
+</table>
+<ul>
+  <li><strong>CDC requires the direct endpoint.</strong> A pooler cannot proxy replication-protocol commands — it strips the <code>replication=database</code> startup parameter, so the slot-creation command reaches a normal backend as plain SQL and is rejected as a syntax error. sluice recognizes that exact signature: <code>sync start</code> against the pooled host fails at slot creation with the coded <code>SLUICE-E-CDC-POOLER-ENDPOINT</code> refusal, which names the remedy (point <code>--source</code> at the direct host).</li>
+  <li><strong>Bulk <code>migrate</code> through the pooler works</strong> — a full snapshot-pinned parallel migrate passed through it at validation scale — but sluice's parallel copy pins server connections inside long-lived snapshot transactions, which risks pool exhaustion mid-copy at higher parallelism or scale, with a confusing failure when it hits. sluice emits a preflight <strong>WARN</strong> when the source host matches the <code>-pooler</code> pattern. Prefer the direct endpoint for both modes.</li>
+</ul>
+
+<h2 id="logical-replication">Enabling logical replication (the project setting, not postgresql.conf)</h2>
+<p>Neon defaults to <code>wal_level=replica</code>. sluice's CDC preflight checks this before touching any slot and refuses loudly — the message points at the provider matrix in <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a>. The fix on Neon is <strong>not</strong> a GUC edit: it's the project setting <strong><code>enable_logical_replication</code></strong> (console: <em>Settings → Logical replication</em>; also settable via the project-update API). Two things to know before you flip it, both validated live:</p>
+<ul>
+  <li><strong>The toggle is irreversible.</strong> Once enabled on a project, it cannot be turned back off.</li>
+  <li><strong>It takes effect in seconds, with no visible downtime.</strong> No restart window to plan.</li>
+</ul>
+<p>Bulk <code>migrate</code> does not need it — only continuous sync (a replication slot) does.</p>
+
+<h2 id="recipe">The validated recipe</h2>
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+${pre(`sluice migrate \\
+    --source-driver postgres --source 'postgres://user:pass@ep-my-branch-123456.us-east-2.aws.neon.tech/neondb?sslmode=require' \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run`)}
+<p>Continuous sync — direct endpoint, after enabling logical replication:</p>
+${pre(`sluice sync start \\
+    --source-driver postgres --source 'postgres://user:pass@ep-my-branch-123456.us-east-2.aws.neon.tech/neondb?sslmode=require' \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --stream-id neon-app`)}
+<p>Connection notes from the validation run:</p>
+<ul>
+  <li><strong>TLS</strong>: Neon DSNs work with <code>sslmode=require</code>, and <code>sslmode=verify-full</code> also works with the standard system roots — prefer it (see the <a href="/docs/getting-started/#connecting">sslmode note</a>).</li>
+  <li><strong>Region co-location matters.</strong> The validation runs were cross-provider; co-locating the sluice process (or the target) with the Neon region measurably reduces snapshot wall-clock.</li>
+  <li><strong>Autosuspend / cold-start is unprobed.</strong> The validation project stayed active throughout, so scale-to-zero resume latency under a sluice snapshot has not been characterized. If you run against an autosuspending endpoint and see slow first-connection behaviour, that's the place to look.</li>
+</ul>
+
+<h2 id="wal-proposer-slot">The wal_proposer_slot you'll see in slot listings</h2>
+<p>Every Neon endpoint carries an always-present <em>physical</em> replication slot named <code>wal_proposer_slot</code> — it's part of Neon's safekeeper architecture, not a leaked consumer. sluice's slot-health monitoring correctly ignores it. If you enumerate slots with your own tooling (or <code>sluice slot list</code>), expect to see it and leave it alone; only <code>sluice_</code>-prefixed logical slots belong to sluice.</p>
+
+<h2 id="checks">What sluice checks for you</h2>
+<ul>
+  <li><strong><code>SLUICE-E-CDC-POOLER-ENDPOINT</code></strong> — <code>sync start</code> against the <code>-pooler</code> host fails at slot creation with a coded refusal explaining that a pooler cannot proxy replication, naming the direct-endpoint remedy.</li>
+  <li><strong>Pooler-host preflight WARN</strong> — <code>migrate</code> and <code>sync start</code> warn up front when the source hostname matches the <code>-pooler</code> label pattern, before any pool-exhaustion surprise.</li>
+  <li><strong><code>wal_level</code> preflight refusal</strong> — CDC against a project without logical replication enabled refuses at startup (before touching any slot), pointing at Neon's <code>enable_logical_replication</code> setting via the provider matrix.</li>
+  <li><strong><code>SLUICE-E-CDC-REPLICATION-PERMISSION</code></strong> — if the connecting role lacks the REPLICATION attribute, the preflight refuses with the exact <code>ALTER ROLE</code> remedy rather than failing opaquely mid-cold-start.</li>
+  <li><strong>Slot-health monitoring that ignores <code>wal_proposer_slot</code></strong> — Neon's internal slot is never flagged as a leaked consumer.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — the full slot lifecycle, retention, and failover story (provider matrix included).</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — confirm the target matches the source after the copy.</li>
+  <li><a href="/field-notes/postgres-slot-leaks/">Field note: replication slots don't die with your process</a> — why an abandoned slot pins WAL on the source.</li>
+  <li><a href="/field-notes/postgres-idle-slot-failover/">Field note: the idle-slot failover trap</a> — slot survival on HA-managed Postgres.</li>
+</ul>
+`,
+    prev: { href: "/docs/postgres-source-prep/", label: "Prepare a Postgres source" },
+    next: { href: "/docs/migrate-from-supabase/", label: "Migrating from Supabase" },
+  })
+);
+
+// nav-label: Migrating from Supabase
+write(
+  "migrate-from-supabase",
+  page({
+    slug: "migrate-from-supabase",
+    title: "Migrating from Supabase with sluice",
+    subtitle: "Session vs transaction Supavisor pooler modes, the IPv6-only free-tier direct endpoint and what it means for CDC, float display vs float identity, and the platform schemas sluice already scopes out.",
+    body: `
+<p>Supabase is managed Postgres, so sluice drives it with the vanilla <code>postgres</code> engine. It has been live-validated as a bulk-migration source (2026-07-15) with <strong>bit-exact fidelity through both Supavisor pooler modes</strong>. Unlike Neon, <code>wal_level=logical</code> is on out of the box — the thing that gates CDC on Supabase is not a setting but <em>network reachability of the direct endpoint</em>. That's the first thing to understand.</p>
+
+<h2 id="ipv6">The IPv6-only direct endpoint (the thing that bites first)</h2>
+<p>Supabase free-tier <strong>direct</strong> endpoints (<code>db.&lt;ref&gt;.supabase.co</code>) have <strong>only an AAAA record</strong> — IPv4 connectivity to the direct endpoint is a paid add-on. From an IPv4-only machine the connection fails in about a second with the platform resolver's cryptic no-data error. sluice detects this class: on a resolve failure it probes for an AAAA record and, when the host is IPv6-only, extends the error with the remedy — the coded <code>SLUICE-E-CONNECT-IPV6-ONLY</code>.</p>
+<ul>
+  <li><strong>Bulk migrate</strong>: use the pooler endpoint (<code>aws-&lt;n&gt;-&lt;region&gt;.pooler.supabase.com</code> — it has an A record). Validated bit-exact.</li>
+  <li><strong>CDC</strong>: the direct endpoint is required — a pooler cannot proxy the replication protocol — so from an IPv4-only network you need Supabase's IPv4 add-on or an IPv6-capable network. <code>sync start</code> through Supavisor fails at slot creation with the coded <code>SLUICE-E-CDC-POOLER-ENDPOINT</code> refusal explaining exactly this.</li>
+</ul>
+
+<h2 id="pooler-modes">Session vs transaction pooler modes</h2>
+<p>Supavisor exposes two ports on the pooler hostname, and they behave differently under sluice's parallel copy:</p>
+<table>
+<thead><tr><th>Mode</th><th>Port</th><th class="desc">Behaviour under sluice</th></tr></thead>
+<tbody>
+<tr><td><strong>Session</strong></td><td><code>:5432</code></td><td class="desc">Bulk migrate works, <em>including parallel copy</em>. Validated bit-exact.</td></tr>
+<tr><td><strong>Transaction</strong></td><td><code>:6543</code></td><td class="desc">Server connections rotate per transaction, which trips pgx's statement cache (SQLSTATE 42P05, &ldquo;prepared statement already exists&rdquo;). sluice WARNs and falls back to the single-reader copy path — correct, but <strong>parallel copy is unavailable</strong> in this mode.</td></tr>
+</tbody>
+</table>
+<p>Prefer session mode (or the direct endpoint) for large copies. sluice's pooler-host preflight WARN fires for both modes — the hostname matches the <code>pooler.supabase.com</code> pattern either way:</p>
+${pre(`# Bulk migrate through the session pooler (IPv4-friendly)
+sluice migrate \\
+    --source-driver postgres --source 'postgres://postgres.abcdefghijkl:pass@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require' \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run
+
+# CDC needs the DIRECT endpoint (IPv6-only on the free tier)
+sluice sync start \\
+    --source-driver postgres --source 'postgres://postgres:pass@db.abcdefghijkl.supabase.co:5432/postgres?sslmode=require' \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --stream-id supabase-app`)}
+<div class="note"><strong>CDC readiness.</strong> <code>wal_level=logical</code> is Supabase's default — nothing to enable (contrast <a href="/docs/migrate-from-neon/">Neon</a>'s project toggle). The CDC validation itself was environment-blocked in sluice's run (IPv4-only network + IPv6-only direct endpoint), not a sluice or Supabase defect; once the direct endpoint is reachable, the standard Postgres CDC path applies. See <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> for the slot checklist.</div>
+
+<h2 id="floats">Float display is not float identity</h2>
+<p>Supabase servers default <code>extra_float_digits=0</code>, so <strong>text-level</strong> float comparisons against a Supabase source mislead: a value can print rounded while the stored bits are exact. sluice's copy was proven bit-exact via <code>float8send</code> ground truth. If you diff sluice's output with external tooling that compares text, pin the session first — or better, compare the send-function bytes:</p>
+${pre(`SET extra_float_digits = 1;              -- make text output round-trip-exact
+SELECT md5(string_agg(float8send(col)::text, ',' ORDER BY id)) FROM t;   -- or compare bits directly`)}
+<p>A &ldquo;mismatch&rdquo; that disappears under <code>extra_float_digits=1</code> was never a data difference.</p>
+
+<h2 id="platform-schemas">Platform schemas</h2>
+<p>Supabase ships its platform schemas (<code>auth</code>, <code>storage</code>, <code>realtime</code>, …) alongside <code>public</code>. sluice's default <code>public</code> scoping ignores them — there is nothing to exclude manually, and your migrated target gets your tables, not the platform's.</p>
+
+<h2 id="checks">What sluice checks for you</h2>
+<ul>
+  <li><strong><code>SLUICE-E-CONNECT-IPV6-ONLY</code></strong> — a resolve failure against an IPv6-only host (the free-tier direct endpoint, from an IPv4-only network) is diagnosed with an AAAA probe and refused with the remedy: pooler endpoint for bulk migrate, IPv4 add-on or IPv6 network for CDC.</li>
+  <li><strong><code>SLUICE-E-CDC-POOLER-ENDPOINT</code></strong> — slot creation through Supavisor is recognized by its SQLSTATE 42601 signature and refused with the direct-endpoint remedy, instead of surfacing as a bare syntax error.</li>
+  <li><strong>Pooler-host preflight WARN</strong> — both Supavisor ports match the <code>pooler.supabase.com</code> pattern and warn before the copy starts.</li>
+  <li><strong>Transaction-mode fallback WARN</strong> — the SQLSTATE 42P05 statement-cache signature on <code>:6543</code> triggers a WARN and a correct single-reader fallback rather than a failed copy; the WARN is your signal to switch to <code>:5432</code> for parallelism.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — the CDC checklist once the direct endpoint is reachable.</li>
+  <li><a href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a> — the trigger-CDC path for tiers whose roles can't create slots.</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — sluice's own verification, which compares values (not display text).</li>
+</ul>
+`,
+    prev: { href: "/docs/migrate-from-neon/", label: "Migrating from Neon" },
+    next: { href: "/docs/migrate-from-digitalocean-mysql/", label: "Migrating from DigitalOcean MySQL" },
+  })
+);
+
+// nav-label: Migrating from DigitalOcean MySQL
+write(
+  "migrate-from-digitalocean-mysql",
+  page({
+    slug: "migrate-from-digitalocean-mysql",
+    title: "Migrating from DigitalOcean MySQL with sluice",
+    subtitle: "The ~13–16-minute binlog purge window on defaults (and the config-API knob that fixes it), the private CA via --source-tls-ca, sql_mode differences, and the resnapshot-livelock hazard sluice warns about.",
+    body: `
+<p>DigitalOcean Managed MySQL works with sluice's vanilla <code>mysql</code> engine — cold copy and the CDC handoff were validated live (2026-07-15, MySQL 8.4). One platform behaviour is important enough to headline, because it determines whether a continuous sync can survive at all on default settings.</p>
+
+<h2 id="binlog-window">The ~13–16-minute binlog window on defaults</h2>
+<p>On DO Managed MySQL <strong>defaults</strong>, an out-of-band platform reaper purges <strong>every binlog file roughly 13–16 minutes after creation</strong> — while <code>@@binlog_expire_logs_seconds</code> reads 259200 (3 days) and the DO config API shows no retention field until you first set one. The server variable does not reflect the platform's actual purge behaviour, and no SQL-level check can see the real window — which is why sluice's preflight signal is the DSN host pattern (<code>*.db.ondigitalocean.com</code>): <code>sync</code> and <code>backup</code> runs against that pattern emit a loud <strong>WARN</strong> naming the window and the remedy.</p>
+<p>Why it matters, concretely:</p>
+<ul>
+  <li>A CDC position older than the window is unrecoverable — the resume fails with &ldquo;binlog purged&rdquo; (<code>ErrPositionInvalid</code>), and the only path forward is a fresh snapshot.</li>
+  <li>A cold copy that takes longer than the window can <strong>livelock auto-resnapshot</strong>: each retry re-copies, exceeds the window again, and loses its position again. If your data size puts the copy anywhere near 13 minutes, set the retention knob <em>before</em> <code>sync start</code>.</li>
+</ul>
+<p>The fix (confirmed working) is DO's database config API — there is no SQL knob and no UI field until it's set once:</p>
+${pre(`# Seconds; accepted range 600-86400. 86400 (24 h) is the right value for migrations.
+curl -X PATCH "https://api.digitalocean.com/v2/databases/<cluster-id>/config" \\
+    -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" \\
+    -H "Content-Type: application/json" \\
+    -d '{"config": {"binlog_retention_period": 86400}}'`)}
+<p>It takes effect immediately, no restart, and pre-existing binlogs stop being purged. One open question the validation could not settle: whether an <em>attached</em> binlog-dump connection holds the purger back on DO (on AWS RDS it provably does not). Until answered, treat the config-API knob as required for any DO CDC use rather than relying on a live stream to protect itself.</p>
+<div class="note"><strong>Deciding deliberately about re-snapshots.</strong> By default a purged position auto-recovers with a fresh cold-start re-snapshot. If a full re-copy is expensive and you'd rather decide by hand, <code>sync start --no-auto-resnapshot</code> fails loudly with the recovery commands instead of re-copying — useful while you're still sizing the retention window.</div>
+
+<h2 id="tls">Connecting: the cluster's private CA</h2>
+<p>DO clusters use a <strong>private CA</strong>, so neither system roots nor a bare <code>?tls=true</code> can verify the server certificate. Fetch the cluster CA from the API and hand it to sluice with <code>--source-tls-ca</code> — CA-pinned <em>verify-ca</em> TLS (trust this CA, verify the chain, skip the hostname check that MySQL's SAN-less certificates can't satisfy):</p>
+${pre(`# The API returns the cluster CA base64-encoded
+curl -s "https://api.digitalocean.com/v2/databases/<cluster-id>/ca" \\
+    -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" | jq -r '.ca.certificate' | base64 -d > do-ca.pem
+
+sluice migrate \\
+    --source-driver mysql --source 'doadmin:pass@tcp(db-mysql-nyc3-12345.b.db.ondigitalocean.com:25060)/defaultdb' \\
+    --source-tls-ca do-ca.pem \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run`)}
+<p><code>--source-tls-ca</code> covers both the data connection and the binlog/CDC stream, and refuses if the DSN already sets <code>tls=</code> (one TLS decision, not two). The same flag exists on <code>sync start</code>, <code>verify</code>, and <code>backup</code>. The <code>doadmin</code> user has the replication grants sluice's binlog CDC needs — no extra GRANTs on defaults.</p>
+
+<h2 id="sql-mode">sql_mode differences worth knowing</h2>
+<ul>
+  <li><strong>Default <code>sql_mode</code> includes <code>ANSI</code></strong> — double-quoted strings are <em>identifiers</em> on this server. sluice's own SQL is unaffected, but anything you run manually against the source with <code>"double quotes"</code> behaves differently than on a stock MySQL.</li>
+  <li><strong><code>sql_require_primary_key=true</code></strong> by default — keyless tables cannot be created on a DO <em>target</em>, and restoring keyless-table dumps there fails until the setting is relaxed. (Keyless tables are also the ones that can't take sluice's exact-UPDATE repairs — give them primary keys and everyone wins.)</li>
+</ul>
+
+<h2 id="checks">What sluice checks for you</h2>
+<ul>
+  <li><strong>The retention advisory WARN</strong> — <code>sync</code> and <code>backup</code> runs against a <code>*.db.ondigitalocean.com</code> host warn about the ~13–16-minute default purge window and name the config-API remedy. (The host pattern is the only reliable signal — the server variable can't be trusted on this platform, so the WARN is unconditional.)</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position surfaces as an explicit &ldquo;persisted position is no longer valid&rdquo; WARN and a fresh cold start, never a silent gap; <code>--no-auto-resnapshot</code> converts that into a hard stop with named recovery commands.</li>
+  <li><strong><code>--source-tls-ca</code> refusals</strong> — the flag refuses to combine with a DSN-level <code>tls=</code> setting, and refuses on non-MySQL engines (Postgres uses <code>sslrootcert=</code> in the DSN) instead of silently ignoring a security flag.</li>
+  <li><strong><code>SLUICE-E-DRIVER-HOST-MISMATCH</code> class checks</strong> — driver/DSN sanity is verified up front, before any connection.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the full sync → verify → cutover flow once CDC is stable.</li>
+  <li><a href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a> — the same purge-window class with a tighter window and a SQL-visible remedy.</li>
+  <li><a href="/field-notes/mysql-cert-no-san/">Field note: MySQL's own certificate can't pass verify-full</a> — why <code>--source-tls-ca</code> is verify-ca, not verify-full.</li>
+  <li><a href="/field-notes/snapshot-position-gap/">Field note: the transaction that lands in neither the snapshot nor the binlog</a> — what the snapshot-position capture is protecting against.</li>
+</ul>
+`,
+    prev: { href: "/docs/migrate-from-supabase/", label: "Migrating from Supabase" },
+    next: { href: "/docs/migrate-from-rds-mysql/", label: "Migrating from AWS RDS MySQL" },
+  })
+);
+
+// nav-label: Migrating from AWS RDS MySQL
+write(
+  "migrate-from-rds-mysql",
+  page({
+    slug: "migrate-from-rds-mysql",
+    title: "Migrating from AWS RDS MySQL with sluice",
+    subtitle: "The detect-first binlog-retention advisory (what the WARN means and the one-line SQL remedy), 8.0-family parameter groups, the platform-blocked FTWRL, and the regional truststore bundle.",
+    body: `
+<p>AWS RDS for MySQL works with sluice's vanilla <code>mysql</code> engine — cold copy and the CDC handoff were validated live (2026-07-16, MySQL 8.4.9 on a db.t4g.micro). Aurora MySQL shares the endpoint suffix and the retention procedure below. Like <a href="/docs/migrate-from-digitalocean-mysql/">DigitalOcean</a>, the headline is binlog retention — but on RDS the truth is SQL-visible, so sluice can check it for you instead of warning blind.</p>
+
+<h2 id="retention">Binlogs purge in ~5–11 minutes on defaults</h2>
+<p>With no retention configured, RDS purges each binlog file on a ~5-minute sweep once automated backups have uploaded it — observed lifetime <strong>~5–11 minutes per file</strong> — while <code>@@binlog_expire_logs_seconds</code> reads 30 days. The server variable does not govern the RDS purger (same class as DigitalOcean), but unlike DO the real setting is visible in SQL: <code>CALL mysql.rds_show_configuration</code> → <code>binlog retention hours</code>, default NULL (&ldquo;as soon as possible&rdquo;). A CDC position older than the window is unrecoverable, and a cold copy longer than it can livelock auto-resnapshot — and RDS's window is <em>tighter</em> than DO's ~13–16 minutes: plan for the ~5-minute floor, not the ceiling.</p>
+<p>Before <code>sync start</code> or <code>backup</code>, run this on the source (master user, plain SQL, effective immediately, no restart):</p>
+${pre(`CALL mysql.rds_set_configuration('binlog retention hours', 24);  -- range 1..168 (7 days max)
+CALL mysql.rds_show_configuration;                               -- verify: binlog retention hours = 24`)}
+<p>The details that matter, all live-proven:</p>
+<ul>
+  <li><strong>An attached, caught-up stream does NOT hold the purger back.</strong> Files sluice had already read were purged on schedule while the stream ran; a caught-up stream survives only because it sits on the active file. Any lag or disconnection beyond the window is fatal at defaults — set the knob first, don't rely on staying attached.</li>
+  <li><strong>With the knob set, long gaps warm-resume cleanly.</strong> A stream that stayed detached for 35 minutes resumed and replayed its full backlog exactly; the same gap on defaults forced a cold start.</li>
+  <li><strong>The 168-hour cap is real</strong> — a paused stream beyond 7 days is impossible on RDS MySQL, period.</li>
+  <li>Retained binlogs count against allocated storage; on tiny instances set the value back to NULL (or lower) after cutover.</li>
+  <li>Automated backups must be ON (retention &ge; 1 day) or RDS disables binary logging entirely — no binlogs, no CDC.</li>
+</ul>
+<div class="note"><strong>What the WARN means.</strong> sluice's advisory here is <em>detect-first</em>: on <code>sync</code>/<code>backup</code> runs against an <code>*.rds.amazonaws.com</code> host it queries the retention setting and WARNs only when it is NULL or under 24 hours — a correctly configured source stays silent. If you see the WARN, the stream is running on borrowed time (~5–11 minutes of it); run the <code>mysql.rds_set_configuration</code> call above and the next run is quiet.</div>
+
+<h2 id="parameter-groups">Version + parameter-group gotchas</h2>
+<ul>
+  <li><strong>MySQL 8.4's default parameter group is CDC-ready</strong> (<code>binlog_format=ROW</code> is the engine default and the group leaves it unset).</li>
+  <li><strong>MySQL 8.0's family default is <code>binlog_format=MIXED</code></strong> — an RDS MySQL 8.0 source needs a custom parameter group with <code>binlog_format=ROW</code>. The parameter is dynamic: no reboot, but only <em>new</em> connections see it, so reconnect after the change.</li>
+  <li><code>gtid_mode=OFF_PERMISSIVE</code> by default; sluice's file/position CDC works as-is.</li>
+</ul>
+
+<h2 id="ftwrl">The FTWRL platform block (why serial cold copy is expected)</h2>
+<p>RDS blocks <code>FLUSH TABLES WITH READ LOCK</code> at the platform level <strong>even though the master user holds RELOAD</strong> — the statement returns <code>1045 Access denied</code> regardless of grants. Two sluice behaviours follow, both by design and both WARNed:</p>
+<ul>
+  <li>The N-way concurrent cold copy falls back to <strong>serial</strong> (the concurrent path needs the read lock for a consistent multi-connection snapshot).</li>
+  <li>The snapshot position is captured <strong>without a write freeze</strong> — a concurrent commit during the capture instant could land in neither the copy nor the CDC tail.</li>
+</ul>
+<p>No grant fixes this — it's the platform, not your permissions (sluice's WARN text names the RDS reality on RDS hosts). If exactness of the handoff position matters, quiesce writers during the snapshot; on an idle or low-write source, accept the WARN.</p>
+
+<h2 id="tls">TLS: the public regional bundle</h2>
+<p>RDS defaults allow plaintext (<code>require_secure_transport=OFF</code>), and a bare <code>?tls=true</code> fails — the RDS CA is not in system roots. The working recipe is <code>--source-tls-ca</code> with the public regional bundle (one well-known URL per region, no API call — contrast DO's authenticated CA endpoint):</p>
+${pre(`curl -sO https://truststore.pki.rds.amazonaws.com/us-east-1/us-east-1-bundle.pem
+
+sluice sync start \\
+    --source-driver mysql --source 'admin:pass@tcp(mydb.abc123.us-east-1.rds.amazonaws.com:3306)/app' \\
+    --source-tls-ca us-east-1-bundle.pem \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --stream-id rds-app`)}
+<p>The master user has the replication grants CDC needs out of the box (<code>REPLICATION SLAVE</code>, <code>REPLICATION CLIENT</code>) — nothing to GRANT on defaults.</p>
+
+<h2 id="checks">What sluice checks for you</h2>
+<ul>
+  <li><strong>The detect-first retention advisory</strong> — on <code>*.rds.amazonaws.com</code> hosts, sluice queries <code>mysql.rds_configuration</code> and WARNs when <code>binlog retention hours</code> is NULL (naming the ~5–11-minute purge reality and the exact remedy call) or configured under 24 h (a milder WARN naming the window); a value &ge; 24 h stays silent. If the query itself fails, sluice falls back to an unconditional DO-style WARN rather than staying quiet.</li>
+  <li><strong>FTWRL fallback WARNs</strong> — the serial-copy fallback and the no-freeze snapshot capture are both announced, never silent.</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position is an explicit WARN plus a fresh cold start (or a hard stop under <code>--no-auto-resnapshot</code>), never a silent gap.</li>
+  <li><strong>Unencrypted-binlog-stream WARN</strong> — a plaintext DSN gets a warning that the CDC stream is unencrypted; <code>--source-tls-ca</code> resolves it.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a> — the Postgres sibling: parameter groups, role membership, force_ssl.</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — sync → verify → cutover once retention is configured.</li>
+  <li><a href="/field-notes/snapshot-position-gap/">Field note: the transaction that lands in neither the snapshot nor the binlog</a> — the exact hazard the no-freeze WARN describes.</li>
+  <li><a href="/field-notes/mysql-cert-no-san/">Field note: MySQL's own certificate can't pass verify-full</a> — why the CA-pinned mode skips hostname verification.</li>
+</ul>
+`,
+    prev: { href: "/docs/migrate-from-digitalocean-mysql/", label: "Migrating from DigitalOcean MySQL" },
+    next: { href: "/docs/migrate-from-rds-postgres/", label: "Migrating from AWS RDS Postgres" },
+  })
+);
+
+// nav-label: Migrating from AWS RDS Postgres
+write(
+  "migrate-from-rds-postgres",
+  page({
+    slug: "migrate-from-rds-postgres",
+    title: "Migrating from AWS RDS Postgres with sluice",
+    subtitle: "The rds.logical_replication parameter-group flip, the rds_replication role-membership model (nothing to grant for the master user), force_ssl and the trust bundle, and the trigger-engine fallback.",
+    body: `
+<p>AWS RDS for PostgreSQL works with sluice's vanilla <code>postgres</code> engine — live-validated 2026-07-16 (PostgreSQL 16.14) as a bulk-migration source with byte-identical md5 ground truth, including <code>NaN</code>-in-<code>numeric[]</code>, &plusmn;Infinity, denormal floats, and 2-D arrays with NULL elements. Trigger-CDC (<code>postgres-trigger</code>) was validated end-to-end in the same run. Slot-based CDC was blocked in that run by a sluice-side false refusal — the preflight didn't yet understand RDS's role-membership model while the platform itself was proven slot-capable — and the preflight has since been taught that model, so slot CDC is expected to work with the master user. Aurora Postgres uses the same role model and parameter names.</p>
+
+<h2 id="logical-replication">Enabling logical replication (parameter group + reboot)</h2>
+<p>Not postgresql.conf and not a console toggle: attach a <strong>custom parameter group</strong> with <code>rds.logical_replication = 1</code>. The parameter is static, so a <strong>reboot is required</strong> (~2 minutes); the GUC <code>wal_level</code> itself is read-only on RDS. Two gotchas the validation surfaced:</p>
+<ul>
+  <li><strong>Retention 0 means <code>wal_level=minimal</code>, not <code>replica</code>.</strong> RDS couples <code>wal_level</code> to automated backups: with <code>backup-retention-period 0</code> — the cheapest possible instance shape — the baseline is <code>minimal</code>, one notch below the <code>replica</code> most docs assume. A cost-minimized instance is two steps from CDC-ready, not one — but the remedy is the same either way: the parameter flip forces <code>logical</code> regardless of retention. Don't detour via &ldquo;enable backups.&rdquo;</li>
+  <li><strong>After the flip, RDS provisions the slot budget automatically</strong>: <code>max_replication_slots=20</code>, <code>max_wal_senders=35</code>. Nothing to size by hand.</li>
+</ul>
+${pre(`aws rds create-db-parameter-group --db-parameter-group-name sluice-pg16-logical \\
+    --db-parameter-group-family postgres16 --description 'logical replication for sluice CDC'
+aws rds modify-db-parameter-group --db-parameter-group-name sluice-pg16-logical \\
+    --parameters 'ParameterName=rds.logical_replication,ParameterValue=1,ApplyMethod=pending-reboot'
+aws rds modify-db-instance --db-instance-identifier mydb --db-parameter-group-name sluice-pg16-logical
+aws rds reboot-db-instance --db-instance-identifier mydb    # static parameter: the reboot is unavoidable`)}
+
+<h2 id="roles">Roles: membership, not attributes</h2>
+<p>The RDS master user is <strong>not</strong> a superuser and never carries the REPLICATION attribute (<code>rolreplication=f</code>) — and <code>ALTER ROLE ... REPLICATION</code> is not available on RDS at all. What actually gates slot creation is membership in the <strong><code>rds_replication</code></strong> role, which the master user has from creation. sluice's replication-capability preflight recognizes that membership (it probes <code>rolsuper OR rolreplication</code> <em>or</em> <code>rds_replication</code> membership when that role exists), so:</p>
+<ul>
+  <li><strong>Master user: nothing to grant.</strong> It has everything sluice needs on defaults — including <code>CREATE EVENT TRIGGER</code> (via <code>rds_superuser</code>) for <code>sluice trigger setup</code>.</li>
+  <li><strong>Custom roles:</strong> <code>GRANT rds_replication TO &lt;role&gt;;</code> is the RDS equivalent of the REPLICATION attribute.</li>
+</ul>
+
+<h2 id="tls">TLS: force_ssl and the trust bundle</h2>
+<p><code>rds.force_ssl=1</code> is the platform default on PG 15+ engines — plaintext connections are refused at pg_hba (<code>no pg_hba.conf entry ... no encryption</code>). <code>sslmode=require</code> works out of the box; <code>verify-full</code> works with the AWS trust bundle passed in the DSN (Postgres endpoints take <code>sslrootcert=</code> in the DSN — the <code>--source-tls-ca</code> flag is for MySQL-family endpoints and refuses on Postgres rather than being silently ignored):</p>
+${pre(`curl -sO https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+
+sluice sync start \\
+    --source-driver postgres \\
+    --source 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full&sslrootcert=global-bundle.pem' \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --stream-id rds-app`)}
+
+<h2 id="rds-proxy">RDS Proxy: connect to the instance endpoint</h2>
+<p>RDS Proxy is untested with sluice and expected CDC-incompatible — it is a transaction-mode pooler, and the replication protocol cannot traverse a pooler (the same class as the <a href="/docs/migrate-from-neon/">Neon</a> and <a href="/docs/migrate-from-supabase/">Supabase</a> pooler findings). Point sluice at the <strong>instance</strong> endpoint (<code>*.&lt;id&gt;.&lt;region&gt;.rds.amazonaws.com</code>), not a proxy endpoint (<code>*.proxy-*.rds.amazonaws.com</code>).</p>
+
+<h2 id="trigger-fallback">The trigger-engine fallback</h2>
+<p>When a replication slot isn't an option — a custom role you can't grant <code>rds_replication</code> to, an organization that forbids the parameter-group reboot, or a need to start CDC before the reboot window — the slot-less <code>postgres-trigger</code> engine runs the same continuous sync off per-table capture triggers, no slot and no replication privilege required. It was validated end-to-end against RDS in the same run (the master user can create the event trigger sluice's DDL detection prefers, via <code>rds_superuser</code>):</p>
+${pre(`sluice trigger setup \\
+    --source-driver postgres-trigger \\
+    --dsn 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=require' \\
+    --tables orders,customers,line_items
+
+sluice sync start \\
+    --source-driver postgres-trigger --source 'postgres://master:pass@mydb...rds.amazonaws.com:5432/app?sslmode=require' \\
+    --target-driver postgres         --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --stream-id rds-trigger-app`)}
+<p>The full lifecycle (setup → run → teardown, payload tuning, pruning) is in <a href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a>.</p>
+
+<h2 id="checks">What sluice checks for you</h2>
+<ul>
+  <li><strong>The membership-aware replication preflight</strong> — before opening the CDC reader, sluice verifies the role can create a slot via <code>rolsuper OR rolreplication</code> <em>or</em> <code>rds_replication</code> membership (checked only where that role exists, so stock Postgres is unaffected). A genuinely incapable role refuses with <code>SLUICE-E-CDC-REPLICATION-PERMISSION</code> and the RDS-appropriate remedy, instead of failing opaquely at slot creation.</li>
+  <li><strong>The <code>wal_level</code> preflight refusal</strong> — CDC against <code>replica</code> (or retention-0's <code>minimal</code>) refuses at startup, pointing at the provider matrix with the RDS parameter-group remedy.</li>
+  <li><strong>The Aurora HA advisory</strong> — a source host matching <code>*.cluster*.rds.amazonaws.com</code> (Aurora cluster endpoints) gets the managed-HA WARN about the idle-slot failover trap, with the heartbeat mitigation.</li>
+  <li><strong>Slot-health monitoring</strong> — <code>wal_status</code> transitions (<code>unreserved</code> → critical, <code>lost</code> → terminal, exactly-once) and PG 14+ decode-spill counters, the same as any Postgres source.</li>
+  <li><strong>Event-trigger capability by attempt, not by role list</strong> — <code>sluice trigger setup</code> probes whether the role can actually create an event trigger rather than checking a predefined-role name, so RDS's <code>rds_superuser</code>-patched capability is recognized.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — slot lifecycle, retention pressure, and the failover checklist.</li>
+  <li><a href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a> — the trigger engine's full lifecycle reference.</li>
+  <li><a href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a> — the MySQL sibling: binlog retention, FTWRL, the regional bundle.</li>
+  <li><a href="/field-notes/postgres-idle-slot-failover/">Field note: the idle-slot failover trap</a> — the hazard behind the Aurora HA advisory.</li>
+</ul>
+`,
+    prev: { href: "/docs/migrate-from-rds-mysql/", label: "Migrating from AWS RDS MySQL" },
+    next: { href: "/docs/planetscale-schema-changes/", label: "Online schema changes on PlanetScale" },
+  })
+);
+
 // nav-label: PlanetScale & Vitess
 write(
   "planetscale-vitess",
@@ -3561,6 +3938,110 @@ health-exit:0`)}
 `,
     prev: { href: "/docs/planetscale-postgres-upgrade/", label: "Upgrade PlanetScale Postgres" },
     next: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
+  })
+);
+
+// nav-label: Online schema changes
+write(
+  "planetscale-schema-changes",
+  page({
+    slug: "planetscale-schema-changes",
+    title: "Online schema changes on PlanetScale with sluice",
+    subtitle: "The expand→migrate→contract pattern as one gated command, the standalone resumable backfill with its verify gate, the deploy-ddl governed channel for safe-migrations branches, and the freshness gates that guard your production schema.",
+    body: `
+<p>sluice ships a family of schema-change commands that drive the classic <strong>expand → migrate → contract</strong> pattern against PlanetScale: <a href="/docs/commands/#expand-contract"><code>expand-contract</code></a> (all three legs, one command), <a href="/docs/commands/#backfill"><code>backfill</code></a> (the data-migration middle step on its own — this one also works on plain MySQL, Vitess, and Postgres), and <a href="/docs/commands/#deploy-ddl"><code>deploy-ddl</code></a> + <a href="/docs/commands/#control-tables"><code>control-tables ddl</code></a> (the governed DDL channel and bootstrap for branches with safe migrations enabled). Every leg was live-validated against real PlanetScale, and the pattern has been exercised at 131,072-row backfill scale. What sluice deliberately is <em>not</em>: a versioned-migration tool — no history table, no down-migrations. Atlas / Flyway / sqitch own that layer; your migration tool decides <em>what</em> changes, and these commands are a safe way to <em>execute</em> it.</p>
+
+<h2 id="expand-contract">The full pattern: sluice expand-contract</h2>
+<p>Add the new column (expand), backfill the data (migrate), drop the old column (contract) — each DDL leg shipped through a PlanetScale dev branch + deploy request, the data leg run as a resumable keyset-chunked backfill, and a verify gate between backfill and the destructive drop:</p>
+${pre(`export PLANETSCALE_SERVICE_TOKEN_ID='...'   # service token: branch + deploy-request scopes
+export PLANETSCALE_SERVICE_TOKEN='...'      # env, never argv — these never land in shell history
+
+sluice expand-contract \\
+    --org myorg --database mydb --branch main \\
+    --dsn "$PROD_BRANCH_DSN" --table users \\
+    --expand-ddl   'ALTER TABLE users ADD COLUMN full_name VARCHAR(255)' \\
+    --set          'full_name = CONCAT(first_name, " ", last_name)' \\
+    --where        'full_name IS NULL' \\
+    --contract-ddl 'ALTER TABLE users DROP COLUMN first_name' \\
+    --yes`)}
+<p>The load-bearing semantics:</p>
+<ul>
+  <li><strong><code>--where</code> is required and doubles as the verify gate.</strong> Make it self-describing (<code>new_col IS NULL</code>): after the backfill, sluice counts rows still matching it across the whole table, and <em>only a count of 0 authorizes the contract leg</em>. A nonzero count fails with <code>SLUICE-E-BACKFILL-INCOMPLETE</code> — re-run to catch the stragglers, then verify again.</li>
+  <li><strong><code>--yes</code> is the contract confirmation.</strong> The contract leg is a <code>DROP COLUMN</code> deploy request against your production branch; without <code>--yes</code> (or without <code>--contract-ddl</code>) the run stops after verify <em>as a success</em> and prints the exact resume command. <code>--dry-run</code> and <code>--yes</code> are mutually exclusive by construction — a plan can never confirm a drop.</li>
+  <li><strong><code>--dry-run</code> prints the full plan</strong> — branches, deploy requests, the rendered backfill statement, the gates — with zero control-plane calls and zero writes.</li>
+  <li><strong>Interrupted runs resume with <code>--resume-from expand|migrate|contract</code>.</strong> The backfill leg is natively resumable via its persisted cursor; verify always re-runs before contract.</li>
+  <li><strong>A deploy request that outwaits <code>--deploy-timeout</code> un-deployed keeps its dev branch</strong> (deleting the branch would close the still-open deploy request your org's review queue was just asked to approve); the message names the kept branch — delete it yourself once the request closes. Every other failure path cleans up.</li>
+</ul>
+
+<h2 id="backfill">The middle step alone: sluice backfill</h2>
+<p>When the schema change itself is already handled — or you're not on PlanetScale — the batched, resumable, online-safe in-place data migration stands alone. It is single-endpoint (reads and updates one database) and walks the table's primary key issuing one bounded <code>UPDATE</code> per chunk, so no statement approaches PlanetScale/Vitess's synchronous-transaction wall (errno 3024) or holds long locks on any engine:</p>
+${pre(`sluice backfill \\
+    --driver planetscale --dsn "$DSN" \\
+    --table users \\
+    --set   'full_name = CONCAT(first_name, " ", last_name)' \\
+    --where 'full_name IS NULL' \\
+    --verify`)}
+<ul>
+  <li><strong>Engines</strong>: <code>--driver</code> is one of <code>mysql</code>, <code>planetscale</code>, <code>vitess</code>, <code>postgres</code>; SQLite/D1 refuse with <code>SLUICE-E-BACKFILL-UNSUPPORTED-ENGINE</code>. <code>--set</code> / <code>--where</code> are native SQL for that engine, emitted verbatim; <code>--set</code> splits at the <em>first</em> <code>=</code>, so CASE arms pass through.</li>
+  <li><strong>Resume is automatic.</strong> The cursor persists in the same database's control tables, keyed by a hash of the spec (<code>--set</code> + <code>--where</code>); a killed run resumes where it stopped, replaying at most one chunk — which is why the <code>--where</code> guard should self-describe doneness, so the replay is a no-op. <code>--restart</code> discards the cursor; <code>--batch-size</code> is excluded from the spec hash, so retuning it never orphans a cursor.</li>
+  <li><strong><code>--verify</code></strong> runs a whole-table remaining-count on <code>--where</code> after the walk: 0 prints the safe-to-contract signal; &gt;0 exits with <code>SLUICE-E-BACKFILL-INCOMPLETE</code> (rows written behind the walk's cursor during the run — re-run, then verify again). <strong><code>--verify-only</code></strong> is the standalone scriptable gate for deploy pipelines: no walk, no UPDATEs, no control-table writes, no primary-key requirement, <code>--set</code> optional.</li>
+  <li><strong>The concurrent-run guard.</strong> A spec whose state row is still walking with a heartbeat fresher than 5 minutes refuses with <code>SLUICE-E-BACKFILL-CONCURRENT-RUN</code> — typically an overlapping cron invocation. Two concurrent walks of one spec would interleave cursor writes, so sluice refuses before touching anything (including a <code>--restart</code>, which would clear the state out from under the live walker). Wait for the other run to finish or its heartbeat to go stale, then re-run.</li>
+  <li><strong>The other refusals are equally deliberate</strong>: no orderable primary key → <code>SLUICE-E-BACKFILL-NO-PRIMARY-KEY</code> (there is intentionally no force flag — an unbounded UPDATE is the exact shape the command exists to avoid); a <code>--set</code> column that doesn't exist → <code>SLUICE-E-BACKFILL-UNKNOWN-COLUMN</code> before any UPDATE runs; a cursor written by an older sluice that provably mangled it → <code>SLUICE-E-BACKFILL-CORRUPT-CURSOR</code> (re-run with <code>--restart</code>).</li>
+</ul>
+
+<h2 id="deploy-ddl">Safe-migrations branches: deploy-ddl + the control-tables bootstrap</h2>
+<p>A PlanetScale branch with <strong>safe migrations</strong> enabled refuses every direct DDL statement (Error 1105, &ldquo;direct DDL is disabled&rdquo;) — including sluice's own <code>CREATE TABLE IF NOT EXISTS</code> for its control tables, and the user-table CREATEs a fresh <code>migrate</code> or sync cold-start issues. sluice's ensure paths are detect-first (no DDL at all when the tables are current), and when DDL is genuinely needed the refusal is the coded <code>SLUICE-E-PS-DIRECT-DDL-BLOCKED</code>, echoing the exact refused statement. The way through is the governed channel, one command per statement:</p>
+${pre(`# 1. Print the exact CREATE statements for sluice's control tables (read-only, no credentials)
+sluice control-tables ddl
+
+# 2. Ship each statement via a deploy request (dev branch -> apply -> deploy -> cleanup, one command)
+sluice deploy-ddl --org myorg --database mydb --ddl '<one statement from step 1>'
+
+# 3a. For sync: pre-create the USER tables the same way, then skip schema-apply
+sluice schema preview --source-driver mysql --source "$SRC" --target-driver planetscale --target "$DST"
+sluice deploy-ddl --org myorg --database mydb --ddl '<one CREATE from the preview>'   # per table
+sluice sync start ... --schema-already-applied
+
+# 3b. For a one-time migrate: pre-create the user tables via deploy-ddl as in 3a, then just run it
+sluice migrate --source-driver mysql --source "$SRC" --target-driver planetscale --target "$DST"`)}
+<p><code>deploy-ddl</code> wraps ONE verbatim statement in the full safety machinery — safe-migrations preflight, dev branch with the freshness gate below, apply, deploy request, deploy, skip-revert finalize, always-cleanup — and <code>--dry-run</code> makes zero control-plane calls. It is also the general escape hatch for any ad-hoc schema change on a safe-migrations branch. Ship the control-table statements once, and <code>backfill</code> runs normally against the branch.</p>
+<div class="note"><strong>The shape gate: bootstrap → fresh migrate just works.</strong> In step 3b, <code>migrate</code> needs no flag at all: its pre-create shape gate detects each pre-created table, verifies its column shape matches what the migration would create (names, types, nullability — deploy-ddl-shipped indexes are fine, they're outside the compare), and skips the refused CREATE with an INFO. A pre-existing table whose shape does NOT match refuses upfront with <code>SLUICE-E-TARGET-TABLE-SHAPE-MISMATCH</code>, before any data moves. <code>sync</code> takes <code>--schema-already-applied</code> instead, skipping its schema-apply phase.</div>
+<p>One more place safe migrations can bite: the deferred index build after a large copy (on <code>migrate</code>, <code>restore</code>, and sync cold-start alike). Arm the automatic deploy-request index-build fallback with <code>--planetscale-org</code> plus the service-token env vars on whichever command you're running, and still-pending indexes build through a dev branch + deploy request on the already-copied data — no re-copy. Unarmed, the refusal is <code>SLUICE-E-INDEX-DIRECT-DDL-DISABLED</code> (or <code>SLUICE-E-INDEX-STATEMENT-TIME-LIMIT</code> for the ~900&nbsp;s statement wall), and <code>--resume</code> finishes just the indexes.</p>
+
+<h2 id="safe-migrations-posture">Safe-migrations posture: sluice never touches the toggle</h2>
+<p>sluice <strong>never enables or disables safe migrations</strong> on your branch. It is a behaviour change on production (direct DDL becomes blocked from then on), and the enable/disable propagation lag makes toggling it around a run unsafe. So:</p>
+<ul>
+  <li><code>expand-contract</code> / <code>deploy-ddl</code> <strong>require it ON</strong> and refuse with <code>SLUICE-E-PS-SAFE-MIGRATIONS-DISABLED</code> when it's off — with it off, direct DDL works and you don't need them.</li>
+  <li><code>migrate</code> / <code>sync</code> / <code>backfill</code> work either way: with it ON, bootstrap via the flow above; with it OFF they issue DDL directly, as on any MySQL.</li>
+  <li>If you hit <code>SLUICE-E-PS-DIRECT-DDL-BLOCKED</code>, the remedy is the governed channel (or a deliberate operator decision to disable safe migrations for a migration window) — never sluice flipping the toggle for you.</li>
+</ul>
+
+<h2 id="freshness-gate">The stale-base freshness gate</h2>
+<p>A newly created PlanetScale dev branch's schema can lag the production branch it was created from — observed live: a branch created 14 minutes after a deploy still lacked the deployed column, while another created 1 minute after was current; the lag is intermittent and its timing undocumented. A deploy request from such a branch silently proposes <em>reverting</em> the missing schema — on the contract leg, that would drop the freshly backfilled expand column. So <code>expand-contract</code>, <code>deploy-ddl</code>, and the index-build fallback all compare every dev branch's schema against production <em>before</em> applying any DDL, self-heal a stale base once (delete the branch → take an on-demand backup → recreate), and refuse with <code>SLUICE-E-PS-BRANCH-STALE-BASE</code> only if it's still stale after the rebase. Two more gates ride the same machinery: the deploy request's computed diff is fetched and refused if it touches any object the leg never intended, and production's schema is re-verified after a long review wait (a request that sat in a review queue while production moved would otherwise deploy against the old schema).</p>
+
+<h2 id="checks">What sluice checks for you</h2>
+<ul>
+  <li><strong><code>SLUICE-E-BACKFILL-INCOMPLETE</code></strong> — the verify gate found rows still matching the <code>--where</code> guard; the contract step stays locked until a re-run brings the count to 0.</li>
+  <li><strong><code>SLUICE-E-BACKFILL-NO-PRIMARY-KEY</code></strong> / <strong><code>SLUICE-E-BACKFILL-UNKNOWN-COLUMN</code></strong> / <strong><code>SLUICE-E-BACKFILL-CORRUPT-CURSOR</code></strong> / <strong><code>SLUICE-E-BACKFILL-CONCURRENT-RUN</code></strong> — the backfill refuses (rather than degrades) on an unbounded-UPDATE shape, a typo'd column, a provably mangled legacy cursor, or a live concurrent walk of the same spec.</li>
+  <li><strong><code>SLUICE-E-PS-SAFE-MIGRATIONS-DISABLED</code></strong> — deploy requests can't be created into a branch without safe migrations; sluice names it instead of toggling the setting for you.</li>
+  <li><strong><code>SLUICE-E-PS-DIRECT-DDL-BLOCKED</code></strong> — a refused direct DDL statement (control table or user table) is caught with the exact statement echoed and the governed-channel remedy.</li>
+  <li><strong><code>SLUICE-E-PS-BRANCH-STALE-BASE</code></strong> — a dev branch whose schema lags production is rebased once and refused if still stale, so a deploy request can never silently revert newer schema.</li>
+  <li><strong><code>SLUICE-E-PS-DEPLOY-REQUEST-FAILED</code></strong> — a deploy request that errors, closes undeployed, computes an empty or out-of-scope diff, or outwaits <code>--deploy-timeout</code> is named with its number, state, and URL — plus the leg-specific recovery.</li>
+  <li><strong><code>SLUICE-E-TARGET-TABLE-SHAPE-MISMATCH</code></strong> — a pre-created table whose column shape differs from what <code>migrate</code> would create refuses before any data moves.</li>
+  <li><strong><code>SLUICE-E-INDEX-DIRECT-DDL-DISABLED</code></strong> / <strong><code>SLUICE-E-INDEX-STATEMENT-TIME-LIMIT</code></strong> — a blocked deferred index build names the deploy-request fallback arming flags; the copied data is never lost, <code>--resume</code> finishes just the indexes.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/schema-changes/">Schema changes during a sync</a> — the other half of the problem: keeping a <em>running stream</em> aligned through source DDL.</li>
+  <li><a href="/docs/commands/#backfill">backfill</a>, <a href="/docs/commands/#expand-contract">expand-contract</a>, <a href="/docs/commands/#deploy-ddl">deploy-ddl</a>, <a href="/docs/commands/#control-tables">control-tables ddl</a> — the full flag references.</li>
+  <li><a href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a> — the migration this pattern usually follows.</li>
+  <li><a href="/field-notes/vitess-tx-killer-wan/">Field note: the 20-second guillotine over a WAN</a> — why bounded per-chunk UPDATEs are the only safe shape on Vitess.</li>
+  <li><a href="/field-notes/json-cursor-teleport/">Field note: persist a resume cursor as JSON and it silently teleports</a> — the story behind the corrupt-cursor refusal.</li>
+</ul>
+`,
+    prev: { href: "/docs/migrate-from-rds-postgres/", label: "Migrating from AWS RDS Postgres" },
+    next: { href: "/docs/schema-changes/", label: "Schema changes during a sync" },
   })
 );
 

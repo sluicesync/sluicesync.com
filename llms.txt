@@ -28,11 +28,20 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 - [Sync from a backup chain](https://sluicesync.com/docs/from-backup-sync/): Replay a backup chain into a target as a long-running broker — no direct source↔target connectivity required.
 - [Drive sluice from an AI agent](https://sluicesync.com/docs/agent-skills/): sluice ships task-scoped agent skills — plain-markdown playbooks that let Claude Code, Cursor, or any skill-aware assistant run a migration, verify a sync, or operate a backup chain on your behalf, inside the same safety gate.
 
+## Platform Guides
+
+- [Migrating from Neon](https://sluicesync.com/docs/migrate-from-neon/): Direct vs -pooler endpoints (and why CDC needs the direct one), the irreversible enable_logical_replication project setting, TLS interop, and the live-validated migrate + continuous-sync recipe.
+- [Migrating from Supabase](https://sluicesync.com/docs/migrate-from-supabase/): Session vs transaction Supavisor pooler modes, the IPv6-only free-tier direct endpoint and what it means for CDC, float display vs float identity, and the platform schemas sluice already scopes out.
+- [Migrating from DigitalOcean MySQL](https://sluicesync.com/docs/migrate-from-digitalocean-mysql/): The ~13–16-minute binlog purge window on defaults (and the config-API knob that fixes it), the private CA via --source-tls-ca, sql_mode differences, and the resnapshot-livelock hazard sluice warns about.
+- [Migrating from AWS RDS MySQL](https://sluicesync.com/docs/migrate-from-rds-mysql/): The detect-first binlog-retention advisory (what the WARN means and the one-line SQL remedy), 8.0-family parameter groups, the platform-blocked FTWRL, and the regional truststore bundle.
+- [Migrating from AWS RDS Postgres](https://sluicesync.com/docs/migrate-from-rds-postgres/): The rds.logical_replication parameter-group flip, the rds_replication role-membership model (nothing to grant for the master user), force_ssl and the trust bundle, and the trigger-engine fallback.
+
 ## PlanetScale Guides
 
 - [PlanetScale & Vitess](https://sluicesync.com/docs/planetscale-vitess/): Migrate and continuously sync from PlanetScale-MySQL or any Vitess deployment through the VStream gRPC feed.
 - [Self-hosted MySQL → PlanetScale](https://sluicesync.com/docs/mysql-to-planetscale/): Move an on-prem / self-hosted MySQL onto PlanetScale MySQL — a one-shot bulk migrate plus continuous binlog-CDC sync, so you cold-copy, keep the old primary writable, and cut over in a controlled window.
 - [Foreign keys on Vitess](https://sluicesync.com/docs/foreign-keys-vitess/): Migrating or syncing a foreign-key-bearing source into Vitess or PlanetScale MySQL — the two strategies (skip-and-index, or enable FK support) and how to choose.
+- [Online schema changes](https://sluicesync.com/docs/planetscale-schema-changes/): The expand→migrate→contract pattern as one gated command, the standalone resumable backfill with its verify gate, the deploy-ddl governed channel for safe-migrations branches, and the freshness gates that guard your production schema.
 - [PlanetScale Postgres](https://sluicesync.com/docs/planetscale-postgres/): PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.
 - [Upgrade PlanetScale Postgres](https://sluicesync.com/docs/planetscale-postgres-upgrade/): PlanetScale Postgres has no in-place major-version upgrade or CPU-architecture swap — provision a new instance on the target, let sluice sync across, then cut over.
 - [PlanetScale Postgres analytics replica](https://sluicesync.com/docs/planetscale-postgres-analytics-replica/): Analytics queries on a streaming replica get canceled after ~30 seconds of recovery conflict. Stand up a second PlanetScale Postgres database and let sluice keep it continuously synced — its primary never cancels a query for recovery, so analytics can run for minutes or hours.

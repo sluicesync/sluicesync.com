@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from AWS RDS MySQL with sluice — sluice docs</title>
+<meta name="description" content="The detect-first binlog-retention advisory (what the WARN means and the one-line SQL remedy), 8.0-family parameter groups, the platform-blocked FTWRL, and the regional truststore bundle.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-rds-mysql/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk active" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from AWS RDS MySQL with sluice</h1>
+    <p class="subtitle">The detect-first binlog-retention advisory (what the WARN means and the one-line SQL remedy), 8.0-family parameter groups, the platform-blocked FTWRL, and the regional truststore bundle.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#retention">Binlogs purge in ~5–11 minutes on defaults</a></li><li><a href="#parameter-groups">Version + parameter-group gotchas</a></li><li><a href="#ftwrl">The FTWRL platform block (why serial cold copy is expected)</a></li><li><a href="#tls">TLS: the public regional bundle</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>AWS RDS for MySQL works with sluice's vanilla <code>mysql</code> engine — cold copy and the CDC handoff were validated live (2026-07-16, MySQL 8.4.9 on a db.t4g.micro). Aurora MySQL shares the endpoint suffix and the retention procedure below. Like <a href="/docs/migrate-from-digitalocean-mysql/">DigitalOcean</a>, the headline is binlog retention — but on RDS the truth is SQL-visible, so sluice can check it for you instead of warning blind.</p>
+
+<h2 id="retention">Binlogs purge in ~5–11 minutes on defaults <a class="hlink" href="#retention" aria-label="Permalink to this section">#</a></h2>
+<p>With no retention configured, RDS purges each binlog file on a ~5-minute sweep once automated backups have uploaded it — observed lifetime <strong>~5–11 minutes per file</strong> — while <code>@@binlog_expire_logs_seconds</code> reads 30 days. The server variable does not govern the RDS purger (same class as DigitalOcean), but unlike DO the real setting is visible in SQL: <code>CALL mysql.rds_show_configuration</code> → <code>binlog retention hours</code>, default NULL (&ldquo;as soon as possible&rdquo;). A CDC position older than the window is unrecoverable, and a cold copy longer than it can livelock auto-resnapshot — and RDS's window is <em>tighter</em> than DO's ~13–16 minutes: plan for the ~5-minute floor, not the ceiling.</p>
+<p>Before <code>sync start</code> or <code>backup</code>, run this on the source (master user, plain SQL, effective immediately, no restart):</p>
+<pre><code>CALL mysql.rds_set_configuration('binlog retention hours', 24);  -- range 1..168 (7 days max)
+CALL mysql.rds_show_configuration;                               -- verify: binlog retention hours = 24</code></pre>
+<p>The details that matter, all live-proven:</p>
+<ul>
+  <li><strong>An attached, caught-up stream does NOT hold the purger back.</strong> Files sluice had already read were purged on schedule while the stream ran; a caught-up stream survives only because it sits on the active file. Any lag or disconnection beyond the window is fatal at defaults — set the knob first, don't rely on staying attached.</li>
+  <li><strong>With the knob set, long gaps warm-resume cleanly.</strong> A stream that stayed detached for 35 minutes resumed and replayed its full backlog exactly; the same gap on defaults forced a cold start.</li>
+  <li><strong>The 168-hour cap is real</strong> — a paused stream beyond 7 days is impossible on RDS MySQL, period.</li>
+  <li>Retained binlogs count against allocated storage; on tiny instances set the value back to NULL (or lower) after cutover.</li>
+  <li>Automated backups must be ON (retention &ge; 1 day) or RDS disables binary logging entirely — no binlogs, no CDC.</li>
+</ul>
+<div class="note"><strong>What the WARN means.</strong> sluice's advisory here is <em>detect-first</em>: on <code>sync</code>/<code>backup</code> runs against an <code>*.rds.amazonaws.com</code> host it queries the retention setting and WARNs only when it is NULL or under 24 hours — a correctly configured source stays silent. If you see the WARN, the stream is running on borrowed time (~5–11 minutes of it); run the <code>mysql.rds_set_configuration</code> call above and the next run is quiet.</div>
+
+<h2 id="parameter-groups">Version + parameter-group gotchas <a class="hlink" href="#parameter-groups" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>MySQL 8.4's default parameter group is CDC-ready</strong> (<code>binlog_format=ROW</code> is the engine default and the group leaves it unset).</li>
+  <li><strong>MySQL 8.0's family default is <code>binlog_format=MIXED</code></strong> — an RDS MySQL 8.0 source needs a custom parameter group with <code>binlog_format=ROW</code>. The parameter is dynamic: no reboot, but only <em>new</em> connections see it, so reconnect after the change.</li>
+  <li><code>gtid_mode=OFF_PERMISSIVE</code> by default; sluice's file/position CDC works as-is.</li>
+</ul>
+
+<h2 id="ftwrl">The FTWRL platform block (why serial cold copy is expected) <a class="hlink" href="#ftwrl" aria-label="Permalink to this section">#</a></h2>
+<p>RDS blocks <code>FLUSH TABLES WITH READ LOCK</code> at the platform level <strong>even though the master user holds RELOAD</strong> — the statement returns <code>1045 Access denied</code> regardless of grants. Two sluice behaviours follow, both by design and both WARNed:</p>
+<ul>
+  <li>The N-way concurrent cold copy falls back to <strong>serial</strong> (the concurrent path needs the read lock for a consistent multi-connection snapshot).</li>
+  <li>The snapshot position is captured <strong>without a write freeze</strong> — a concurrent commit during the capture instant could land in neither the copy nor the CDC tail.</li>
+</ul>
+<p>No grant fixes this — it's the platform, not your permissions (sluice's WARN text names the RDS reality on RDS hosts). If exactness of the handoff position matters, quiesce writers during the snapshot; on an idle or low-write source, accept the WARN.</p>
+
+<h2 id="tls">TLS: the public regional bundle <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
+<p>RDS defaults allow plaintext (<code>require_secure_transport=OFF</code>), and a bare <code>?tls=true</code> fails — the RDS CA is not in system roots. The working recipe is <code>--source-tls-ca</code> with the public regional bundle (one well-known URL per region, no API call — contrast DO's authenticated CA endpoint):</p>
+<pre><code><span class="k">curl</span> -sO https://truststore.pki.rds.amazonaws.com/us-east-1/us-east-1-bundle.pem
+
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'admin:pass@tcp(mydb.abc123.us-east-1.rds.amazonaws.com:3306)/app' \
+    <span class="f">--source-tls-ca</span> us-east-1-bundle.pem \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> rds-app</code></pre>
+<p>The master user has the replication grants CDC needs out of the box (<code>REPLICATION SLAVE</code>, <code>REPLICATION CLIENT</code>) — nothing to GRANT on defaults.</p>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>The detect-first retention advisory</strong> — on <code>*.rds.amazonaws.com</code> hosts, sluice queries <code>mysql.rds_configuration</code> and WARNs when <code>binlog retention hours</code> is NULL (naming the ~5–11-minute purge reality and the exact remedy call) or configured under 24 h (a milder WARN naming the window); a value &ge; 24 h stays silent. If the query itself fails, sluice falls back to an unconditional DO-style WARN rather than staying quiet.</li>
+  <li><strong>FTWRL fallback WARNs</strong> — the serial-copy fallback and the no-freeze snapshot capture are both announced, never silent.</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position is an explicit WARN plus a fresh cold start (or a hard stop under <code>--no-auto-resnapshot</code>), never a silent gap.</li>
+  <li><strong>Unencrypted-binlog-stream WARN</strong> — a plaintext DSN gets a warning that the CDC stream is unencrypted; <code>--source-tls-ca</code> resolves it.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a> — the Postgres sibling: parameter groups, role membership, force_ssl.</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — sync → verify → cutover once retention is configured.</li>
+  <li><a href="/field-notes/snapshot-position-gap/">Field note: the transaction that lands in neither the snapshot nor the binlog</a> — the exact hazard the no-freeze WARN describes.</li>
+  <li><a href="/field-notes/mysql-cert-no-san/">Field note: MySQL's own certificate can't pass verify-full</a> — why the CA-pinned mode skips hostname verification.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-digitalocean-mysql/">← Migrating from DigitalOcean MySQL</a><a class="next" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-rds-mysql/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

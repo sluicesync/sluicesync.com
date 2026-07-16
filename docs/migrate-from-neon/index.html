@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from Neon with sluice — sluice docs</title>
+<meta name="description" content="Direct vs -pooler endpoints (and why CDC needs the direct one), the irreversible enable_logical_replication project setting, TLS interop, and the live-validated migrate + continuous-sync recipe.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-neon/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk active" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from Neon with sluice</h1>
+    <p class="subtitle">Direct vs -pooler endpoints (and why CDC needs the direct one), the irreversible enable_logical_replication project setting, TLS interop, and the live-validated migrate + continuous-sync recipe.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#endpoints">Direct vs pooler endpoints — pick by workload</a></li><li><a href="#logical-replication">Enabling logical replication (the project setting, not postgresql.conf)</a></li><li><a href="#recipe">The validated recipe</a></li><li><a href="#wal-proposer-slot">The wal_proposer_slot you'll see in slot listings</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>Neon is managed Postgres, so sluice drives it with the vanilla <code>postgres</code> engine — no flavor, no special driver. It has been live-validated as a migration <strong>and</strong> CDC source (Neon → PlanetScale Postgres, 2026-07-15): fidelity was byte-identical on md5 ground truth including the hard value families — <code>NaN</code> inside <code>numeric[]</code>, &plusmn;Infinity, denormal floats, and 2-D arrays with NULL elements — and the snapshot&nbsp;→&nbsp;CDC handoff and post-handoff convergence were clean. What <em>is</em> Neon-specific is the endpoint model and how logical replication gets enabled. This guide covers both.</p>
+
+<h2 id="endpoints">Direct vs pooler endpoints — pick by workload <a class="hlink" href="#endpoints" aria-label="Permalink to this section">#</a></h2>
+<p>Every Neon branch has two hostnames for the same database:</p>
+<div class="table-scroll"><table>
+<thead><tr><th>Endpoint</th><th>Hostname shape</th><th class="desc">What it is</th></tr></thead>
+<tbody>
+<tr><td><strong>Direct</strong></td><td><code>ep-&lt;name&gt;-&lt;id&gt;.&lt;region&gt;.aws.neon.tech</code></td><td class="desc">A real Postgres backend connection.</td></tr>
+<tr><td><strong>Pooled</strong></td><td>same, with a <code>-pooler</code> suffix on the first label</td><td class="desc">pgbouncer in transaction mode.</td></tr>
+</tbody>
+</table></div>
+<ul>
+  <li><strong>CDC requires the direct endpoint.</strong> A pooler cannot proxy replication-protocol commands — it strips the <code>replication=database</code> startup parameter, so the slot-creation command reaches a normal backend as plain SQL and is rejected as a syntax error. sluice recognizes that exact signature: <code>sync start</code> against the pooled host fails at slot creation with the coded <code>SLUICE-E-CDC-POOLER-ENDPOINT</code> refusal, which names the remedy (point <code>--source</code> at the direct host).</li>
+  <li><strong>Bulk <code>migrate</code> through the pooler works</strong> — a full snapshot-pinned parallel migrate passed through it at validation scale — but sluice's parallel copy pins server connections inside long-lived snapshot transactions, which risks pool exhaustion mid-copy at higher parallelism or scale, with a confusing failure when it hits. sluice emits a preflight <strong>WARN</strong> when the source host matches the <code>-pooler</code> pattern. Prefer the direct endpoint for both modes.</li>
+</ul>
+
+<h2 id="logical-replication">Enabling logical replication (the project setting, not postgresql.conf) <a class="hlink" href="#logical-replication" aria-label="Permalink to this section">#</a></h2>
+<p>Neon defaults to <code>wal_level=replica</code>. sluice's CDC preflight checks this before touching any slot and refuses loudly — the message points at the provider matrix in <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a>. The fix on Neon is <strong>not</strong> a GUC edit: it's the project setting <strong><code>enable_logical_replication</code></strong> (console: <em>Settings → Logical replication</em>; also settable via the project-update API). Two things to know before you flip it, both validated live:</p>
+<ul>
+  <li><strong>The toggle is irreversible.</strong> Once enabled on a project, it cannot be turned back off.</li>
+  <li><strong>It takes effect in seconds, with no visible downtime.</strong> No restart window to plan.</li>
+</ul>
+<p>Bulk <code>migrate</code> does not need it — only continuous sync (a replication slot) does.</p>
+
+<h2 id="recipe">The validated recipe <a class="hlink" href="#recipe" aria-label="Permalink to this section">#</a></h2>
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://user:pass@ep-my-branch-123456.us-east-2.aws.neon.tech/neondb?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync — direct endpoint, after enabling logical replication:</p>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://user:pass@ep-my-branch-123456.us-east-2.aws.neon.tech/neondb?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> neon-app</code></pre>
+<p>Connection notes from the validation run:</p>
+<ul>
+  <li><strong>TLS</strong>: Neon DSNs work with <code>sslmode=require</code>, and <code>sslmode=verify-full</code> also works with the standard system roots — prefer it (see the <a href="/docs/getting-started/#connecting">sslmode note</a>).</li>
+  <li><strong>Region co-location matters.</strong> The validation runs were cross-provider; co-locating the sluice process (or the target) with the Neon region measurably reduces snapshot wall-clock.</li>
+  <li><strong>Autosuspend / cold-start is unprobed.</strong> The validation project stayed active throughout, so scale-to-zero resume latency under a sluice snapshot has not been characterized. If you run against an autosuspending endpoint and see slow first-connection behaviour, that's the place to look.</li>
+</ul>
+
+<h2 id="wal-proposer-slot">The wal_proposer_slot you'll see in slot listings <a class="hlink" href="#wal-proposer-slot" aria-label="Permalink to this section">#</a></h2>
+<p>Every Neon endpoint carries an always-present <em>physical</em> replication slot named <code>wal_proposer_slot</code> — it's part of Neon's safekeeper architecture, not a leaked consumer. sluice's slot-health monitoring correctly ignores it. If you enumerate slots with your own tooling (or <code>sluice slot list</code>), expect to see it and leave it alone; only <code>sluice_</code>-prefixed logical slots belong to sluice.</p>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong><code>SLUICE-E-CDC-POOLER-ENDPOINT</code></strong> — <code>sync start</code> against the <code>-pooler</code> host fails at slot creation with a coded refusal explaining that a pooler cannot proxy replication, naming the direct-endpoint remedy.</li>
+  <li><strong>Pooler-host preflight WARN</strong> — <code>migrate</code> and <code>sync start</code> warn up front when the source hostname matches the <code>-pooler</code> label pattern, before any pool-exhaustion surprise.</li>
+  <li><strong><code>wal_level</code> preflight refusal</strong> — CDC against a project without logical replication enabled refuses at startup (before touching any slot), pointing at Neon's <code>enable_logical_replication</code> setting via the provider matrix.</li>
+  <li><strong><code>SLUICE-E-CDC-REPLICATION-PERMISSION</code></strong> — if the connecting role lacks the REPLICATION attribute, the preflight refuses with the exact <code>ALTER ROLE</code> remedy rather than failing opaquely mid-cold-start.</li>
+  <li><strong>Slot-health monitoring that ignores <code>wal_proposer_slot</code></strong> — Neon's internal slot is never flagged as a leaked consumer.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — the full slot lifecycle, retention, and failover story (provider matrix included).</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — confirm the target matches the source after the copy.</li>
+  <li><a href="/field-notes/postgres-slot-leaks/">Field note: replication slots don't die with your process</a> — why an abandoned slot pins WAL on the source.</li>
+  <li><a href="/field-notes/postgres-idle-slot-failover/">Field note: the idle-slot failover trap</a> — slot survival on HA-managed Postgres.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/postgres-source-prep/">← Prepare a Postgres source</a><a class="next" href="/docs/migrate-from-supabase/">Migrating from Supabase →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-neon/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

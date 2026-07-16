@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from DigitalOcean MySQL with sluice — sluice docs</title>
+<meta name="description" content="The ~13–16-minute binlog purge window on defaults (and the config-API knob that fixes it), the private CA via --source-tls-ca, sql_mode differences, and the resnapshot-livelock hazard sluice warns about.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-digitalocean-mysql/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk active" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from DigitalOcean MySQL with sluice</h1>
+    <p class="subtitle">The ~13–16-minute binlog purge window on defaults (and the config-API knob that fixes it), the private CA via --source-tls-ca, sql_mode differences, and the resnapshot-livelock hazard sluice warns about.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#binlog-window">The ~13–16-minute binlog window on defaults</a></li><li><a href="#tls">Connecting: the cluster's private CA</a></li><li><a href="#sql-mode">sql_mode differences worth knowing</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>DigitalOcean Managed MySQL works with sluice's vanilla <code>mysql</code> engine — cold copy and the CDC handoff were validated live (2026-07-15, MySQL 8.4). One platform behaviour is important enough to headline, because it determines whether a continuous sync can survive at all on default settings.</p>
+
+<h2 id="binlog-window">The ~13–16-minute binlog window on defaults <a class="hlink" href="#binlog-window" aria-label="Permalink to this section">#</a></h2>
+<p>On DO Managed MySQL <strong>defaults</strong>, an out-of-band platform reaper purges <strong>every binlog file roughly 13–16 minutes after creation</strong> — while <code>@@binlog_expire_logs_seconds</code> reads 259200 (3 days) and the DO config API shows no retention field until you first set one. The server variable does not reflect the platform's actual purge behaviour, and no SQL-level check can see the real window — which is why sluice's preflight signal is the DSN host pattern (<code>*.db.ondigitalocean.com</code>): <code>sync</code> and <code>backup</code> runs against that pattern emit a loud <strong>WARN</strong> naming the window and the remedy.</p>
+<p>Why it matters, concretely:</p>
+<ul>
+  <li>A CDC position older than the window is unrecoverable — the resume fails with &ldquo;binlog purged&rdquo; (<code>ErrPositionInvalid</code>), and the only path forward is a fresh snapshot.</li>
+  <li>A cold copy that takes longer than the window can <strong>livelock auto-resnapshot</strong>: each retry re-copies, exceeds the window again, and loses its position again. If your data size puts the copy anywhere near 13 minutes, set the retention knob <em>before</em> <code>sync start</code>.</li>
+</ul>
+<p>The fix (confirmed working) is DO's database config API — there is no SQL knob and no UI field until it's set once:</p>
+<pre><code><span class="c"># Seconds; accepted range 600-86400. 86400 (24 h) is the right value for migrations.</span>
+<span class="k">curl</span> -X PATCH "https://api.digitalocean.com/v2/databases/&lt;cluster-id&gt;/config" \
+    -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"config": {"binlog_retention_period": 86400}}'</code></pre>
+<p>It takes effect immediately, no restart, and pre-existing binlogs stop being purged. One open question the validation could not settle: whether an <em>attached</em> binlog-dump connection holds the purger back on DO (on AWS RDS it provably does not). Until answered, treat the config-API knob as required for any DO CDC use rather than relying on a live stream to protect itself.</p>
+<div class="note"><strong>Deciding deliberately about re-snapshots.</strong> By default a purged position auto-recovers with a fresh cold-start re-snapshot. If a full re-copy is expensive and you'd rather decide by hand, <code>sync start --no-auto-resnapshot</code> fails loudly with the recovery commands instead of re-copying — useful while you're still sizing the retention window.</div>
+
+<h2 id="tls">Connecting: the cluster's private CA <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
+<p>DO clusters use a <strong>private CA</strong>, so neither system roots nor a bare <code>?tls=true</code> can verify the server certificate. Fetch the cluster CA from the API and hand it to sluice with <code>--source-tls-ca</code> — CA-pinned <em>verify-ca</em> TLS (trust this CA, verify the chain, skip the hostname check that MySQL's SAN-less certificates can't satisfy):</p>
+<pre><code><span class="c"># The API returns the cluster CA base64-encoded</span>
+<span class="k">curl</span> -s "https://api.digitalocean.com/v2/databases/&lt;cluster-id&gt;/ca" \
+    -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" | jq -r '.ca.certificate' | base64 -d &gt; do-ca.pem
+
+<span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'doadmin:pass@tcp(db-mysql-nyc3-12345.b.db.ondigitalocean.com:25060)/defaultdb' \
+    <span class="f">--source-tls-ca</span> do-ca.pem \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p><code>--source-tls-ca</code> covers both the data connection and the binlog/CDC stream, and refuses if the DSN already sets <code>tls=</code> (one TLS decision, not two). The same flag exists on <code>sync start</code>, <code>verify</code>, and <code>backup</code>. The <code>doadmin</code> user has the replication grants sluice's binlog CDC needs — no extra GRANTs on defaults.</p>
+
+<h2 id="sql-mode">sql_mode differences worth knowing <a class="hlink" href="#sql-mode" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>Default <code>sql_mode</code> includes <code>ANSI</code></strong> — double-quoted strings are <em>identifiers</em> on this server. sluice's own SQL is unaffected, but anything you run manually against the source with <code>"double quotes"</code> behaves differently than on a stock MySQL.</li>
+  <li><strong><code>sql_require_primary_key=true</code></strong> by default — keyless tables cannot be created on a DO <em>target</em>, and restoring keyless-table dumps there fails until the setting is relaxed. (Keyless tables are also the ones that can't take sluice's exact-UPDATE repairs — give them primary keys and everyone wins.)</li>
+</ul>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>The retention advisory WARN</strong> — <code>sync</code> and <code>backup</code> runs against a <code>*.db.ondigitalocean.com</code> host warn about the ~13–16-minute default purge window and name the config-API remedy. (The host pattern is the only reliable signal — the server variable can't be trusted on this platform, so the WARN is unconditional.)</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position surfaces as an explicit &ldquo;persisted position is no longer valid&rdquo; WARN and a fresh cold start, never a silent gap; <code>--no-auto-resnapshot</code> converts that into a hard stop with named recovery commands.</li>
+  <li><strong><code>--source-tls-ca</code> refusals</strong> — the flag refuses to combine with a DSN-level <code>tls=</code> setting, and refuses on non-MySQL engines (Postgres uses <code>sslrootcert=</code> in the DSN) instead of silently ignoring a security flag.</li>
+  <li><strong><code>SLUICE-E-DRIVER-HOST-MISMATCH</code> class checks</strong> — driver/DSN sanity is verified up front, before any connection.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the full sync → verify → cutover flow once CDC is stable.</li>
+  <li><a href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a> — the same purge-window class with a tighter window and a SQL-visible remedy.</li>
+  <li><a href="/field-notes/mysql-cert-no-san/">Field note: MySQL's own certificate can't pass verify-full</a> — why <code>--source-tls-ca</code> is verify-ca, not verify-full.</li>
+  <li><a href="/field-notes/snapshot-position-gap/">Field note: the transaction that lands in neither the snapshot nor the binlog</a> — what the snapshot-position capture is protecting against.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-supabase/">← Migrating from Supabase</a><a class="next" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-digitalocean-mysql/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

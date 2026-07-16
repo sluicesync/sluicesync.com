@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from Supabase with sluice — sluice docs</title>
+<meta name="description" content="Session vs transaction Supavisor pooler modes, the IPv6-only free-tier direct endpoint and what it means for CDC, float display vs float identity, and the platform schemas sluice already scopes out.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-supabase/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk active" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from Supabase with sluice</h1>
+    <p class="subtitle">Session vs transaction Supavisor pooler modes, the IPv6-only free-tier direct endpoint and what it means for CDC, float display vs float identity, and the platform schemas sluice already scopes out.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#ipv6">The IPv6-only direct endpoint (the thing that bites first)</a></li><li><a href="#pooler-modes">Session vs transaction pooler modes</a></li><li><a href="#floats">Float display is not float identity</a></li><li><a href="#platform-schemas">Platform schemas</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>Supabase is managed Postgres, so sluice drives it with the vanilla <code>postgres</code> engine. It has been live-validated as a bulk-migration source (2026-07-15) with <strong>bit-exact fidelity through both Supavisor pooler modes</strong>. Unlike Neon, <code>wal_level=logical</code> is on out of the box — the thing that gates CDC on Supabase is not a setting but <em>network reachability of the direct endpoint</em>. That's the first thing to understand.</p>
+
+<h2 id="ipv6">The IPv6-only direct endpoint (the thing that bites first) <a class="hlink" href="#ipv6" aria-label="Permalink to this section">#</a></h2>
+<p>Supabase free-tier <strong>direct</strong> endpoints (<code>db.&lt;ref&gt;.supabase.co</code>) have <strong>only an AAAA record</strong> — IPv4 connectivity to the direct endpoint is a paid add-on. From an IPv4-only machine the connection fails in about a second with the platform resolver's cryptic no-data error. sluice detects this class: on a resolve failure it probes for an AAAA record and, when the host is IPv6-only, extends the error with the remedy — the coded <code>SLUICE-E-CONNECT-IPV6-ONLY</code>.</p>
+<ul>
+  <li><strong>Bulk migrate</strong>: use the pooler endpoint (<code>aws-&lt;n&gt;-&lt;region&gt;.pooler.supabase.com</code> — it has an A record). Validated bit-exact.</li>
+  <li><strong>CDC</strong>: the direct endpoint is required — a pooler cannot proxy the replication protocol — so from an IPv4-only network you need Supabase's IPv4 add-on or an IPv6-capable network. <code>sync start</code> through Supavisor fails at slot creation with the coded <code>SLUICE-E-CDC-POOLER-ENDPOINT</code> refusal explaining exactly this.</li>
+</ul>
+
+<h2 id="pooler-modes">Session vs transaction pooler modes <a class="hlink" href="#pooler-modes" aria-label="Permalink to this section">#</a></h2>
+<p>Supavisor exposes two ports on the pooler hostname, and they behave differently under sluice's parallel copy:</p>
+<div class="table-scroll"><table>
+<thead><tr><th>Mode</th><th>Port</th><th class="desc">Behaviour under sluice</th></tr></thead>
+<tbody>
+<tr><td><strong>Session</strong></td><td><code>:5432</code></td><td class="desc">Bulk migrate works, <em>including parallel copy</em>. Validated bit-exact.</td></tr>
+<tr><td><strong>Transaction</strong></td><td><code>:6543</code></td><td class="desc">Server connections rotate per transaction, which trips pgx's statement cache (SQLSTATE 42P05, &ldquo;prepared statement already exists&rdquo;). sluice WARNs and falls back to the single-reader copy path — correct, but <strong>parallel copy is unavailable</strong> in this mode.</td></tr>
+</tbody>
+</table></div>
+<p>Prefer session mode (or the direct endpoint) for large copies. sluice's pooler-host preflight WARN fires for both modes — the hostname matches the <code>pooler.supabase.com</code> pattern either way:</p>
+<pre><code><span class="c"># Bulk migrate through the session pooler (IPv4-friendly)</span>
+<span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://postgres.abcdefghijkl:pass@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span>
+
+<span class="c"># CDC needs the DIRECT endpoint (IPv6-only on the free tier)</span>
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://postgres:pass@db.abcdefghijkl.supabase.co:5432/postgres?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> supabase-app</code></pre>
+<div class="note"><strong>CDC readiness.</strong> <code>wal_level=logical</code> is Supabase's default — nothing to enable (contrast <a href="/docs/migrate-from-neon/">Neon</a>'s project toggle). The CDC validation itself was environment-blocked in sluice's run (IPv4-only network + IPv6-only direct endpoint), not a sluice or Supabase defect; once the direct endpoint is reachable, the standard Postgres CDC path applies. See <a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> for the slot checklist.</div>
+
+<h2 id="floats">Float display is not float identity <a class="hlink" href="#floats" aria-label="Permalink to this section">#</a></h2>
+<p>Supabase servers default <code>extra_float_digits=0</code>, so <strong>text-level</strong> float comparisons against a Supabase source mislead: a value can print rounded while the stored bits are exact. sluice's copy was proven bit-exact via <code>float8send</code> ground truth. If you diff sluice's output with external tooling that compares text, pin the session first — or better, compare the send-function bytes:</p>
+<pre><code>SET extra_float_digits = 1;              -- make text output round-trip-exact
+SELECT md5(string_agg(float8send(col)::text, ',' ORDER BY id)) FROM t;   -- or compare bits directly</code></pre>
+<p>A &ldquo;mismatch&rdquo; that disappears under <code>extra_float_digits=1</code> was never a data difference.</p>
+
+<h2 id="platform-schemas">Platform schemas <a class="hlink" href="#platform-schemas" aria-label="Permalink to this section">#</a></h2>
+<p>Supabase ships its platform schemas (<code>auth</code>, <code>storage</code>, <code>realtime</code>, …) alongside <code>public</code>. sluice's default <code>public</code> scoping ignores them — there is nothing to exclude manually, and your migrated target gets your tables, not the platform's.</p>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong><code>SLUICE-E-CONNECT-IPV6-ONLY</code></strong> — a resolve failure against an IPv6-only host (the free-tier direct endpoint, from an IPv4-only network) is diagnosed with an AAAA probe and refused with the remedy: pooler endpoint for bulk migrate, IPv4 add-on or IPv6 network for CDC.</li>
+  <li><strong><code>SLUICE-E-CDC-POOLER-ENDPOINT</code></strong> — slot creation through Supavisor is recognized by its SQLSTATE 42601 signature and refused with the direct-endpoint remedy, instead of surfacing as a bare syntax error.</li>
+  <li><strong>Pooler-host preflight WARN</strong> — both Supavisor ports match the <code>pooler.supabase.com</code> pattern and warn before the copy starts.</li>
+  <li><strong>Transaction-mode fallback WARN</strong> — the SQLSTATE 42P05 statement-cache signature on <code>:6543</code> triggers a WARN and a correct single-reader fallback rather than a failed copy; the WARN is your signal to switch to <code>:5432</code> for parallelism.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — the CDC checklist once the direct endpoint is reachable.</li>
+  <li><a href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a> — the trigger-CDC path for tiers whose roles can't create slots.</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — sluice's own verification, which compares values (not display text).</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-neon/">← Migrating from Neon</a><a class="next" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-supabase/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

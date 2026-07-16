@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from AWS RDS Postgres with sluice — sluice docs</title>
+<meta name="description" content="The rds.logical_replication parameter-group flip, the rds_replication role-membership model (nothing to grant for the master user), force_ssl and the trust bundle, and the trigger-engine fallback.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-rds-postgres/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk active" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from AWS RDS Postgres with sluice</h1>
+    <p class="subtitle">The rds.logical_replication parameter-group flip, the rds_replication role-membership model (nothing to grant for the master user), force_ssl and the trust bundle, and the trigger-engine fallback.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#logical-replication">Enabling logical replication (parameter group + reboot)</a></li><li><a href="#roles">Roles: membership, not attributes</a></li><li><a href="#tls">TLS: force_ssl and the trust bundle</a></li><li><a href="#rds-proxy">RDS Proxy: connect to the instance endpoint</a></li><li><a href="#trigger-fallback">The trigger-engine fallback</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>AWS RDS for PostgreSQL works with sluice's vanilla <code>postgres</code> engine — live-validated 2026-07-16 (PostgreSQL 16.14) as a bulk-migration source with byte-identical md5 ground truth, including <code>NaN</code>-in-<code>numeric[]</code>, &plusmn;Infinity, denormal floats, and 2-D arrays with NULL elements. Trigger-CDC (<code>postgres-trigger</code>) was validated end-to-end in the same run. Slot-based CDC was blocked in that run by a sluice-side false refusal — the preflight didn't yet understand RDS's role-membership model while the platform itself was proven slot-capable — and the preflight has since been taught that model, so slot CDC is expected to work with the master user. Aurora Postgres uses the same role model and parameter names.</p>
+
+<h2 id="logical-replication">Enabling logical replication (parameter group + reboot) <a class="hlink" href="#logical-replication" aria-label="Permalink to this section">#</a></h2>
+<p>Not postgresql.conf and not a console toggle: attach a <strong>custom parameter group</strong> with <code>rds.logical_replication = 1</code>. The parameter is static, so a <strong>reboot is required</strong> (~2 minutes); the GUC <code>wal_level</code> itself is read-only on RDS. Two gotchas the validation surfaced:</p>
+<ul>
+  <li><strong>Retention 0 means <code>wal_level=minimal</code>, not <code>replica</code>.</strong> RDS couples <code>wal_level</code> to automated backups: with <code>backup-retention-period 0</code> — the cheapest possible instance shape — the baseline is <code>minimal</code>, one notch below the <code>replica</code> most docs assume. A cost-minimized instance is two steps from CDC-ready, not one — but the remedy is the same either way: the parameter flip forces <code>logical</code> regardless of retention. Don't detour via &ldquo;enable backups.&rdquo;</li>
+  <li><strong>After the flip, RDS provisions the slot budget automatically</strong>: <code>max_replication_slots=20</code>, <code>max_wal_senders=35</code>. Nothing to size by hand.</li>
+</ul>
+<pre><code>aws rds create-db-parameter-group <span class="f">--db-parameter-group-name</span> sluice-pg16-logical \
+    <span class="f">--db-parameter-group-family</span> postgres16 <span class="f">--description</span> 'logical replication for sluice CDC'
+aws rds modify-db-parameter-group <span class="f">--db-parameter-group-name</span> sluice-pg16-logical \
+    <span class="f">--parameters</span> 'ParameterName=rds.logical_replication,ParameterValue=1,ApplyMethod=pending-reboot'
+aws rds modify-db-instance <span class="f">--db-instance-identifier</span> mydb <span class="f">--db-parameter-group-name</span> sluice-pg16-logical
+aws rds reboot-db-instance <span class="f">--db-instance-identifier</span> mydb    # static parameter: the reboot is unavoidable</code></pre>
+
+<h2 id="roles">Roles: membership, not attributes <a class="hlink" href="#roles" aria-label="Permalink to this section">#</a></h2>
+<p>The RDS master user is <strong>not</strong> a superuser and never carries the REPLICATION attribute (<code>rolreplication=f</code>) — and <code>ALTER ROLE ... REPLICATION</code> is not available on RDS at all. What actually gates slot creation is membership in the <strong><code>rds_replication</code></strong> role, which the master user has from creation. sluice's replication-capability preflight recognizes that membership (it probes <code>rolsuper OR rolreplication</code> <em>or</em> <code>rds_replication</code> membership when that role exists), so:</p>
+<ul>
+  <li><strong>Master user: nothing to grant.</strong> It has everything sluice needs on defaults — including <code>CREATE EVENT TRIGGER</code> (via <code>rds_superuser</code>) for <code>sluice trigger setup</code>.</li>
+  <li><strong>Custom roles:</strong> <code>GRANT rds_replication TO &lt;role&gt;;</code> is the RDS equivalent of the REPLICATION attribute.</li>
+</ul>
+
+<h2 id="tls">TLS: force_ssl and the trust bundle <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
+<p><code>rds.force_ssl=1</code> is the platform default on PG 15+ engines — plaintext connections are refused at pg_hba (<code>no pg_hba.conf entry ... no encryption</code>). <code>sslmode=require</code> works out of the box; <code>verify-full</code> works with the AWS trust bundle passed in the DSN (Postgres endpoints take <code>sslrootcert=</code> in the DSN — the <code>--source-tls-ca</code> flag is for MySQL-family endpoints and refuses on Postgres rather than being silently ignored):</p>
+<pre><code><span class="k">curl</span> -sO https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> postgres \
+    <span class="f">--source</span> 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full&amp;sslrootcert=global-bundle.pem' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> rds-app</code></pre>
+
+<h2 id="rds-proxy">RDS Proxy: connect to the instance endpoint <a class="hlink" href="#rds-proxy" aria-label="Permalink to this section">#</a></h2>
+<p>RDS Proxy is untested with sluice and expected CDC-incompatible — it is a transaction-mode pooler, and the replication protocol cannot traverse a pooler (the same class as the <a href="/docs/migrate-from-neon/">Neon</a> and <a href="/docs/migrate-from-supabase/">Supabase</a> pooler findings). Point sluice at the <strong>instance</strong> endpoint (<code>*.&lt;id&gt;.&lt;region&gt;.rds.amazonaws.com</code>), not a proxy endpoint (<code>*.proxy-*.rds.amazonaws.com</code>).</p>
+
+<h2 id="trigger-fallback">The trigger-engine fallback <a class="hlink" href="#trigger-fallback" aria-label="Permalink to this section">#</a></h2>
+<p>When a replication slot isn't an option — a custom role you can't grant <code>rds_replication</code> to, an organization that forbids the parameter-group reboot, or a need to start CDC before the reboot window — the slot-less <code>postgres-trigger</code> engine runs the same continuous sync off per-table capture triggers, no slot and no replication privilege required. It was validated end-to-end against RDS in the same run (the master user can create the event trigger sluice's DDL detection prefers, via <code>rds_superuser</code>):</p>
+<pre><code><span class="k">sluice</span> trigger setup \
+    <span class="f">--source-driver</span> postgres-trigger \
+    <span class="f">--dsn</span> 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=require' \
+    <span class="f">--tables</span> orders,customers,line_items
+
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> postgres-trigger <span class="f">--source</span> 'postgres://master:pass@mydb...rds.amazonaws.com:5432/app?sslmode=require' \
+    <span class="f">--target-driver</span> postgres         <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> rds-trigger-app</code></pre>
+<p>The full lifecycle (setup → run → teardown, payload tuning, pruning) is in <a href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a>.</p>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>The membership-aware replication preflight</strong> — before opening the CDC reader, sluice verifies the role can create a slot via <code>rolsuper OR rolreplication</code> <em>or</em> <code>rds_replication</code> membership (checked only where that role exists, so stock Postgres is unaffected). A genuinely incapable role refuses with <code>SLUICE-E-CDC-REPLICATION-PERMISSION</code> and the RDS-appropriate remedy, instead of failing opaquely at slot creation.</li>
+  <li><strong>The <code>wal_level</code> preflight refusal</strong> — CDC against <code>replica</code> (or retention-0's <code>minimal</code>) refuses at startup, pointing at the provider matrix with the RDS parameter-group remedy.</li>
+  <li><strong>The Aurora HA advisory</strong> — a source host matching <code>*.cluster*.rds.amazonaws.com</code> (Aurora cluster endpoints) gets the managed-HA WARN about the idle-slot failover trap, with the heartbeat mitigation.</li>
+  <li><strong>Slot-health monitoring</strong> — <code>wal_status</code> transitions (<code>unreserved</code> → critical, <code>lost</code> → terminal, exactly-once) and PG 14+ decode-spill counters, the same as any Postgres source.</li>
+  <li><strong>Event-trigger capability by attempt, not by role list</strong> — <code>sluice trigger setup</code> probes whether the role can actually create an event trigger rather than checking a predefined-role name, so RDS's <code>rds_superuser</code>-patched capability is recognized.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — slot lifecycle, retention pressure, and the failover checklist.</li>
+  <li><a href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a> — the trigger engine's full lifecycle reference.</li>
+  <li><a href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a> — the MySQL sibling: binlog retention, FTWRL, the regional bundle.</li>
+  <li><a href="/field-notes/postgres-idle-slot-failover/">Field note: the idle-slot failover trap</a> — the hazard behind the Aurora HA advisory.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-rds-mysql/">← Migrating from AWS RDS MySQL</a><a class="next" href="/docs/planetscale-schema-changes/">Online schema changes on PlanetScale →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-rds-postgres/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
