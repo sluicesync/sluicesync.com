@@ -5377,6 +5377,12 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
+- 2026-07-17Postgres ACTIVE_HEALTHY through a five-minute recovery — Flooding a 1 GB Supabase Micro with WAL pushed it into crash recovery &mdash; every connection refused for five and a half minutes &mdash; while the Management API kept reporting status=ACTIVE_HEALTHY. A control-plane status field is an assertion of intent, not a data-plane liveness signal &mdash; misleading for backend readiness, so probe with a real query. And a logical slot's WAL runway is set by the compute tier (512 MB Micro, 2 GB Small), not the PITR add-on.
+
+- 2026-07-17Cross-cutting gocloud classifies "301" by substring — sluice's backup-chain CAS maps S3's 412 PreconditionFailed to a coded conflict refusal &mdash; through gocloud, whose s3blob classifier carries strings.Contains(err.Error(), "301"). S3 stamps a random hex RequestID on every response, so about 2% of the time a genuine 412 is misread as NoSuchBucket → NotFound. An HTTP status code is a three-digit needle in a haystack of opaque identifiers; classify from the structured API error, never from a substring of the rendered string.
+
+- 2026-07-17Postgres The read replica is a better migrate source and a worse CDC source than the docs — &ldquo;You can't do logical replication from a read replica&rdquo; is Postgres &le;15 lore, and PG 16 flipped both halves of it in opposite directions. pg_export_snapshot() now works on a standby &mdash; a fully snapshot-consistent bulk-migrate source the docs still say is impossible &mdash; while a slot can be created but CREATE_REPLICATION_SLOT hangs on an idle primary, and the publication DDL CDC needs can't run on a hot standby at all.
+
 - 2026-07-17MySQL & Vitess The row image you can't preflight, because a proxy is in the way — Under self-hosted Vitess with binlog_row_image=NOBLOB, an UPDATE omits an unchanged BLOB &mdash; the same silent-overwrite class as the binlog NOBLOB note, one door over. But the vanilla fix, reading @@GLOBAL.binlog_row_image at stream start, is structurally impossible here: sluice connects to a vtgate, a proxy in front of a fleet of tablets with no single row-image posture to read. The authoritative signal is the wire itself &mdash; and the layer underneath is loud when the flag is off and goes silent exactly when it's on.
 
 - 2026-07-17MariaDB MariaDB has no BEGIN, and won't tell you if your position survived — A MySQL transaction opens with a BEGIN QueryEvent; a MariaDB one opens with a MariadbGTIDEvent and no BEGIN at all, so a pump that only handles MySQL's GTIDEvent never advances its position. And you can't pre-check reachability: @@gtid_binlog_state is completely unchanged across PURGE BINARY LOGS, so a dead position looks live &mdash; the only honest signal is the stream throwing error 1236.
@@ -5398,6 +5404,14 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 - 2026-07-17Postgres pgx's AfterConnect replaces, it doesn't chain — pgx stdlib gives you one slot to run per-connection setup. Install a session GUC pin and a PostGIS codec through it and the second silently evicts the first &mdash; no error, one feature just stops working on exactly the connections that need it. A single-writer callback slot is a shared resource; composition has to be the only way in.
 
 - 2026-07-17Postgres information_schema reports a numeric scale of 2046 — Since PG 15, numeric(5,-2) is legal &mdash; and information_schema.columns reports its scale as 2046. The catalog view masks an 11-bit two's-complement scale field without sign-extending it, so the portable, standards-blessed way to read numeric scale is quietly wrong for every negative-scale column. When a number looks impossible, read the typmod.
+
+- 2026-07-16MariaDB MariaDB reports its defaults in a different dialect — Side by side on the same DDL, MariaDB's information_schema speaks a different dialect than MySQL 8's: string defaults keep their quotes, a defaultless nullable column's default is the literal word NULL, and DEFAULT CURRENT_TIMESTAMP reads as current_timestamp() with an empty extra. A MySQL-convention reader silently corrupts every default &mdash; and SYSTEM VERSIONED tables and SEQUENCEs hide from the BASE TABLE filter entirely.
+
+- 2026-07-16Postgres The heartbeat aged seven hours at write time — A concurrent-run guard compared time.Now() against a heartbeat written with CURRENT_TIMESTAMP into a bare timestamp &mdash; a value Postgres stores in the server's zone and pgx reads back as UTC. The age is wrong by exactly the server's offset, and the offset's sign picks the failure: a live guard goes inert, or a crashed run's resume is falsely refused. Arithmetically invisible on every UTC CI container.
+
+- 2026-07-16Postgres The privilege catalog is not the permission system — Three live-proven ways the privilege catalog lied on one cloud provider: the RDS master role shows rolreplication=f yet creates logical slots (membership, not attribute); SHOW GRANTS shows RELOAD yet FLUSH TABLES WITH READ LOCK returns 1045; and the capability probe checked a predefined role that exists in no stock Postgres. The grant table describes a permission model, it isn't one.
+
+- 2026-07-16Postgres The crash was the good outcome — sluice's trigger-CDC captures change images with to_jsonb(), and JSON has no token for a non-finite float &mdash; so Infinity travels as a string. The array-element decoder skipped it and the apply loop crashed loudly. That was the value contract working: a blind float64 coercion would have truncated a numeric[] element and turned a text[] holding the word &ldquo;Infinity&rdquo; into a number.
 
 - 2026-07-16Postgres The parent table that returns rows it doesn't own — Old-style INHERITS parents present to information_schema as ordinary, unrelated BASE TABLEs &mdash; while a SELECT on the parent, without ONLY, also returns every child's rows. The standard enumerate-and-copy recipe lands the child data twice, silently, exit 0 &mdash; and the same filter hides FDW foreign tables entirely.
 
@@ -9528,3 +9542,290 @@ When the configuration that governs correctness lives behind a proxy, a prefligh
 - MySQL Reference Manual — binlog_row_image (NOBLOB omits unchanged BLOB/TEXT from the row image) and binlog_row_value_options (PARTIAL_JSON).
 
 - Sibling field note — the platform default that eats every UPDATE (the same silent-overwrite class through the vanilla binlog door; Bug 193).
+
+
+===============================================================
+# The crash was the good outcome
+(https://sluicesync.com/field-notes/crash-was-the-good-outcome/)
+
+sluice's trigger-based Postgres CDC captures change images with to_jsonb(), and JSON has no token for a non-finite float — so ±Infinity and NaN travel as the strings "Infinity"/"NaN". The decoder normalized scalar leaves but skipped array elements, so the first UPDATE touching a float8[] column crashed the apply loop loudly and re-crashed on every restart. That loud crash was the value contract working: the fix not taken — blindly coercing every array leaf to float64 — would have truncated a numeric[] element and turned a text[] holding the literal word "Infinity" into a number.
+
+Observed — a live crash-loop on AWS RDS PostgreSQL 16.14 during the v0.99.263 validation cycle (2026-07-16), nothing RDS-specific about it; fixed in v0.99.263. It affected every prior release of the postgres-trigger engine that carried array columns through UPDATE/DELETE payloads. Zero silent loss: the failure was loud and position-safe. This is a story about a crash being the right outcome, and the two silent corruptions the obvious fix would have shipped instead.
+
+## How the capture format meets a non-finite float
+
+The trigger-CDC engine records each change image by calling to_jsonb() on the row inside the capture trigger. JSON has exactly one numeric type and no spelling for Infinity, -Infinity, or NaN — so PostgreSQL renders those as the JSON strings "Infinity"/"-Infinity"/"NaN", while every finite number arrives, under a UseNumber decode, as a json.Number. The decoder already knew this: it normalized scalar leaves, mapping the non-finite spellings back to their float values and json.Number to the target type. It simply never applied that normalization to array elements.
+
+So the first UPDATE that touched a float8[] column arrived with elements the apply layer had never normalized, and the apply failed loudly: column "floats": expected float64, got json.Number. Because the failure happened before the position advanced, the stream was position-safe — and deterministically re-crashed on the same change-log row at every restart. A wedged stream, not a data loss. Observed live on RDS PG 16.14; the same code path wedges on any Postgres.
+
+## The fix not taken
+
+The tempting one-liner is to coerce every array leaf to float64 and move on. That would have converted one loud crash into two silent corruptions:
+
+- A numeric(p,s) array element carries arbitrary precision. Route it through float64 and it loses digits — silently, because the result is still a valid number.
+
+- A text[] element can legitimately hold the literal word "Infinity". Map every non-finite spelling to a float upstream and that string becomes the number ∞ — a text value silently turned into a float.
+
+The value that looked like a float was not always a float, and the payload spelling could not tell you which. So the coercion had to move down, into a type-aware layer that dispatches on the destination column family rather than on what the payload happens to look like: the float branch parses json.Number/int64/the non-finite spellings, the numeric branch takes json.Number.String() digit-lossless, the temporal branch parses ISO-8601 strings, and every branch refuses anything outside its own shapes loudly. It was pinned per the project's family-matrix discipline — every element family × shape × operation, not just the float8[] that crashed.
+
+## The coda: -0 dies inside the database
+
+One more thing surfaced en route, and it is not fixable downstream at all. to_jsonb('-0'::float8) returns 0 on PostgreSQL 16, while the SQL read path's float8out faithfully says -0. The reason is that jsonb numbers are numeric, and numeric has no signed zero. So any capture format that routes a value through the database's own JSON type destroys a float's zero sign inside the source database, before the pipeline ever sees the payload — there is nothing a decoder or applier can do about information the capture already threw away. Bulk copy and slot-based CDC of the same value carry the sign fine; only the JSON-mediated trigger capture loses it. It ships as a documented, pinned capture-fidelity limitation.
+
+## The transferable lesson
+
+A capture format that routes values through the database's own JSON type inherits that type's number semantics — no non-finite tokens, no signed zero, one lossy numeric. And a payload decoder must dispatch on the destination type family, never on what the payload value happens to look like: the same three characters, "Infinity", are a float in one column and a string in the next. When a strict decode crashes loudly on a value it can't place, that is the type contract doing its job — the dangerous fix is the one that makes the crash go away by guessing.
+
+## Primary sources
+
+- PostgreSQL documentation — JSON types (jsonb numbers are numeric; no non-finite values, no signed zero) and to_jsonb().
+
+- sluice v0.99.263 changelog and the RDS-Postgres validation report (F3) — the live crash-loop, the type-aware array-element decoder, the family-matrix pins, and the to_jsonb('-0'::float8) → 0 capture-fidelity wart.
+
+- Related field notes — Vitess copy phase rounds your FLOATs (another &ldquo;the loss is in the capture format&rdquo; story) and the pgx codec that flattened numeric[][] (the array-family-matrix discipline).
+
+
+===============================================================
+# The privilege catalog is not the permission system
+(https://sluicesync.com/field-notes/privilege-catalog-not-permission-system/)
+
+Three live-proven ways a cloud provider's privilege catalog lied, in both directions. On RDS the master role shows rolreplication=f permanently yet creates and drops logical slots, because the capability is gated on membership in rds_replication, not the role attribute — so the stock "rolsuper OR rolreplication" preflight false-refuses the entire platform. On RDS MySQL, SHOW GRANTS shows RELOAD yet FLUSH TABLES WITH READ LOCK returns 1045. And a capability probe checked pg_create_event_trigger — a predefined role that exists in no stock PostgreSQL. The catalog describes a permission model; it is not the permission model.
+
+Observed — live throwaway probes of AWS RDS PostgreSQL 16 and RDS MySQL during the v0.99.263 validation cycle (2026-07-16), each instance created, exercised, and torn down. The sluice-side false refusals fixed in v0.99.263; the platform behaviors are AWS by design. All three are ways the privilege catalog — pg_roles, SHOW GRANTS, a predefined-role membership check — disagreed with the permission system that actually adjudicates the operation.
+
+## False negative: the role that can't replicate, but does
+
+The RDS master role shows rolsuper=f, rolreplication=f — permanently, by design — and yet it creates and drops logical replication slots without complaint. RDS gates that capability on membership in the rds_replication role, not on the rolreplication attribute the catalog exposes. Any preflight that checks rolsuper OR rolreplication — the obvious, stock-correct query, and the one sluice shipped — false-refuses the entire platform, and by the same model all of Aurora. Worse, the refusal was deliberately given no opt-out flag, on the premise that &ldquo;the role genuinely cannot create a slot&rdquo; — a premise RDS quietly falsifies — and all three of its recovery suggestions were wrong or lossy there, so an RDS user could never even reach a refusal that contained a remedy that worked. The fix keeps the catalog check but adds the membership rule: pg_has_role(current_user, 'rds_replication', 'MEMBER'), guarded on the role's existence so a stock server still reads cleanly.
+
+## False positive: the grant that's present but not honored
+
+On RDS MySQL, SHOW GRANTS for the master user lists RELOAD — the privilege FLUSH TABLES WITH READ LOCK requires. Run FTWRL anyway and it returns 1045 Access denied. The platform blocks the operation above the grant layer, so the classic &ldquo;grant RELOAD and retry&rdquo; remediation is a dead end no grant can open. The honest hint sluice now emits doesn't promise a grant fixes it: it says the lock-free fallback is expected here, and to quiesce writers if the brief no-freeze window matters for the snapshot's consistency.
+
+## The probe that was wrong everywhere
+
+The event-trigger capability check tested membership in pg_create_event_trigger — a predefined role that exists in no stock PostgreSQL. PG 16's only pg_create* predefined role is pg_create_subscription. So the check evaluated to &ldquo;not a member&rdquo; on every host, making that capability tier effectively superuser-only everywhere, and it was doubly wrong on RDS, where the master role can create event triggers. This one wasn't a provider quirk at all — it was a phantom role name that made the catalog probe meaningless on every server.
+
+## Why the fixes use different probe strategies
+
+The transferable part is that the two Postgres hazards demanded opposite probe strategies, for a concrete reason. The event-trigger check became attempt-based: CREATE EVENT TRIGGER inside a transaction that always rolls back. An attempt is the only check that can't drift from a provider's patched permission model — it asks the permission system the exact question instead of reading a catalog that may not reflect it. But the slot check deliberately stayed catalog-based, with the membership rule added, because slot creation is non-transactional: a crashed attempt-probe leaks a slot that pins WAL on the source until someone drops it, and slot creation also fails for non-permission reasons an attempt would mis-attribute to a permission problem. The rule is: attempt-probe a capability when the attempt is cheap and fully reversible; read the catalog (correctly) when the attempt has a cost or a side effect a rollback can't undo. Closing beat, same provider: RDS couples wal_level to automated backups — set retention to 0 and wal_level drops to minimal, one notch below the replica every CDC doc assumes — so the cost-minimized instance is two steps from CDC-ready, not one.
+
+## The transferable lesson
+
+A privilege catalog is a description of a permission model, maintained by the same people who can override the model out of band — so on a managed platform it lies in both directions: a capability you have that the catalog denies (membership-gated, not attribute-gated), and a capability the catalog grants that the platform blocks above it. When correctness depends on whether an operation will actually succeed, and the operation is cheap and reversible, ask by attempting it inside a rolled-back transaction rather than by reading a catalog row. And when the attempt is not reversible — a slot that leaks, a change that persists — read the catalog, but read the whole permission model, membership rules included, not just the one attribute column that looks like the answer.
+
+## Primary sources
+
+- AWS RDS documentation — rds_replication role membership for logical replication; mysql.rds_* configuration and the RELOAD/FTWRL restriction on managed MySQL; the wal_level / backup-retention coupling.
+
+- PostgreSQL documentation — predefined roles (pg_create_subscription; there is no pg_create_event_trigger) and pg_has_role().
+
+- sluice v0.99.263 changelog and the RDS-Postgres / RDS-MySQL probe reports — the false-refusal fix, the membership-aware slot preflight, the attempt-based event-trigger probe, and the FTWRL and wal_level findings.
+
+- Related field note — replication slots don't die with your process (why an attempt-probe that leaks a slot is the strategy you avoid).
+
+
+===============================================================
+# The heartbeat aged seven hours at write time
+(https://sluicesync.com/field-notes/heartbeat-aged-seven-hours/)
+
+A concurrent-run guard refuses to start a second backfill walk while the state row's heartbeat is fresher than five minutes. The heartbeat was a bare timestamp written with CURRENT_TIMESTAMP — which Postgres renders in the server's timezone before storing — while the reading driver scans a bare timestamp back as UTC. Two individually defensible behaviors compose into an age reading wrong by exactly the server's UTC offset, and the sign of that offset picks your failure mode. It shipped because every CI container runs UTC, where the bug is arithmetically invisible.
+
+Observed — a 2026-07-16 audit of sluice's backfill concurrent-run guard, differential-verified live in the fix (v0.99.263): pre-fix, a heartbeat read +7h old on America/Los_Angeles and -2h old on Europe/Berlin. The affected guard shipped in v0.99.260, so the live-bug window was v0.99.260–262 on non-UTC PostgreSQL servers. The MySQL side was already correct (the connection forces its session time_zone).
+
+## Two defensible behaviors, composed
+
+The guard is textbook: don't start a second backfill walk while the state row's heartbeat is newer than five minutes, so a live walk isn't joined by a duplicate. The heartbeat column was a bare timestamp (no time zone), written with CURRENT_TIMESTAMP. Each half is reasonable on its own:
+
+- PostgreSQL's CURRENT_TIMESTAMP is a timestamptz; assigning it into a bare timestamp column converts it to the server's TimeZone and drops the offset. So the stored wall-clock digits are in the server's local zone.
+
+- The reading driver (pgx) scans a bare timestamp back as a time.Time in UTC — it has no zone to attach, so it labels the naive value UTC.
+
+Compose them and the age computation — time.Now() minus the scanned heartbeat — is wrong by exactly the server's UTC offset, because the value was written in one frame and read in another. Nothing in the code path is individually incorrect; the bug lives in the seam between the write's zone and the read's assumption.
+
+## The sign of the offset picks your failure
+
+Which way it breaks depends on which side of UTC the server sits:
+
+- Server behind UTC (e.g. America/Los_Angeles, -7h): a heartbeat written one second ago reads seven hours old. The guard believes the previous walk is long dead, so a second walk starts and the two interleave — the exact hazard the guard exists to prevent. Silent: no error, just a guard that has quietly stopped guarding.
+
+- Server ahead of UTC (e.g. Europe/Berlin, +2h): a crashed run's genuinely-stale heartbeat reads two hours in the future, i.e. perpetually fresh, so a legitimate resume is falsely refused until the offset drains.
+
+Both were reproduced live in the fix — +7h of phantom age on Los Angeles, -2h on Berlin.
+
+## Why it shipped
+
+Every CI container runs in UTC, where the server offset is zero and the two zone assumptions cancel exactly. A naive-timestamp freshness bug is arithmetically invisible under UTC and arms itself the moment someone's managed instance defaults to a regional zone — which many do. A test suite that never leaves UTC cannot see it; a single non-UTC container in the matrix would have.
+
+## What sluice does about it
+
+The fix is one expression: write the heartbeat as timezone('utc', now()) so the stored naive value is UTC, matching what pgx assumes on read (storing a timestamptz outright works too). The codebase had already solved the identical class once — the shard-consolidation control table compares its lease against timezone('utc', now()) — which is the tell that this is a recurring class, not a one-off: freshness math breaks wherever a client clock meets a server-written naive timestamp.
+
+## The transferable lesson
+
+Never compare time.Now() against a bare TIMESTAMP the server filled in with its own local-zone function. A timestamp without a time zone is a value whose meaning depends on who reads it, and a freshness computation puts the writer and the reader on opposite sides of that ambiguity. Either store an explicit timestamptz, or write the naive column through timezone('utc', now()) and read it as UTC — and put at least one non-UTC server in your test matrix, because the whole failure class is invisible at offset zero.
+
+## Primary sources
+
+- PostgreSQL documentation — date/time functions (CURRENT_TIMESTAMP is timestamptz; conversion into timestamp without time zone uses the session TimeZone) and the timezone() AT TIME ZONE construct.
+
+- pgx documentation — scanning a timestamp without time zone yields a UTC time.Time.
+
+- sluice v0.99.263 changelog (M1.3) and the 2026-07-16 audit finding — the live +7h/-2h differential and the timezone('utc', now()) fix, plus the pre-existing control-table sibling.
+
+
+===============================================================
+# MariaDB reports its defaults in a different dialect
+(https://sluicesync.com/field-notes/mariadb-catalog-default-dialect/)
+
+"MariaDB is basically MySQL" survives the wire protocol and dies in information_schema. Point the same DDL at both and COLUMN_DEFAULT speaks two dialects: MySQL 8 reports a string default as bare abc, MariaDB reports 'abc' with the quotes; a defaultless nullable column is SQL NULL on MySQL and the four-character string NULL on MariaDB; DEFAULT CURRENT_TIMESTAMP reads as current_timestamp() with an empty extra. A MySQL-convention reader emits corrupted defaults — and MariaDB's SYSTEM VERSIONED tables and SEQUENCEs vanish behind the near-universal table_type='BASE TABLE' filter.
+
+Observed — scoping the mariadb flavor for sluice, side by side on mariadb:11.4, mariadb:10.11, and mysql:8.4 (2026-07-16); the flavor shipped in v0.99.268 (ADR-0168). Before the flavor existed, every MariaDB-source operation failed loudly on one MySQL-8-only catalog column, so no silent-loss path was ever reachable in a released version — and the shim that keeps it that way had to land the same instant that protective wall came down.
+
+## The defaults table speaks a different dialect
+
+MariaDB and MySQL 8 share a wire protocol, most of information_schema, and almost all DDL. They do not share how COLUMNS.COLUMN_DEFAULT renders a default. On identical DDL:
+
+                            MySQL 8                       MariaDB
+    DEFAULT 'abc'           abc                           'abc'         (quotes kept)
+    nullable, no default    NULL (SQL NULL)               NULL          (the 4-char string)
+    DEFAULT CURRENT_TIMESTAMP  CURRENT_TIMESTAMP          current_timestamp()
+       extra                   DEFAULT_GENERATED          (empty)
+
+A reader written to MySQL 8's conventions, pointed at MariaDB, therefore: emits string defaults with literal embedded quotes; gives every defaultless nullable column the literal word NULL as its default (silent on a text target, which happily stores the string &ldquo;NULL&rdquo;); and turns the timestamp expression into the string 'current_timestamp()' — loud 1067 Invalid default value on a datetime column, silent on a varchar. That is a silent default-corruption class hiding entirely behind the &ldquo;basically MySQL&rdquo; assumption.
+
+## The tables your BASE-TABLE filter can't see
+
+The second silent class is enumeration. MariaDB reports SYSTEM VERSIONED (temporal) tables and SEQUENCE objects as distinct table_type values, so the near-universal table_type = 'BASE TABLE' filter — the one every &ldquo;list the tables to copy&rdquo; query uses — silently skips data-bearing objects. It is the same class as an unguarded enumerate-and-copy missing old-style inheritance parents or foreign tables on Postgres: the filter that looks like a safe way to exclude views quietly excludes real data. And MariaDB's JSON is a longtext alias whose type identity survives only in an auto-generated json_valid(<col>) CHECK constraint — so even &ldquo;is this column JSON?&rdquo; has a MariaDB-specific answer.
+
+## The wall that was accidentally protective
+
+Here is the ironic part. Before the flavor shipped, every one of those corruptions was unreachable — because one MySQL-8.0-only catalog column that sluice's reader selected (columns.srs_id, absent on MariaDB) made every MariaDB-source operation fail loudly, up front, before any default or table-type could be mis-read. The error wall was accidentally protecting users from the dialect gap behind it. Which is exactly why &ldquo;just fix the failing query&rdquo; was the dangerous patch: removing the wall without simultaneously handling the defaults dialect and the invisible objects would have converted a loud failure into the silent corruptions above.
+
+## What sluice does about it
+
+The v0.99.268 mariadb flavor landed the catalog-query fix and the compensating shim atomically — the discipline the scoping work flagged as mandatory. translateMariaDBDefault normalizes every default shape (quoted string literals with '' doubling and the \0 \n \r \\ schema-metadata escape set, including NUL-bearing binary defaults re-encoded to MySQL's 0x… hex; the bare keyword NULL for defaultless-nullable; current_timestamp()-with-empty-extra canonicalized) to a byte-identical IR read. The invisible-object census now refuses loudly, naming every SYSTEM VERSIONED table and SEQUENCE rather than skipping it. The two MySQL-8-only columns select constants on the MariaDB variant. A server-fingerprint guard closes the last hole in both directions: the mariadb flavor refuses a non-MariaDB server (the shim would actively mis-read MySQL's bare abc defaults as expressions — coded SLUICE-E-DRIVER-HOST-MISMATCH), while a plain mysql connection whose VERSION() carries -MariaDB WARNs toward the mariadb driver.
+
+## The transferable lesson
+
+&ldquo;Compatible&rdquo; databases diverge exactly where you stop looking — not in the wire protocol you tested, but in how information_schema renders a default or classifies a table. When you port a catalog reader to a claimed-compatible engine, diff the metadata output on identical DDL rather than trusting the compatibility label. And when a query is failing loudly on the new engine, treat that failure as possibly load-bearing: it may be the only thing standing between your users and a silent-corruption class behind it, so the fix that removes the wall and the shim that handles what the wall was hiding must ship in the same change, never one without the other.
+
+## Primary sources
+
+- sluice ADR-0168 (MariaDB flavor Phase 1) and CHANGELOG 0.99.268; the scoping probe on mariadb:11.4, mariadb:10.11, and mysql:8.4.
+
+- MariaDB Knowledge Base — information_schema.COLUMNS (COLUMN_DEFAULT quoting and the NULL-string convention), system-versioned tables and sequences (TABLE_TYPE), and the implicit json_valid() CHECK on JSON columns.
+
+- MySQL 8.0 Reference Manual — information_schema.COLUMNS (bare default rendering, DEFAULT_GENERATED extra) and SRS_ID.
+
+- Related field notes — the parent table that returns rows it doesn't own (the BASE-TABLE-filter miss on Postgres) and the join that's 1:1 on MySQL 8 and fans out on MariaDB (more MariaDB catalog divergence).
+
+
+===============================================================
+# The read replica is a better migrate source and a worse CDC source than the docs
+(https://sluicesync.com/field-notes/read-replica-source-pg16/)
+
+"You can't do logical replication from a read replica" is Postgres ≤15 lore, and PG 16 quietly flipped both halves of it — in opposite directions for a migration tool. On the read side it got better than the docs: pg_export_snapshot() now works on a standby, so a parallel bulk copy from a replica is fully snapshot-consistent. On the CDC side it got more fragile than "impossible": a slot can be created on a PG 16+ standby, but CREATE_REPLICATION_SLOT blocks until the idle primary emits its next running-xacts record, and the publication DDL CDC needs can't run on a hot standby at all.
+
+Observed — a live probe of a Supabase PostgreSQL 17.6.1 read replica (us-west-1, 2026-07-17) on the shipped v0.99.263–265 binaries; the coded refusal shipped in v0.99.267 (filed as Bug 197). &ldquo;CDC from a standby is unsupported by design&rdquo; is a Postgres-platform truth, not a sluice limitation — but which parts of that truth still hold depends on your major version, and PG 16 moved the line under both halves of the old rule.
+
+## The read side got better than the docs promise
+
+Under Postgres ≤15, pg_export_snapshot() errored during recovery, so a parallel bulk copy from a standby could not pin all its reader connections to one consistent snapshot — it fell back to independent per-connection reads with no cross-table consistency. PG 16 lifted that restriction as part of the logical-decoding-on-standby work. So on a Supabase PG 17 replica, sluice's parallel readers all pinned to one shared exported snapshot and took a fully snapshot-consistent copy from a replica — the probe confirmed the shared snapshot engaged (pg_export_snapshot() returned a handle inside a REPEATABLE READ READ ONLY transaction with no error). sluice's own code comment still claimed the old fallback, now correctly re-scoped to PG ≤15. A read replica is a legitimately good, consistency-preserving bulk-migrate source on modern Postgres — better than the ≤15 lore says.
+
+## The CDC side got more fragile than &ldquo;impossible&rdquo;
+
+The same PG 16 work made the CDC story worse in a subtler way than a flat &ldquo;no.&rdquo; A logical slot can be created on a PG 16+ standby now — but CREATE_REPLICATION_SLOT blocks until the primary emits its next xl_running_xacts WAL record. On an idle primary that record simply doesn't come, so the call hangs (≥2 minutes observed before it eventually proceeded once activity resumed). The documented nudge, pg_log_standby_snapshot(), is superuser-only, and managed platforms withhold it — Supabase returns permission denied. So the slot creation that &ldquo;works&rdquo; on a standby can stall indefinitely with no visible cause and no operator lever to unstick it.
+
+sluice never even reaches that stall, because a step before it is a harder wall: CDC has to CREATE or ALTER its publication on the source, and publication DDL cannot run inside a read-only transaction on a hot standby at all. Pre-create a FOR ALL TABLES publication and sluice drops it to re-scope, which is itself a write; a scoped ALTER PUBLICATION … SET TABLE runs unconditionally on the same path. Either way the replica answers with cannot execute CREATE PUBLICATION in a read-only transaction (SQLSTATE 25006) — a raw error that reads like a sluice bug rather than a platform boundary.
+
+## What sluice does about it
+
+Since v0.99.267, sluice detects a standby source before it tries the publication write and refuses with a coded SLUICE-E-CDC-STANDBY-SOURCE that names the source as a read replica, steers to the primary endpoint for CDC, and notes that the replica remains a perfectly good bulk-migrate source. A belt on the raw SQLSTATE 25006 catches the same condition if it surfaces through a path the preflight didn't cover, so the operator never sees the steering-free raw error that looks like an internal failure. The migrate-from-standby capability is left fully intact — it is a bonus, not a thing to warn about.
+
+## The transferable lesson
+
+&ldquo;Replicas can't decode&rdquo; is a rule with a version number on it, and Postgres 16 moved the boundary under it in both directions at once — so a tool that treats the ≤15 lore as timeless is wrong twice: it under-uses the replica as a bulk source (the consistent snapshot is available now) and mis-describes the CDC wall (it isn't the slot that's impossible — it's the publication write, plus an idle-primary running-xacts stall the slot creation hides behind). When a capability is gated on the server's recovery state, pin down which major version you're on and which specific operation the platform actually blocks, and turn the raw platform error into a coded refusal that names the real boundary — because 25006 on its own reads like your bug, not the standby's rule.
+
+## Primary sources
+
+- PostgreSQL documentation — pg_export_snapshot() (usable during recovery from PG 16), logical decoding on standbys, and pg_log_standby_snapshot() (superuser-only).
+
+- PostgreSQL error 25006 (read_only_sql_transaction) — why CREATE PUBLICATION can't run on a hot standby.
+
+- sluice v0.99.267 changelog and the Supabase read-replica probe report (Bug 197) — the engaged shared snapshot on the standby, the idle-primary slot-creation hang, and the coded SLUICE-E-CDC-STANDBY-SOURCE refusal plus its 25006 belt.
+
+- Related field note — every HA knob on, and the slot still vanished at failover (more standby/slot lifecycle surprises).
+
+
+===============================================================
+# gocloud classifies "301" by substring — and ~2% of your S3 request IDs contain it
+(https://sluicesync.com/field-notes/gocloud-classifies-301-by-substring/)
+
+sluice's backup-chain concurrent-writer guard is a compare-and-swap on S3's create-only conditional PUT: the loser of two racing PUTs gets a 412 PreconditionFailed, mapped to a coded conflict refusal. It was reading that 412 through gocloud's portable error class — and gocloud's s3blob classifier carries strings.Contains(err.Error(), "301"). S3 stamps a random hex RequestID on every response, so whenever that hex happens to contain the digits 301 — about 2% of requests — a genuine 412 is misclassified as NoSuchBucket. Classify from the structured API error, never from a substring of the rendered one.
+
+Observed — surfaced as a v0.99.268 tag-CI flake on TestBlobStore_MinIO_ConditionalPutChainGuard, root-caused and fixed in v0.99.269. No data loss: the misclassification turned a coded conflict refusal into a confusing &ldquo;not found,&rdquo; loud either way — but the guard's whole job is to be legible at the moment two writers race, and this made it lie about why it refused. The gocloud substring hack is present and unchanged in the current release; sluice works around it locally.
+
+## The guard and the status code it keys on
+
+sluice's backup-chain concurrent-writer guard is a compare-and-swap built on S3's create-only conditional PUT (If-None-Match: *): when two writers race to claim the same chain slot, the loser's PUT is rejected with 412 PreconditionFailed, which sluice maps to &ldquo;someone else won, refuse loudly&rdquo; — the coded SLUICE-E-BACKUP-CHAIN-CONFLICT. The correctness of that guard depends on reliably telling a 412 apart from every other S3 error.
+
+## The 2% misclassifier
+
+sluice was reading the 412 through gocloud's portable error class rather than the raw API error. And gocloud's s3blob driver classifies some errors by substring-matching the rendered error string: strings.Contains(err.Error(), "301"), intended to catch an S3 invalid-bucket 301 redirect and map it to NoSuchBucket. The problem is what else contains the digits 301. S3 stamps a random hex RequestID (and HostID) on every response and folds them into the rendered error string. Whenever that hex happens to contain the substring 301 — about 2% of requests — a genuine 412 gets classified as NoSuchBucket, which gocloud surfaces as NotFound.
+
+So the losing writer, perhaps 2% of the time, saw a baffling &ldquo;not found&rdquo; instead of the coded chain-conflict — and it stayed invisible until a CI run happened to draw RequestID 18C30130E2747EAB and flaked the MinIO CAS test. That same ~2% was latent in production the whole time for any real chain-conflict loser; CI just drew the unlucky hex first.
+
+## The fix: read the structured code
+
+The fix stops reading the rendered string entirely. sluice inspects the structured smithy API error — apiErr.ErrorCode() == "PreconditionFailed" — which is a field the AWS SDK populates from the response, not a phrase in a human-readable message. It falls back to gocloud's derived class only for the fileblob/memblob drivers, which carry no API error to inspect. A three-digit HTTP status is a needle; the rendered error string is a haystack full of opaque identifiers that can contain that needle by chance.
+
+## The transferable lesson
+
+Never classify an error by substring-matching its rendered text when a structured code is available. A rendered error string is written for humans and, on cloud APIs, salted with random per-request identifiers — request IDs, host IDs, trace tokens — so any digit sequence you match on will eventually appear by chance in one of them. A heuristic that is &ldquo;usually right&rdquo; on error text is a probabilistic misclassifier the instant that text carries a random ID: it doesn't fail loudly, it fails a stable small fraction of the time, which is the hardest kind of bug to catch. Reach past the portability layer to the provider's structured error code, and keep the string-matching only for backends that genuinely have nothing else.
+
+## Primary sources
+
+- sluice v0.99.269 changelog and fix commit — the smithy ErrorCode() detection with a fileblob/memblob fallback, and the RequestID 18C30130E2747EAB flake that surfaced it.
+
+- gocloud.dev blob/s3blob — the portable error classification, including the 301 substring check in the vendored version.
+
+- AWS SDK for Go v2 (smithy) — the structured API error type and ErrorCode(); S3's RequestId/HostId response fields.
+
+- Related field note — object stores can now say &ldquo;that changed since you read it&rdquo; (the create-only CAS this conflict-classification lives inside).
+
+
+===============================================================
+# ACTIVE_HEALTHY through a five-minute recovery
+(https://sluicesync.com/field-notes/active-healthy-not-liveness/)
+
+Flooding a 1 GB Supabase Micro instance with WAL pushed it into crash recovery — FATAL 57P03, every connection refused for five and a half minutes while it replayed — and the Supabase Management API kept reporting status=ACTIVE_HEALTHY. A control-plane status field is an assertion of intent, not a data-plane liveness signal, so it is misleading for backend readiness: probe with a real query. The finding rode a separate, concrete result: a logical replication slot's WAL runway is set by the compute tier (512 MB on Micro, 2 GB on Small), not by the PITR add-on, live-proven with a paired differential.
+
+Observed — a live probe on a Supabase PostgreSQL 17.6.1 project (us-west-1, 2026-07-17, torn down). No data loss: the WAL was synthetic logical messages, the corpus untouched. The slot-runway advisory shipped field-validated; the ACTIVE_HEALTHY-through-crash-recovery behavior is a Supabase Management API observation, not a sluice bug. Both halves matter to anyone automating a migration against a managed provider's control plane.
+
+## The slot's WAL runway is the compute tier's, not the PITR add-on's
+
+A detached or slow logical replication slot survives only as long as the server is willing to retain the WAL it hasn't consumed — governed by max_slot_wal_keep_size. On Supabase that ceiling is set by compute tier: 512 MB on Micro, 2048 MB on Small, applied at the resize restart. It is not, as one might assume, a function of the point-in-time-recovery add-on. A paired differential made this concrete. A detached pgoutput slot (active=false) on a Small instance climbed to 1377 MB of retained WAL still at wal_status='reserved' — about 2.7× the Micro ceiling, safe_wal_size still +720 MB, never even reaching extended. The identical detached slot on a Micro went wal_status='unreserved' with a negative safe_wal_size at 551 MB, then wal_status='lost' with invalidation_reason='wal_removed' after the next checkpoint — a forced re-snapshot. So the lever for a wider detach or downtime window is a compute bump (~$15/mo to Small for 2 GB), not the ~$100/mo PITR add-on — which only reaches 2 GB transitively because it requires Small.
+
+## The status field stayed green through crash recovery
+
+The sharper finding surfaced while pushing the Micro repro. Bulk-generating multiple GB of incompressible WAL at ~150 MB/s against a 1 GB-RAM Micro drove the instance into crash recovery: FATAL 57P03: the database system is not accepting connections / Hot standby mode is disabled, every connection refused for about five and a half minutes (16:38:34→16:44:10 UTC) while it replayed WAL. Throughout that window, the Supabase Management API kept reporting status=ACTIVE_HEALTHY. The control-plane status field did not reflect the in-database outage — it is an assertion about the platform's intent for the instance, not a probe of whether the backend is accepting queries, so it is misleading if you read it as backend liveness.
+
+There is a grim symmetry in how it ended: the checkpoint that completed crash recovery is precisely the one that flipped the over-budget slot from unreserved to lost. The slot outlived the crash and died on the checkpoint that ended it.
+
+## What this means for a migration tool
+
+sluice's slot-runway advisory now reflects the compute-tier ceiling rather than treating retention as a PITR property — the guidance for widening a detach window is a compute bump, stated where it matters. But the status-field lesson generalizes past any one tool: a snapshot-then-CDC migration that polls a provider's control-plane status to decide whether the source is healthy enough to proceed can be told &ldquo;healthy&rdquo; while every connection is being refused. The only trustworthy liveness signal is a real query against the backend — SELECT 1, or the slot's own pg_replication_slots row — not the dashboard's green.
+
+## The transferable lesson
+
+A managed provider's status endpoint is a control-plane assertion, not a data-plane liveness guarantee. An undersized or overloaded instance can be in crash recovery, refusing every connection, while the API and dashboard stay ACTIVE_HEALTHY — so probe the backend with a real query before you trust &ldquo;healthy,&rdquo; especially before a step that assumes the source is reachable. And when you reason about how long a replication slot can survive a detach or a slow consumer, find the setting that actually governs the WAL runway — here the compute tier, not the backup add-on the intuition reaches for — and validate it with a paired differential rather than inferring it from the pricing page.
+
+## Primary sources
+
+- PostgreSQL documentation — pg_replication_slots (wal_status reserved/extended/unreserved/lost, safe_wal_size) and max_slot_wal_keep_size; error 57P03 (cannot_connect_now) during recovery.
+
+- Supabase — compute add-ons and per-tier max_slot_wal_keep_size (512 MB Micro / 2048 MB Small), the Management API project-status endpoint, and PITR (requires Small).
+
+- sluice managed-services advisory (compute-tier slot runway) and the 2026-07-17 Supabase compute-tier probe — the paired Small-vs-Micro slot-survival differential and the crash-recovery-through-ACTIVE_HEALTHY incident.
+
+- Related field notes — the alert cleared at the exact moment the slot died and replication slots don't die with your process (the same control-plane-vs-data-plane theme, at the slot).
