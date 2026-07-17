@@ -252,7 +252,7 @@ List the database engines built into this binary and their bulk-load / CDC capab
 
     sluice engines
 
-  14 engines are registered today: mysql (binlog CDC), planetscale and self-hosted vitess (both VStream CDC), mariadb (a MySQL-family flavor — bulk migrate source and target plus backup/restore/verify; CDC is not yet supported because MariaDB replicates with domain-based GTIDs the MySQL binlog reader can't resume, roadmap item 73), postgres (logical-replication CDC), sqlite and d1 (migrate sources — sqlite is also a target — no CDC), the trigger-CDC engines postgres-trigger (slot-less Postgres), sqlite-trigger (local SQLite file), and d1-trigger (live Cloudflare D1), and the flat-file migrate sources csv, tsv, ndjson (ADR-0163) and mydumper (a mydumper / pscale database dump directory, ADR-0161). The vitess flavor shares the PlanetScale engine code with a self-hosted-vtgate capability set, and warm-resumes since v0.99.44.
+  14 engines are registered today: mysql (binlog CDC), planetscale and self-hosted vitess (both VStream CDC), mariadb (a MySQL-family flavor — bulk migrate source and target, backup/restore/verify, and continuous CDC sync since v0.99.271: sluice parses MariaDB's domain-based GTIDs and resumes off them; native uuid/inet columns are the one CDC-refused shape, steered to bulk migrate), postgres (logical-replication CDC), sqlite and d1 (migrate sources — sqlite is also a target — no CDC), the trigger-CDC engines postgres-trigger (slot-less Postgres), sqlite-trigger (local SQLite file), and d1-trigger (live Cloudflare D1), and the flat-file migrate sources csv, tsv, ndjson (ADR-0163) and mydumper (a mydumper / pscale database dump directory, ADR-0161). The vitess flavor shares the PlanetScale engine code with a self-hosted-vtgate capability set, and warm-resumes since v0.99.44.
 
 Engine · Role · Notes ·
 
@@ -1098,7 +1098,9 @@ SLUICE-E-CDC-ROW-IMAGE-PARTIAL · refusal · The MySQL source streams partial bi
 
 SLUICE-E-CDC-STANDBY-SOURCE · refusal · The CDC source is a read-only hot standby / read replica (pg_is_in_recovery() = true) — e.g. a Supabase read replica (db.<ref>-rr-…supabase.co) or any streaming-replication standby. CDC has to manage the sluice publication on the source, and CREATE/ALTER PUBLICATION cannot run on a standby (pre-fix this surfaced as a raw SQLSTATE 25006 "read-only transaction" error). PG 16+ standbys can host logical slots, but slot creation blocks on the primary's next running-xacts record and managed platforms gate the nudge, so the primary is the supported CDC source. · Point --source at the PRIMARY endpoint (Supabase: db.<ref>.supabase.co, not the -rr- replica host). A standby remains a fine source for bulk sluice migrate. See managed-services. ·
 
-SLUICE-E-CDC-MARIADB-UNSUPPORTED · refusal · CDC from a MariaDB source (sync start, backup stream/incremental, mid-stream schema add-table) is not supported yet: MariaDB replicates with domain-based GTID positions (e.g. 0-100-38) that sluice's MySQL binlog reader cannot parse or resume. The mariadb flavor's current surface is bulk migrate (source and target) plus backup/restore/verify. · Use bulk sluice migrate plus an application cutover, or sluice backup / sluice restore for point-in-time copies, until MariaDB CDC ships. ·
+SLUICE-E-CDC-MARIADB-UNSUPPORTED · refusal (retained, no longer emitted) · Historical refusal from before MariaDB CDC shipped. As of v0.99.271 (ADR-0170) sluice supports continuous CDC from a MariaDB source: it parses MariaDB's domain-based GTID positions (e.g. 0-100-38) and resumes off them, so this refusal is no longer raised — the code is kept in the registry for back-compat only. The one remaining MariaDB-CDC refusal is native uuid/inet columns; see the row below. · None needed — MariaDB CDC works. For native uuid/inet columns, see SLUICE-E-CDC-MARIADB-NATIVE-TYPE-UNSUPPORTED. ·
+
+SLUICE-E-CDC-MARIADB-NATIVE-TYPE-UNSUPPORTED · refusal · A MariaDB source has a native uuid / inet6 / inet4 column in CDC scope. Those types are read correctly by bulk migrate (the driver returns them as text), but the binlog carries their raw storage bytes (16 for uuid/inet6, 4 for inet4), and sluice's CDC decoder — written for MySQL, where these live in VARCHAR columns whose binlog bytes are the text — would stringify the raw bytes into a wrong value. A Postgres target rejects that string loudly (invalid input syntax for type uuid, 22P02), but a MySQL-family target (CHAR(36)/VARCHAR(45)) would silently accept it — so sluice refuses at CDC stream start, at cold-start snapshot open, and at mid-stream schema add-table, on ALL targets, naming the offending schema.table.column. Faithful binlog decode of these types is a filed follow-up (ADR-0170). See the field note. · Use bulk sluice migrate for the affected tables/columns — its uuid/inet handling is unaffected — and cut over, or exclude the native uuid/inet column from CDC scope. ·
 
 SLUICE-E-CONNECT-IPV6-ONLY · runtime · The DSN host failed to resolve from this machine but carries an AAAA (IPv6) record — the host is IPv6-only and this network appears IPv4-only. Seen on Supabase free-tier direct endpoints, where IPv4 is a paid add-on. · For bulk migrate, use the provider's pooler endpoint (it has an A record); for CDC, the direct endpoint is required — a pooler cannot proxy replication — so enable the provider's IPv4 add-on or run sluice from an IPv6-capable network. See managed-services. ·
 
@@ -3271,6 +3273,75 @@ Supabase ships its platform schemas (auth, storage, realtime, …) alongside pub
 
 
 ===============================================================
+# Migrating from a Supabase read replica with sluice
+(https://sluicesync.com/docs/migrate-from-supabase-read-replica/)
+
+A Supabase read replica (an -rr- endpoint) is a fine bulk-migrate source that offloads the copy's read load from your primary — PG 16+ standby parallel snapshots engage unreduced — but CDC is refused: a replica can't host the sluice publication, so continuous sync must point at the primary. Plus the corrected CDC-preflight facts and how to verify safely against a lagging replica.
+
+A Supabase read replica is managed Postgres running as a streaming-replication standby, so sluice drives it with the vanilla postgres engine. Live-probed 2026-07-17 (PG 17 replica, same region as its primary): it works as a bulk sluice migrate source with the full consistency story, and it is refused as a CDC source with a coded steer to the primary. This guide covers both, plus verifying safely against a replica. For the primary-endpoint essentials (IPv6-only direct host, Supavisor pooler modes, TLS, float display), start with the main Supabase guide.
+
+## Bulk migrate: a first-class source
+
+A read replica is a full bulk-migration source, and the reason to use one is load: it offloads the snapshot's read cost from the production primary. The consistency story is not reduced. pg_export_snapshot() is legal on a PG &ge; 16 standby, so sluice's parallel, snapshot-pinned copy engages unreduced on the replica — one shared snapshot across every table and chunk reader, byte-exact (float8send-proven), evaluated at the replica's replay position.
+
+    sluice migrate \
+        --source-driver postgres \
+        --source 'postgres://postgres.abcdefghijkl-rr-us-east-1-xyz:pass@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+## Reaching the replica: DSN shapes
+
+A replica has its own hostnames, and the routing differs by whether you use the direct endpoint or the pooler:
+
+Path · How the replica is addressed ·
+
+Direct · db.<ref>-rr-<region>-<suffix>.supabase.co:5432 — its own hostname, IPv6-only exactly like the primary. The IPv4 add-on covers replicas too (one PATCH gives both endpoints A records), but Supabase bills IPv4 per database, so it costs 2&times; while a replica exists. ·
+
+Pooler · Same host/port as the primary — routing is by username: postgres.<ref> reaches the primary, postgres.<ref>-rr-<region>-<suffix> reaches the replica (session mode :5432 for sluice). ·
+
+The password is identical to the primary (the role catalog replicates physically). Sanity-check which end you're on with SELECT pg_is_in_recovery() — t means you're on the replica.
+
+## CDC: point at the primary, never the replica
+
+CDC has to manage the sluice publication on the source, and CREATE/ALTER PUBLICATION cannot run on a standby. sluice refuses up front with the coded SLUICE-E-CDC-STANDBY-SOURCE steer (before the fix this surfaced as a raw SQLSTATE 25006 &ldquo;read-only transaction&rdquo; at publication ensure). PG 16+ standbys can technically host logical slots, but creation blocks on the primary's next running-xacts record and Supabase denies the pg_log_standby_snapshot() nudge that would unblock it — so the primary is the supported CDC source. Point sync start (and backup CDC chains) at db.<ref>.supabase.co, not the -rr- host.
+
+## The CDC preflight facts (on the primary)
+
+Once you're on the primary, three preconditions are worth knowing precisely — the first two are commonly mis-stated:
+
+- Slots and senders default to 10 on a fresh Micro project (max_replication_slots=10, max_wal_senders=10) — plenty for one stream, but a shared budget if Realtime or ETL also consume the project. An earlier probe recorded 5/5; Supabase raised the platform default, so treat the exact number as observed in-band, not fixed.
+
+- max_slot_wal_keep_size scales with the COMPUTE tier, not PITR — 512 MB on Micro, ~2048 MB on Small+. This is the WAL runway a detached or lagging stream has before Postgres invalidates the slot (wal_status='lost', re-snapshot required). The lever for a wider window is a compute-tier bump (~$15/mo Small), not the PITR add-on (~$100/mo) — PITR only reaches 2 GB transitively because it requires Small compute. sluice's slot-health probe pages at 70/85% of whatever the live bound is; keep detach windows short.
+
+- PITR is CDC-benign. Unlike Cloud SQL's binlog toggle (which destroys positions), enabling Supabase PITR leaves wal_level, max_wal_senders, max_replication_slots, and the logical-slot LSN untouched, adds no platform slot, and never rewinds a slot's position — it only extends archived-WAL retention. A sluice CDC stream behaves identically with PITR on or off.
+
+## Verifying against a replica: gate on replay lag
+
+sluice verify against a lagging replica compares the target with the replica's past — it can false-flag rows the copy correctly took from the primary moments earlier, or false-clean a stale target. Prefer verifying against the endpoint you copied from (self-consistent), and treat the primary as the authoritative sign-off target. If you must verify against a replica, first confirm pg_stat_replication.replay_lag on the primary is &asymp; 0 (or that receive-LSN == replay-LSN on the replica). Two operator traps:
+
+- now() - pg_last_xact_replay_timestamp() on the replica reads minutes of &ldquo;lag&rdquo; on an idle primary — it timestamps the last replayed transaction, not the true lag. Check replay_lag on the primary instead.
+
+- A long copy from a replica under primary write load can be cancelled by WAL-replay recovery conflicts once it outlives max_standby_streaming_delay. sluice fails loudly; re-run, or copy from the primary.
+
+## What sluice checks for you
+
+- SLUICE-E-CDC-STANDBY-SOURCE — a CDC source that is a read-only standby (pg_is_in_recovery() = true) is refused up front with the primary-endpoint remedy, instead of surfacing later as a raw read-only-transaction error at publication ensure.
+
+- Unreduced parallel snapshot on the standby — because pg_export_snapshot() works on a PG 16+ standby, sluice does not silently downgrade to a single-reader copy; the shared-snapshot parallel copy engages, byte-exact.
+
+- Slot-health paging on the live bound — the probe reads the actual max_slot_wal_keep_size and pages at 70/85% of it, so the alert reflects your compute tier rather than a hardcoded assumption.
+
+## Next steps
+
+- Migrating from Supabase — the primary-endpoint guide: IPv6-only direct host, Supavisor pooler modes, TLS, and float display vs identity.
+
+- Verify & reconcile — the verification sluice runs, and why it compares values, not display text.
+
+- Prepare a Postgres source — the slot lifecycle and retention story for the CDC leg on the primary.
+
+
+===============================================================
 # Migrating from DigitalOcean MySQL with sluice
 (https://sluicesync.com/docs/migrate-from-digitalocean-mysql/)
 
@@ -3725,6 +3796,251 @@ Defaults accept plaintext (sslMode: ALLOW_UNENCRYPTED_AND_ENCRYPTED) — a plain
 - Zero-downtime migration — the full sync → verify → cutover flow.
 
 - Field note: the transaction that lands in neither the snapshot nor the binlog — the seam FTWRL closes, and on Cloud SQL actually can.
+
+
+===============================================================
+# Migrating from Azure Database for MySQL (Flexible Server) with sluice
+(https://sluicesync.com/docs/migrate-from-azure-mysql/)
+
+The one required knob: binlog_row_image defaults to MINIMAL, under which binlog CDC silently loses UPDATEs (Bug 193) — set it FULL first. In exchange, Azure has the safest binlog retention of any managed MySQL probed (an honest 0 = never-expire default, no reaper), zero-setup public-CA TLS, and an -azure version fingerprint.
+
+Azure Database for MySQL (Flexible Server) works with sluice's vanilla mysql engine — cold copy, the CDC handoff, and a 35-minute-detached warm resume were all validated live (2026-07-17, Standard_B1ms, MySQL 8.0.45). Retention is the safest of any managed MySQL in this guide set, but Azure carries a different, sharper trap that must be fixed before any sync: the default row-image setting.
+
+## REQUIRED: set binlog_row_image=FULL before any sync
+
+Azure's platform default is binlog_row_image=MINIMAL — the only major managed-MySQL platform that defaults to it — and under MINIMAL, binlog CDC loses UPDATEs silently (Bug 193). INSERT and DELETE are unaffected and row counts stay equal, so only column content diverges — a 0.2% content drift that sails under a default-depth sample. Set it FULL before sync start:
+
+    az mysql flexible-server parameter set --resource-group <rg> --server-name <server> \
+      --name binlog_row_image --value FULL
+
+It's dynamic — applies in ~20 seconds with no restart. Verify with SELECT @@binlog_row_image;. sluice's CDC preflight also refuses a non-FULL row image at stream start with the coded SLUICE-E-CDC-ROW-IMAGE-PARTIAL — but set the knob regardless, and if a stream already ran under MINIMAL, re-verify with full-table sampling (--sample-rows-per-table sized to the table), not the default sample depth: a 0.2% divergence is exactly what the default sampling design point can miss.
+
+## Retention: the safest defaults of any managed MySQL probed
+
+binlog_expire_logs_seconds defaults to 0 (no time-based expiry) — an honest never-expire — and, unlike DigitalOcean, Vultr, and RDS, no out-of-band reaper was observed: files survived 85+ minutes, multiple rotations, and an on-demand full backup without a single purge. A detached stream warm-resumes after long gaps on pure defaults (a 35-minute detach — fatal on RDS/DO defaults — replayed its backlog exactly). The concern inverts: binlogs accrue against your storage until you bound them.
+
+    az mysql flexible-server parameter set --resource-group <rg> --server-name <server> \
+      --name binlog_expire_logs_seconds --value 604800   # live, no restart
+
+Purge appears platform-scheduled and lazy — files can outlive the configured window by tens of minutes. Manual PURGE BINARY LOGS is denied (no SUPER/BINLOG_ADMIN).
+
+## Connection + privilege notes
+
+- TLS is mandatory AND zero-setup — plaintext is refused (require_secure_transport=ON, the only probed managed-MySQL platform that refuses it), and a bare ?tls=true just works: the server chain validates against the public roots already in your system store. No CA download, no --source-tls-ca.
+
+- FTWRL works (RELOAD honored) — sluice's concurrent frozen-snapshot cold copy runs with no fallback WARNs.
+
+- Replication grants (REPLICATION SLAVE/REPLICATION CLIENT) are present on the admin user out of the box; binlog_format=ROW is read-only at the platform (no MIXED trap); gtid_mode=OFF by default (file/position CDC is fine); sql_require_primary_key=OFF; stock-strict sql_mode (no DigitalOcean-style ANSI surprise).
+
+- Host pattern *.mysql.database.azure.com; the in-band fingerprint is @@version ending in -azure. One-time subscription step: az provider register --namespace Microsoft.DBforMySQL must have completed before instance creation works.
+
+    sluice sync start \
+        --source-driver mysql --source 'myadmin:pass@tcp(myserver.mysql.database.azure.com:3306)/app?tls=true' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --stream-id azure-app
+
+## What sluice checks for you
+
+- SLUICE-E-CDC-ROW-IMAGE-PARTIAL — a source streaming partial binlog row images (binlog_row_image != FULL) is refused at CDC start, because that is exactly the silent-UPDATE-loss shape; the remedy is the az &hellip; parameter set above.
+
+- No retention advisory — correctly. Azure's defaults hold binlogs, so the host-pattern retention WARNs that fire on DigitalOcean and Vultr have nothing to warn about here; a quiet preflight is the right result, not a blind spot.
+
+- Loud position-invalid recovery — a resume from a purged position (only reachable if you bounded retention aggressively) is an explicit WARN plus a fresh cold start, or a hard stop under --no-auto-resnapshot.
+
+## Next steps
+
+- Migrating from Azure Database for PostgreSQL — the Postgres sibling: self-grantable REPLICATION, and the best TLS story in the series.
+
+- Migrating from Google Cloud SQL MySQL — the other managed MySQL whose retention variable is honest.
+
+- Field note: the row image that drops your UPDATEs — why MINIMAL loses column content while counts stay equal.
+
+- Field note: the retention variable that tells five different truths — where Azure's never-expire default sits among the five.
+
+
+===============================================================
+# Migrating from Azure Database for PostgreSQL (Flexible Server) with sluice
+(https://sluicesync.com/docs/migrate-from-azure-postgres/)
+
+The self-grantable REPLICATION attribute (ALTER ROLE ... WITH REPLICATION works as the admin user), the best TLS story in the series (verify-full with zero setup against public roots), and the wal_level flip that needs an explicit restart. The built-in PgBouncer is General-Purpose-tier-plus only.
+
+Azure Database for PostgreSQL (Flexible Server) works with sluice's vanilla postgres engine — live-validated 2026-07-17 (PG 16.14) as a migration and slot-based CDC source: byte-identical bulk migrate on md5 ground truth (NaN in numeric[], &plusmn;Infinity, denormal floats, 2-D arrays with NULL elements) and exact CDC convergence with a clean snapshot → CDC handoff.
+
+## Enabling logical replication (three self-service steps)
+
+No ticket, all self-service — but mind the explicit restart in step 2:
+
+- Set wal_level=logical — Azure exposes the GUC directly (no provider-specific alias). It is static, so the command returns with the change pending:
+
+    az postgres flexible-server parameter set --resource-group <rg> --server-name <server> \
+      --name wal_level --value logical
+
+- Restart explicitly — the parameter does NOT take effect until you restart (~1 minute; contrast Cloud SQL, whose patch restarts for you). Verify afterward with SHOW wal_level;:
+
+    az postgres flexible-server restart --resource-group <rg> --name <server>
+
+- Grant the connecting role the REPLICATION attribute — this works as the (non-superuser) admin user, because Azure patches the grant for azure_pg_admin members. It is exactly recovery path (a) in sluice's replication-capability refusal:
+
+    ALTER ROLE <role> WITH REPLICATION;
+
+The platform replication role is grant-restricted and irrelevant here — there is no RDS-style membership model; the attribute is the mechanism. Baseline before the flip: wal_level=replica regardless of backup settings (no RDS-style retention-0 &rArr; minimal trap), max_replication_slots=10 / max_wal_senders=10 (unchanged by the flip), and zero platform slots.
+
+## TLS: the best story in the series
+
+TLS is mandatory (plaintext refused at pg_hba) and the certificate chain is public (Microsoft/DigiCert roots). So sslmode=verify-full works with no CA download and no sslrootcert — use it on every Azure DSN; it is both the strictest and the zero-config mode (better than the per-instance-CA fetch that DigitalOcean, Cloud SQL, and Vultr require). If a client stack with its own bundled CA fails verification, it's missing an OS trust store, not an Azure quirk.
+
+    sluice sync start \
+        --source-driver postgres \
+        --source 'postgres://myadmin:pass@myserver.postgres.database.azure.com:5432/app?sslmode=verify-full' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --stream-id azure-pg-app
+
+## The built-in PgBouncer (General Purpose tier and up)
+
+Azure's built-in PgBouncer requires the General Purpose tier or higher (port 6432 on the same hostname when enabled; it cannot be enabled at all on Burstable) and is expected to strip replication like the Supavisor class — untested. Connect sluice to port 5432.
+
+## Provisioning friction
+
+Microsoft.DBforPostgreSQL provider registration is a one-time subscription step, and region availability differs per subscription even from the MySQL flexible service — a region that provisions MySQL can refuse PG with &ldquo;The location is restricted.&rdquo; Plan a region fallback.
+
+## Decommissioning
+
+A cleanly stopped sluice stream leaves its (resumable) replication slot in place; when you're done for good, drop it — an abandoned slot retains WAL and will eventually fill the instance disk:
+
+    sluice slot drop --yes <slot>
+
+## What sluice checks for you
+
+- SLUICE-E-CDC-REPLICATION-PERMISSION — if the connecting role lacks the REPLICATION attribute, the preflight refuses with the exact ALTER ROLE &hellip; WITH REPLICATION remedy (recovery path (a)), which on Azure the admin user can run itself.
+
+- wal_level preflight refusal — CDC before the parameter flip + restart refuses at startup rather than failing opaquely mid-cold-start.
+
+- Slot-lifecycle honesty — sluice slot list / slot drop surface and manage the replication slot explicitly, so a crashed stream's leftover slot is visible rather than a silent WAL leak.
+
+## Next steps
+
+- Migrating from Azure Database for MySQL — the MySQL sibling and its required row-image knob.
+
+- Migrating from Google Cloud SQL Postgres — the other managed PG where ALTER ROLE &hellip; WITH REPLICATION is self-service.
+
+- Prepare a Postgres source — the full slot lifecycle, retention, and failover story.
+
+- Field note: replication slots don't die with your process — why an abandoned slot pins WAL.
+
+
+===============================================================
+# Migrating from Vultr Managed MySQL with sluice
+(https://sluicesync.com/docs/migrate-from-vultr-mysql/)
+
+The binlog-retention hazard is the headline: an out-of-band reaper purges every binlog file ~10–16 minutes after creation while the variable reads 3 days — and uniquely among managed MySQL, Vultr exposes no retention knob at all. That makes CDC migrate-and-cutover-shaped: keep any pause well under 10 minutes. Same Aiven-derived platform as DigitalOcean, without DigitalOcean's fix.
+
+Vultr Managed Databases for MySQL works with sluice's vanilla mysql engine — cold copy and the CDC handoff were validated live (2026-07-17, throwaway hobbyist single-node, MySQL 8.4.8). Vultr's DBaaS is the same Aiven-derived platform as DigitalOcean's, and it shares DO's headline hazard — without DO's escape hatch.
+
+## The binlog window, with no retention knob
+
+An out-of-band platform reaper purges every binlog file ~10–16 minutes after creation — while @@binlog_expire_logs_seconds reads 259200 (3 days), the identical value DigitalOcean shows. The variable reports a window the platform does not enforce (same platform lineage as DO), but where DO's config API accepts a binlog_retention_period, Vultr exposes no retention control at all: the advanced-options API rejects the option by name, the database-update API ignores it, and SET GLOBAL / SET PERSIST / PURGE BINARY LOGS are denied to vultradmin. There is nothing to configure — the ~10-minute floor is permanent. sluice emits a loud WARN at sync/backup start on the *.vultrdb.com host pattern, the only reliable signal (@@version_comment is a bare &ldquo;Source distribution&rdquo;).
+
+What that means in practice:
+
+- A CDC position older than ~10 minutes is unrecoverable (ErrPositionInvalid, auto-resnapshot).
+
+- An attached, caught-up stream is safe only while it stays caught up — files behind a live stream purge on schedule; the active file alone is immune (live-demonstrated).
+
+- A cold copy or restart gap longer than ~10 minutes can livelock auto-resnapshot with no remedy: each retry re-copies, exceeds the window again, and loses its position again.
+
+Treat Vultr MySQL as a migrate-and-cut-over source. Keep the sync stream attached and caught up from snapshot to cutover, and keep any planned pause well under 10 minutes. For long-running or pausable replication, this platform's defaults cannot support it — and there is no knob to change that.
+
+## Connection + schema gotchas (the DigitalOcean list, almost verbatim)
+
+- Host pattern *.vultrdb.com, on a nonstandard high port. Plaintext is accepted (require_secure_transport=OFF) but the unencrypted-binlog WARN applies. A bare ?tls=true fails — each cluster has a private CA (Aiven &ldquo;Project CA&rdquo;) embedded in the create/GET API response's ca_certificate field. Save it and pass --source-tls-ca (no separate CA-endpoint call, unlike DO):
+
+    # ca_certificate comes back inline in the database create/get API response — save it, then:
+    sluice sync start \
+        --source-driver mysql --source 'vultradmin:pass@tcp(vultr-prod-xxx.vultrdb.com:16751)/defaultdb' \
+        --source-tls-ca vultr-ca.pem \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --stream-id vultr-app
+
+- vultradmin has the replication grants CDC needs, plus RELOAD — so FTWRL works and sluice runs the concurrent frozen-snapshot cold copy with no fallback WARNs.
+
+- Default sql_mode includes ANSI — double-quoted strings are identifiers. Manual SQL against the source behaves differently than on stock MySQL.
+
+- sql_require_primary_key=ON — keyless tables cannot be created on a Vultr target.
+
+- local_infile=OFF (Vultr-as-target takes the batched-INSERT fallback); max_binlog_size is lowered to 64 MB; MySQL 8.4 is the only offered version.
+
+## What sluice checks for you
+
+- The unconditional retention WARN — sync and backup runs against a *.vultrdb.com host warn about the ~10-minute unconfigurable purge window. The wording is stronger than DigitalOcean's, because DO's message can point at a knob and Vultr's cannot.
+
+- Loud position-invalid recovery — a resume from a purged position surfaces as an explicit WARN and a fresh cold start; --no-auto-resnapshot converts that into a hard stop with named recovery commands.
+
+- --source-tls-ca refusals — the flag refuses to combine with a DSN-level tls= setting and refuses on non-MySQL engines, rather than silently ignoring a security flag.
+
+## Next steps
+
+- Migrating from Vultr Managed PostgreSQL — the Postgres sibling, which ships CDC-ready with zero preparation.
+
+- Migrating from DigitalOcean MySQL — the same Aiven reaper class, but with a config-API retention knob.
+
+- Field note: the retention variable that tells five different truths — where Vultr's no-knob case sits among the five.
+
+- Zero-downtime migration — the sync → verify → cutover flow, kept inside the 10-minute window.
+
+
+===============================================================
+# Migrating from Vultr Managed PostgreSQL with sluice
+(https://sluicesync.com/docs/migrate-from-vultr-postgres/)
+
+The only provider validated so far that ships CDC-ready with zero preparation: wal_level=logical and a REPLICATION-bearing admin role out of the box. Plus the pghoard_local platform-internal slot you must not drop, and Vultr's managed PgBouncer — the live counter-example where CDC actually traverses the pooler.
+
+Vultr Managed Databases for PostgreSQL works with sluice's vanilla postgres engine — live-validated 2026-07-16 (PG 17.10) as a migration and slot-based CDC source: byte-identical bulk migrate on md5 ground truth (NaN in numeric[], &plusmn;Infinity, denormal floats, 2-D arrays with NULL elements) and exact CDC convergence with a clean snapshot → CDC handoff.
+
+## Enabling logical replication: nothing to do
+
+Vultr (an Aiven-lineage platform) ships CDC-ready — the only provider validated so far where that is true. wal_level=logical is set out of the box, and the master user (vultradmin) carries the REPLICATION attribute from first boot, so sync start works with zero preparation. max_replication_slots / max_wal_senders default to 20/20 and are raisable to 64 via the database's advanced options. For a custom role, ALTER ROLE <role> WITH REPLICATION works as vultradmin (no superuser needed — the platform patches the grant, like Cloud SQL and Azure).
+
+    sluice sync start \
+        --source-driver postgres \
+        --source 'postgres://vultradmin:pass@vultr-prod-xxx.vultrdb.com:16751/defaultdb?sslmode=require' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --stream-id vultr-pg-app
+
+## The pghoard_local slot is platform-internal
+
+Every Vultr PG instance carries an always-active physical replication slot named pghoard_local (Aiven's pghoard backup daemon). sluice knows it: sluice slot list shows it labeled platform-internal, sluice slot drop refuses it without --force, and the slot-health probe (scoped to sluice's own slot) never flags it. Leave it alone — never drop it, and don't count it as a leaked consumer. It's the Aiven-lineage sibling of Neon's wal_proposer_slot.
+
+## TLS
+
+Plaintext is refused server-side; sslmode=require works out of the box, and sslmode=verify-full works with the project CA, which is delivered inline in the database create/get API response (ca_certificate field) — save it and pass it via ?sslrootcert=<path> on the DSN. System roots do not verify (private per-project CA).
+
+## The connection pooler: CDC actually traverses it
+
+Vultr's managed PgBouncer pools listen on the primary hostname at port + 1 with dbname=<poolname> (the API does not expose this — it's the platform convention). Unlike the Neon / Supavisor / RDS-Proxy pooler class, replication connections pass through (modern PgBouncer &ge; 1.24 forwards them 1:1 to the server): both bulk migrate (parallel, snapshot-pinned, no statement-cache trip) and slot-based CDC — slot creation, streaming, warm resume, clean stop — were validated end-to-end through a transaction-mode pool. This is the live counter-example that makes the &ldquo;a pooler always strips replication&rdquo; claim provider-dependent.
+
+Prefer the direct port anyway: a pool sized N permanently holds N of the plan's small connection budget (22 on the cheapest plan). Note that sluice's pooler-host WARN does not fire here — the pool hostname equals the primary's, only the port differs — which on Vultr is harmless, but it also means &ldquo;no WARN&rdquo; is not evidence of &ldquo;not a pooler&rdquo; on this provider.
+
+## Decommissioning
+
+A cleanly stopped sluice stream leaves its (resumable) replication slot in place; when done for good, sluice slot drop --yes <slot> — an abandoned slot retains WAL against the instance disk. (pghoard_local stays; see above.)
+
+## What sluice checks for you
+
+- Slot-health monitoring that ignores pghoard_local — Vultr's platform slot is never flagged as a leaked consumer, and slot drop refuses it without --force.
+
+- SLUICE-E-CDC-REPLICATION-PERMISSION — present as a safety net, though on Vultr the default vultradmin already carries the attribute, so it stays quiet on defaults.
+
+- Parallel copy through the pool with no statement-cache trip — the transaction-mode pool didn't trip pgx's statement cache in the validation run, so parallel copy engaged; a pool-exhaustion risk at high parallelism is the reason to prefer the direct port.
+
+## Next steps
+
+- Migrating from Vultr Managed MySQL — the MySQL sibling, whose binlog retention is the opposite story (no knob, ~10-minute floor).
+
+- Migrating from Neon — another managed PG with an always-present platform slot to leave alone.
+
+- Prepare a Postgres source — the full slot lifecycle, retention, and failover story.
+
+- Field note: replication slots don't die with your process — why an abandoned slot pins WAL on the source.
 
 
 ===============================================================
@@ -5058,6 +5374,14 @@ Field notes are evergreen engine-behavior documentation, not release announcemen
 None of these require sluice to reproduce — they are properties of Postgres, MySQL, Vitess, SQLite, and the wire protocols and drivers around them. If you move data between databases for a living, several of them will eventually be your problem too.
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
+
+- 2026-07-17MariaDB MariaDB has no BEGIN, and won't tell you if your position survived — A MySQL transaction opens with a BEGIN QueryEvent; a MariaDB one opens with a MariadbGTIDEvent and no BEGIN at all, so a pump that only handles MySQL's GTIDEvent never advances its position. And you can't pre-check reachability: @@gtid_binlog_state is completely unchanged across PURGE BINARY LOGS, so a dead position looks live &mdash; the only honest signal is the stream throwing error 1236.
+
+- 2026-07-17MariaDB The type that migrates clean and corrupts under CDC — MariaDB's native uuid/inet6/inet4 round-trip perfectly under a bulk migrate &mdash; the driver hands them back as formatted text. Turn on CDC and the same columns can corrupt: the binlog carries the raw storage bytes, and the loudness is target-dependent &mdash; a Postgres target rejects the garbage string, a MySQL-family CHAR(36) silently accepts it. &ldquo;It migrated fine&rdquo; tells you nothing about the CDC path.
+
+- 2026-07-17MariaDB MariaDB accepts a geometry SRID it won't show you — Declare POINT REF_SYSTEM_ID=4326 and MariaDB stores the SRID &mdash; but SHOW CREATE TABLE echoes the column as a bare point DEFAULT NULL, and unlike MySQL 8 there's no srs_id catalog column. Read the SRID the obvious way and every geometry column silently comes back as SRID 0. The declared value lives only in the OGC-standard GEOMETRY_COLUMNS view.
+
+- 2026-07-17MariaDB The join that's 1:1 on MySQL 8 and fans out on MariaDB — MariaDB stores a JSON column as LONGTEXT plus an auto-CHECK named after the column, and its constraint names are unique per-table, not per-schema. A catalog join that's provably 1:1 on MySQL 8 becomes a cartesian fan-out on MariaDB &mdash; two tables with a meta JSON column each are enough to emit a duplicate CHECK and fail CREATE TABLE. And the fix can't be symmetric: MySQL 8's CHECK_CONSTRAINTS has no TABLE_NAME column to join on.
 
 - 2026-07-17MySQL & Vitess The retention variable that tells five different truths — binlog_expire_logs_seconds means five different things across DigitalOcean, RDS, Cloud SQL, Vultr, and Azure: on two it lies (days on the label, minutes in practice), on one it's honest and enforced, on one it's honest the other way (never-expire), and on one there's no knob behind it at all. The number isn't the answer &mdash; whether anything SQL-visible is decides whether a tool can detect the trap or only guess from the hostname.
 
@@ -8996,3 +9320,158 @@ On managed databases, binlog_expire_logs_seconds reports what the engine would d
 - MySQL Reference Manual — binlog_expire_logs_seconds (what the variable governs when the engine, not a platform reaper, owns expiry).
 
 - sluice managed-services notes and the five probe reports — DO, RDS, Cloud SQL, Vultr, and Azure MySQL retention observations and detect-first advisories.
+
+
+===============================================================
+# The join that's 1:1 on MySQL 8 and fans out on MariaDB
+(https://sluicesync.com/field-notes/mariadb-check-constraint-fanout/)
+
+MariaDB has no distinct JSON storage type — a JSON column is LONGTEXT plus an auto-generated CHECK named after the column — and its constraint names are unique per table, not per schema. A catalog join that is provably 1:1 on MySQL 8 becomes a cartesian fan-out on MariaDB, and because JSON columns are named after their column it fires for the most ordinary schema imaginable: two tables that each have a `meta` JSON column. The fix cannot be symmetric, because MySQL 8's CHECK_CONSTRAINTS has no TABLE_NAME column to join on.
+
+Observed — adding MariaDB type fidelity to sluice's schema reader (v0.99.270, ADR-0169, tracked as Bug 198), ground-truthed live on mariadb:11.4 and mariadb:10.11. It surfaced not on an exotic schema but on the plainest one: two tables, each with a JSON column of the same name.
+
+## JSON is a CHECK, named after the column
+
+MariaDB has no distinct JSON storage type. A column declared JSON is stored as LONGTEXT with an auto-generated constraint — a CHECK whose expression is exactly json_valid(<col>) and whose name is the column name. Declare meta JSON and you get a longtext column plus a CHECK named meta. That is the first surprise, and on its own it is harmless — sluice reads the column back as textual JSON and strips the MariaDB-internal auto-CHECK from the IR so it is not re-emitted as an invalid json_valid() CHECK on a Postgres target (a user-authored CHECK on the same column is preserved).
+
+## The uniqueness scope nobody advertises
+
+The second surprise is a catalog convention that differs between two engines sharing a wire protocol: MariaDB constraint names are unique per table; MySQL 8's are unique per schema. So two tables in one MariaDB database can each carry a constraint named meta — and because a JSON column's auto-CHECK is named after the column, they routinely do.
+
+sluice's reader joined information_schema.check_constraints to table_constraints on (constraint_schema, constraint_name) to recover each CHECK's expression. On MySQL 8 that pair is a key, so the join is 1:1. On MariaDB it is not: any two tables sharing a constraint name make the join fan out, each table picking up every same-named CHECK once per sharing table — and cross-contaminating, so table a captures table b's CHECK too. The emitted CREATE TABLE then carries duplicate CHECKs and is refused loudly at creation, before any row is copied:
+
+    Error 1826 (HY000): Duplicate CHECK constraint name 'meta'   -- MySQL / MariaDB target
+    SQLSTATE 42710: constraint "meta" ... already exists            -- Postgres target
+
+This is a loud failure, not silent loss — but it blocks migrate and backup/restore of an entirely ordinary schema. A single-table database does not reproduce it; you need two tables sharing a name, which JSON columns named meta, data, or payload hand you for free.
+
+## Why the fix can't be symmetric
+
+The obvious repair is to add table_name to the join predicate. It works on MariaDB. It does not compile on MySQL 8: information_schema.CHECK_CONSTRAINTS on MySQL 8 has no TABLE_NAME column at all — referencing it is a hard SQL error, not an empty result (live-verified; MariaDB's CHECK_CONSTRAINTS does carry it). So the corrected join has to be flavor-gated: MariaDB gets the extra cc.table_name = tc.table_name predicate, and the MySQL-8 query is left exactly as it was.
+
+## The transferable lesson
+
+Constraint-name uniqueness scope is a catalog convention, not a protocol guarantee — and it differs between engines that otherwise speak the same wire protocol and share most of information_schema. A query that is provably 1:1 on one is a cartesian product on the other, and the failure hides behind the most ordinary column name in your schema. When you port a metadata query across a MySQL-family flavor, re-derive the join's cardinality against the actual catalog, and expect the corrected version to be asymmetric: the columns you need to disambiguate on one engine may not exist on the other.
+
+## Primary sources
+
+- sluice ADR-0169 (MariaDB flavor Phase 2 — JSON identity and the check-constraint join fan-out) and CHANGELOG 0.99.270; live read-back on mariadb:11.4 and mariadb:10.11.
+
+- MariaDB Knowledge Base — CHECK constraints (per-table name scope; the implicit json_valid() constraint on JSON columns) and information_schema.CHECK_CONSTRAINTS (which carries TABLE_NAME).
+
+- MySQL 8.0 Reference Manual — information_schema.CHECK_CONSTRAINTS (schema-scoped names; no TABLE_NAME column).
+
+
+===============================================================
+# MariaDB accepts a geometry SRID it won't show you
+(https://sluicesync.com/field-notes/mariadb-geometry-srid-hidden/)
+
+Declare POINT REF_SYSTEM_ID=4326 and MariaDB really stores the SRID — but SHOW CREATE TABLE drops the attribute and echoes a bare `point DEFAULT NULL`, and unlike MySQL 8 there is no srs_id column in information_schema.COLUMNS. Parse the SRID the documented way and every geometry column silently reads back as SRID 0. The declared value lives only in the OGC-standard GEOMETRY_COLUMNS view.
+
+Observed — adding geometry support to sluice's MariaDB reader (v0.99.270, ADR-0169), on the mandatory live read-back the discipline requires. A geometry(POINT, 4326) column written and read straight back came out as SRID 0.
+
+## The attribute SHOW CREATE TABLE drops
+
+You declare a column p POINT REF_SYSTEM_ID=4326 on a MariaDB table, and the SRID is genuinely stored. But MariaDB will not hand it back the way you would expect. SHOW CREATE TABLE echoes the column as a bare &#96;p&#96; point DEFAULT NULL — the REF_SYSTEM_ID attribute is simply gone from the round-trip. The intuitive, documented plan — parse the SRID out of SHOW CREATE TABLE — therefore reads back SRID 0 on every geometry column, silently.
+
+And unlike MySQL 8, there is no fallback in the column catalog: MariaDB has no srs_id column in information_schema.COLUMNS. The place MySQL 8 stores the per-column SRID does not exist here.
+
+## Why the loss is quiet
+
+The drop inserts and queries without complaint, because MariaDB does not enforce a declared column SRID anyway — a value with a different SRID inserts fine, and ST_SRID is a property of each value, not of the column. So nothing downstream objects to a column that reads back as SRID 0. A spatial-reference identifier that silently degrades to 0 is exactly the kind of value-fidelity loss that never trips an error and never shows up in a row count.
+
+## Where the SRID actually lives
+
+The declared column SRID is recorded — just in the OGC-standard information_schema.GEOMETRY_COLUMNS view, keyed by schema, table, and column, in its SRID field (present and correct on both 11.4 and 10.11). Read it from there and write it back as MariaDB's REF_SYSTEM_ID=<n> type attribute (the grammar requires that attribute before NOT NULL), and a geometry(POINT, 4326) column round-trips its SRID in both directions.
+
+## The transferable lesson
+
+On MariaDB, the catalog surface that echoes a spatial reference and the one that stores it are different objects, and the intuitive one omits it. The only reason this did not ship as a silent SRID-to-0 loss is that the mandatory live read-back — write a known SRID, read it straight back, assert it survived — caught it exactly where a self-consistent fixture would have been blind. When a catalog attribute round-trips through SHOW CREATE, verify it against an independent view before trusting it; a value that inserts without complaint is not the same as a value that was preserved.
+
+## Primary sources
+
+- sluice ADR-0169 (MariaDB flavor Phase 2 — geometry SRID recovery) and CHANGELOG 0.99.270; live read-back on mariadb:11.4 and mariadb:10.11.
+
+- MariaDB Knowledge Base — geometry column definitions (REF_SYSTEM_ID) and the OGC GEOMETRY_COLUMNS table; SRID is per-value (ST_SRID), not enforced per column.
+
+- MySQL 8.0 Reference Manual — information_schema.COLUMNS.SRS_ID (the per-column SRID column MariaDB lacks).
+
+
+===============================================================
+# The type that migrates clean and corrupts under CDC
+(https://sluicesync.com/field-notes/mariadb-native-type-cdc/)
+
+MariaDB's native uuid/inet6/inet4 round-trip perfectly under a bulk migrate, because the driver hands them back as formatted text. Turn on CDC and the same columns can corrupt: the binlog carries the raw storage bytes, and the loudness is target-dependent — a Postgres target rejects the garbage string, a MySQL-family CHAR(36) silently accepts it. Bulk copy and the binlog are different transports with different representations.
+
+Observed — landing continuous CDC for sluice's MariaDB flavor (v0.99.271, ADR-0170). Phase 2 had already proven these types round-trip under bulk migrate; Phase 3's CDC path is where the representation split bites, and it is why sluice now refuses these columns loudly rather than stream them.
+
+## Clean under migrate
+
+MariaDB grew native network types over several releases: uuid (10.7+), inet6 (10.5+), and inet4 (10.10+). Under a bulk migrate they round-trip perfectly, because the query driver hands them back as formatted text — a CHAR(36) UUID string, a VARCHAR(45) address — which sluice maps to Postgres native uuid/inet or to a MySQL-family target's CHAR(36)/VARCHAR(45). Nothing to see; the value is lossless.
+
+## Corrupt under CDC
+
+Turn on CDC and the same columns can silently corrupt. The binlog does not carry the formatted text — it carries the raw storage bytes: 16 bytes for uuid and inet6, 4 for inet4. sluice's value-decoder was written for MySQL, where these values live in a VARCHAR column and the binlog bytes are the text. Point that decoder at MariaDB's raw storage bytes and it stringifies them into garbage.
+
+The trap is that the loudness is target-dependent. Feed the garbage string to a Postgres target and it rejects it — invalid input syntax for type uuid, SQLSTATE 22P02, loud and honest. Feed the same string to a MySQL-family target's CHAR(36)/VARCHAR(45) and it is silently accepted. So mariadb → mysql (or → mariadb, → planetscale) CDC was a reachable silent-corruption path while the Postgres direction failed cleanly. A type's loudness under one target is not its loudness under all.
+
+## The honest close: refuse, pre-data, on every target
+
+sluice's fix is a flavor-gated, source-side, coded refusal fired before any data moves, at all three points a native uuid/inet column could enter a stream: CDC stream start, cold-start snapshot open, and mid-stream schema add-table. It is the same refusal on every target — SLUICE-E-CDC-MARIADB-NATIVE-TYPE-UNSUPPORTED — because &ldquo;Postgres would have caught it&rdquo; is not a reason to let a MySQL-family target silently accept it. The steer is to bulk migrate those columns (unaffected) or exclude them from CDC scope.
+
+## Why not just decode the bytes?
+
+Because faithful decode is itself a value-fidelity hazard, not a formality. MariaDB's native uuid storage reorders the timestamp fields relative to string order, so a straight big-endian decode produces a valid-looking but wrong UUID — a corruption you only catch by ground-truthing the byte order on a live server. That work is a filed follow-up precisely because getting it wrong would trade a loud refusal for a silent, plausible-looking error. A loud refusal is the honest interim close.
+
+## The transferable lesson
+
+&ldquo;It migrated fine&rdquo; tells you nothing about the CDC path. Bulk copy and the replication log are different transports with different representations of the same column — one may hand you formatted text while the other hands you raw storage bytes — and a decoder proven on one is not proven on the other. And when a decode error's loudness depends on the target type, the safe design is a source-side refusal that does not depend on the target catching it: pin the class, refuse on all targets, and treat &ldquo;a plausible wrong value&rdquo; as worse than a stop.
+
+## Primary sources
+
+- sluice ADR-0170 (MariaDB flavor Phase 3 — CDC; native uuid/inet through CDC), CHANGELOG 0.99.271, and the coded error SLUICE-E-CDC-MARIADB-NATIVE-TYPE-UNSUPPORTED. Validated mariadb → mysql with the coded refusal and zero rows on the target; ground-truthed on mariadb:11.4 and mariadb:10.11.
+
+- MariaDB Knowledge Base — UUID, INET6, and INET4 data types (storage widths; UUID internal byte order).
+
+- Related field note: BIT crosses the wire as bytes, and the engines disagree on layout — another value whose wire representation is not its text.
+
+
+===============================================================
+# MariaDB has no BEGIN, and won't tell you if your position survived
+(https://sluicesync.com/field-notes/mariadb-gtid-no-begin/)
+
+Porting a MySQL binlog CDC reader to MariaDB surfaces two assumptions MySQL quietly baked in. A MariaDB transaction opens with a MariadbGTIDEvent and no BEGIN, so a pump that only handles MySQL's GTIDEvent never advances its position. And you cannot pre-check whether your resume position still exists: @@gtid_binlog_state is unchanged across PURGE BINARY LOGS, so a dead position looks live — the only honest signal is the stream itself throwing error 1236.
+
+Observed — porting sluice's MySQL binlog CDC reader to MariaDB (v0.99.271, ADR-0170), ground-truthed on mariadb:11.4 and mariadb:10.11. Two roadmap-draft premises were falsified by the live probe; both are below.
+
+## Assumption one: a transaction opens with BEGIN
+
+A MySQL transaction opens with a BEGIN QueryEvent, and a binlog reader keys its transaction boundary — and its GTID accumulation — off that event. MariaDB emits no BEGIN. A plain-DML transaction is exactly:
+
+    MARIADB_GTID  ->  TABLE_MAP  ->  WRITE/UPDATE/DELETE_ROWS  ->  XID
+
+and the opening event is a MariadbGTIDEvent — a different event type from MySQL's GTIDEvent. A pump that handles only GTIDEvent never sees a transaction boundary and never advances its GTID set, so every resume position it emits is stale. That is not a crash; it is a silent wrong-position gap on the next restart. The fix is to handle MariadbGTIDEvent as the transaction opener and synthesize the begin the vanilla pump expected.
+
+Folklore correction. The oft-repeated claim that MariaDB emits a per-transaction dummy QueryEvent you must filter &ldquo;for performance&rdquo; is false on the current LTS lines — there is no dummy event. Adding an over-broad filter &ldquo;to be safe&rdquo; is exactly how you would silently skip a real DDL.
+
+## Assumption two: you can ask whether your position still exists
+
+Before resuming, you would like to ask the server: is my saved position still in the binlog? On MySQL you can. On MariaDB there is no honest way. It has no GTID_SUBSET function and no @@gtid_purged. The tempting variable, @@gtid_binlog_state, reports the newest GTID per domain — and it is completely unchanged across PURGE BINARY LOGS. Ground-truthed: it read 0-1-15 before purging every prior file and 0-1-15 after. So a position below the purged floor is indistinguishable from a live one; a naive containment check returns a false &ldquo;reachable.&rdquo;
+
+The only faithful signal is the stream itself. Starting replication from a purged position throws error 1236 (&ldquo;Could not find GTID state requested by slave in any binlog files&hellip;&rdquo;) on the first event. sluice classifies that reactive error as an invalid position and routes it to a clean cold-start re-snapshot rather than a silent wrong-position stream. Reachability on MariaDB is only knowable by trying.
+
+## The shape underneath: domain GTIDs
+
+MariaDB's GTIDs are domain-server-sequence (e.g. 0-1-15), not MySQL's server_uuid:sequence. Cold-start reads the position from @@gtid_binlog_pos (not @@gtid_current_pos), and the reader parses, serializes, resumes, and advances the domain-based set per event. The master-status probe accepts SHOW BINLOG STATUS (MariaDB's spelling, working on 10.11+) alongside the older forms, so no supported server pays an extra round-trip.
+
+## The transferable lesson
+
+A &ldquo;resume position&rdquo; is only as safe as the server's ability to tell you it is still reachable — and that ability is not universal even across engines that share a binlog format. Two things a MySQL reader assumes for free, MariaDB withholds: a transaction boundary you can key on, and a way to test a position without streaming it. When you port a replication reader, do not trust that the transaction opens the way you expect or that a reachability check exists; verify both against the live server, and design the purged-position path around a reactive error, because that may be the only signal you get.
+
+## Primary sources
+
+- sluice ADR-0170 (MariaDB flavor Phase 3 — CDC; the MariadbGTIDEvent pump fix and the reachability model) and CHANGELOG 0.99.271; ground-truthed on mariadb:11.4 and mariadb:10.11.
+
+- MariaDB Knowledge Base — Global Transaction ID (domain-server-sequence), @@gtid_binlog_pos / @@gtid_binlog_state, and SHOW BINLOG STATUS.
+
+- Related field note: the position that leads or trails the data — another way a resume position and the data it names can disagree.

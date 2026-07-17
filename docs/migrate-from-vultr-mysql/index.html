@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from Vultr Managed MySQL with sluice — sluice docs</title>
+<meta name="description" content="The binlog-retention hazard is the headline: an out-of-band reaper purges every binlog file ~10–16 minutes after creation while the variable reads 3 days — and uniquely among managed MySQL, Vultr exposes no retention knob at all. That makes CDC migrate-and-cutover-shaped: keep any pause well under 10 minutes. Same Aiven-derived platform as DigitalOcean, without DigitalOcean's fix.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-vultr-mysql/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-supabase-read-replica/">Migrating from a Supabase read replica</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-postgres/">Migrating from Google Cloud SQL Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a><a class="lnk" href="/docs/migrate-from-azure-mysql/">Migrating from Azure Database for MySQL</a><a class="lnk" href="/docs/migrate-from-azure-postgres/">Migrating from Azure Database for PostgreSQL</a><a class="lnk active" href="/docs/migrate-from-vultr-mysql/">Migrating from Vultr Managed MySQL</a><a class="lnk" href="/docs/migrate-from-vultr-postgres/">Migrating from Vultr Managed PostgreSQL</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from Vultr Managed MySQL with sluice</h1>
+    <p class="subtitle">The binlog-retention hazard is the headline: an out-of-band reaper purges every binlog file ~10–16 minutes after creation while the variable reads 3 days — and uniquely among managed MySQL, Vultr exposes no retention knob at all. That makes CDC migrate-and-cutover-shaped: keep any pause well under 10 minutes. Same Aiven-derived platform as DigitalOcean, without DigitalOcean's fix.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#retention">The binlog window, with no retention knob</a></li><li><a href="#connection">Connection + schema gotchas (the DigitalOcean list, almost verbatim)</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>Vultr Managed Databases for MySQL works with sluice's vanilla <code>mysql</code> engine — cold copy and the CDC handoff were validated live (2026-07-17, throwaway hobbyist single-node, MySQL 8.4.8). Vultr's DBaaS is the same Aiven-derived platform as <a href="/docs/migrate-from-digitalocean-mysql/">DigitalOcean's</a>, and it shares DO's headline hazard — without DO's escape hatch.</p>
+
+<h2 id="retention">The binlog window, with no retention knob <a class="hlink" href="#retention" aria-label="Permalink to this section">#</a></h2>
+<p>An out-of-band platform reaper purges <strong>every binlog file ~10–16 minutes after creation</strong> — while <code>@@binlog_expire_logs_seconds</code> reads <strong>259200 (3 days)</strong>, the identical value DigitalOcean shows. The variable reports a window the platform does not enforce (same platform lineage as DO), but where DO's config API accepts a <code>binlog_retention_period</code>, <strong>Vultr exposes no retention control at all</strong>: the advanced-options API rejects the option by name, the database-update API ignores it, and <code>SET GLOBAL</code> / <code>SET PERSIST</code> / <code>PURGE BINARY LOGS</code> are denied to <code>vultradmin</code>. There is nothing to configure — the ~10-minute floor is permanent. sluice emits a loud <strong>WARN</strong> at <code>sync</code>/<code>backup</code> start on the <code>*.vultrdb.com</code> host pattern, the only reliable signal (<code>@@version_comment</code> is a bare &ldquo;Source distribution&rdquo;).</p>
+<p>What that means in practice:</p>
+<ul>
+  <li>A CDC position older than ~10 minutes is unrecoverable (<code>ErrPositionInvalid</code>, auto-resnapshot).</li>
+  <li>An attached, caught-up stream is safe <strong>only while it stays caught up</strong> — files behind a live stream purge on schedule; the active file alone is immune (live-demonstrated).</li>
+  <li>A cold copy or restart gap longer than ~10 minutes can <strong>livelock auto-resnapshot with no remedy</strong>: each retry re-copies, exceeds the window again, and loses its position again.</li>
+</ul>
+<div class="note"><strong>Treat Vultr MySQL as a migrate-and-cut-over source.</strong> Keep the sync stream attached and caught up from snapshot to cutover, and keep any planned pause well under 10 minutes. For long-running or pausable replication, this platform's defaults cannot support it — and there is no knob to change that.</div>
+
+<h2 id="connection">Connection + schema gotchas (the DigitalOcean list, almost verbatim) <a class="hlink" href="#connection" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li>Host pattern <code>*.vultrdb.com</code>, on a nonstandard high port. <strong>Plaintext is accepted</strong> (<code>require_secure_transport=OFF</code>) but the unencrypted-binlog WARN applies. A bare <code>?tls=true</code> fails — each cluster has a private CA (Aiven &ldquo;Project CA&rdquo;) embedded in the create/GET API response's <code>ca_certificate</code> field. Save it and pass <code>--source-tls-ca</code> (no separate CA-endpoint call, unlike DO):</li>
+</ul>
+<pre><code><span class="c"># ca_certificate comes back inline in the database create/get API response — save it, then:</span>
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'vultradmin:pass@tcp(vultr-prod-xxx.vultrdb.com:16751)/defaultdb' \
+    <span class="f">--source-tls-ca</span> vultr-ca.pem \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> vultr-app</code></pre>
+<ul>
+  <li><strong><code>vultradmin</code> has the replication grants</strong> CDC needs, plus RELOAD — so FTWRL works and sluice runs the concurrent frozen-snapshot cold copy with no fallback WARNs.</li>
+  <li><strong>Default <code>sql_mode</code> includes <code>ANSI</code></strong> — double-quoted strings are <em>identifiers</em>. Manual SQL against the source behaves differently than on stock MySQL.</li>
+  <li><strong><code>sql_require_primary_key=ON</code></strong> — keyless tables cannot be created on a Vultr <em>target</em>.</li>
+  <li><code>local_infile=OFF</code> (Vultr-as-target takes the batched-INSERT fallback); <code>max_binlog_size</code> is lowered to 64&nbsp;MB; MySQL <strong>8.4 is the only offered version</strong>.</li>
+</ul>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>The unconditional retention WARN</strong> — <code>sync</code> and <code>backup</code> runs against a <code>*.vultrdb.com</code> host warn about the ~10-minute unconfigurable purge window. The wording is stronger than DigitalOcean's, because DO's message can point at a knob and Vultr's cannot.</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position surfaces as an explicit WARN and a fresh cold start; <code>--no-auto-resnapshot</code> converts that into a hard stop with named recovery commands.</li>
+  <li><strong><code>--source-tls-ca</code> refusals</strong> — the flag refuses to combine with a DSN-level <code>tls=</code> setting and refuses on non-MySQL engines, rather than silently ignoring a security flag.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/migrate-from-vultr-postgres/">Migrating from Vultr Managed PostgreSQL</a> — the Postgres sibling, which ships CDC-ready with zero preparation.</li>
+  <li><a href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a> — the same Aiven reaper class, but with a config-API retention knob.</li>
+  <li><a href="/field-notes/managed-mysql-binlog-retention/">Field note: the retention variable that tells five different truths</a> — where Vultr's no-knob case sits among the five.</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the sync &rarr; verify &rarr; cutover flow, kept inside the 10-minute window.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-azure-postgres/">← Migrating from Azure Database for PostgreSQL</a><a class="next" href="/docs/migrate-from-vultr-postgres/">Migrating from Vultr Managed PostgreSQL →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-vultr-mysql/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

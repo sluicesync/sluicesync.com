@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from Azure Database for MySQL (Flexible Server) with sluice — sluice docs</title>
+<meta name="description" content="The one required knob: binlog_row_image defaults to MINIMAL, under which binlog CDC silently loses UPDATEs (Bug 193) — set it FULL first. In exchange, Azure has the safest binlog retention of any managed MySQL probed (an honest 0 = never-expire default, no reaper), zero-setup public-CA TLS, and an -azure version fingerprint.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-azure-mysql/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-supabase-read-replica/">Migrating from a Supabase read replica</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-postgres/">Migrating from Google Cloud SQL Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a><a class="lnk active" href="/docs/migrate-from-azure-mysql/">Migrating from Azure Database for MySQL</a><a class="lnk" href="/docs/migrate-from-azure-postgres/">Migrating from Azure Database for PostgreSQL</a><a class="lnk" href="/docs/migrate-from-vultr-mysql/">Migrating from Vultr Managed MySQL</a><a class="lnk" href="/docs/migrate-from-vultr-postgres/">Migrating from Vultr Managed PostgreSQL</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from Azure Database for MySQL (Flexible Server) with sluice</h1>
+    <p class="subtitle">The one required knob: binlog_row_image defaults to MINIMAL, under which binlog CDC silently loses UPDATEs (Bug 193) — set it FULL first. In exchange, Azure has the safest binlog retention of any managed MySQL probed (an honest 0 = never-expire default, no reaper), zero-setup public-CA TLS, and an -azure version fingerprint.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#row-image">REQUIRED: set binlog_row_image=FULL before any sync</a></li><li><a href="#retention">Retention: the safest defaults of any managed MySQL probed</a></li><li><a href="#connection">Connection + privilege notes</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>Azure Database for MySQL (Flexible Server) works with sluice's vanilla <code>mysql</code> engine — cold copy, the CDC handoff, and a 35-minute-detached warm resume were all validated live (2026-07-17, Standard_B1ms, MySQL 8.0.45). Retention is the safest of any managed MySQL in this guide set, but Azure carries a different, sharper trap that must be fixed before any sync: the default row-image setting.</p>
+
+<h2 id="row-image">REQUIRED: set binlog_row_image=FULL before any sync <a class="hlink" href="#row-image" aria-label="Permalink to this section">#</a></h2>
+<p>Azure's platform default is <code>binlog_row_image=MINIMAL</code> — the only major managed-MySQL platform that defaults to it — and under MINIMAL, binlog CDC <strong>loses UPDATEs silently</strong> (Bug 193). INSERT and DELETE are unaffected and <em>row counts stay equal</em>, so only column <em>content</em> diverges — a 0.2% content drift that sails under a default-depth sample. Set it FULL before <code>sync start</code>:</p>
+<pre><code>az mysql flexible-server parameter set <span class="f">--resource-group</span> &lt;rg&gt; <span class="f">--server-name</span> &lt;server&gt; \
+  <span class="f">--name</span> binlog_row_image <span class="f">--value</span> FULL</code></pre>
+<p>It's dynamic — applies in ~20&nbsp;seconds with no restart. Verify with <code>SELECT @@binlog_row_image;</code>. sluice's CDC preflight also refuses a non-FULL row image at stream start with the coded <code>SLUICE-E-CDC-ROW-IMAGE-PARTIAL</code> — but set the knob regardless, and <strong>if a stream already ran under MINIMAL</strong>, re-verify with full-table sampling (<code>--sample-rows-per-table</code> sized to the table), not the default sample depth: a 0.2% divergence is exactly what the default sampling design point can miss.</p>
+
+<h2 id="retention">Retention: the safest defaults of any managed MySQL probed <a class="hlink" href="#retention" aria-label="Permalink to this section">#</a></h2>
+<p><code>binlog_expire_logs_seconds</code> defaults to <strong>0 (no time-based expiry)</strong> — an honest never-expire — and, unlike <a href="/docs/migrate-from-digitalocean-mysql/">DigitalOcean</a>, <a href="/docs/migrate-from-vultr-mysql/">Vultr</a>, and <a href="/docs/migrate-from-rds-mysql/">RDS</a>, no out-of-band reaper was observed: files survived 85+ minutes, multiple rotations, and an on-demand full backup without a single purge. A detached stream warm-resumes after long gaps on pure defaults (a 35-minute detach — fatal on RDS/DO defaults — replayed its backlog exactly). The concern <em>inverts</em>: binlogs accrue against your storage until you bound them.</p>
+<pre><code>az mysql flexible-server parameter set <span class="f">--resource-group</span> &lt;rg&gt; <span class="f">--server-name</span> &lt;server&gt; \
+  <span class="f">--name</span> binlog_expire_logs_seconds <span class="f">--value</span> 604800   # live, no restart</code></pre>
+<p>Purge appears platform-scheduled and lazy — files can outlive the configured window by tens of minutes. Manual <code>PURGE BINARY LOGS</code> is denied (no SUPER/BINLOG_ADMIN).</p>
+
+<h2 id="connection">Connection + privilege notes <a class="hlink" href="#connection" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>TLS is mandatory AND zero-setup</strong> — plaintext is refused (<code>require_secure_transport=ON</code>, the only probed managed-MySQL platform that refuses it), and a bare <code>?tls=true</code> just works: the server chain validates against the public roots already in your system store. No CA download, no <code>--source-tls-ca</code>.</li>
+  <li><strong>FTWRL works</strong> (RELOAD honored) — sluice's concurrent frozen-snapshot cold copy runs with no fallback WARNs.</li>
+  <li>Replication grants (<code>REPLICATION SLAVE</code>/<code>REPLICATION CLIENT</code>) are present on the admin user out of the box; <code>binlog_format=ROW</code> is read-only at the platform (no MIXED trap); <code>gtid_mode=OFF</code> by default (file/position CDC is fine); <code>sql_require_primary_key=OFF</code>; stock-strict <code>sql_mode</code> (no DigitalOcean-style ANSI surprise).</li>
+  <li>Host pattern <code>*.mysql.database.azure.com</code>; the in-band fingerprint is <code>@@version</code> ending in <code>-azure</code>. One-time subscription step: <code>az provider register --namespace Microsoft.DBforMySQL</code> must have completed before instance creation works.</li>
+</ul>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'myadmin:pass@tcp(myserver.mysql.database.azure.com:3306)/app?tls=true' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> azure-app</code></pre>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong><code>SLUICE-E-CDC-ROW-IMAGE-PARTIAL</code></strong> — a source streaming partial binlog row images (<code>binlog_row_image != FULL</code>) is refused at CDC start, because that is exactly the silent-UPDATE-loss shape; the remedy is the <code>az &hellip; parameter set</code> above.</li>
+  <li><strong>No retention advisory — correctly.</strong> Azure's defaults hold binlogs, so the host-pattern retention WARNs that fire on DigitalOcean and Vultr have nothing to warn about here; a quiet preflight is the right result, not a blind spot.</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position (only reachable if you bounded retention aggressively) is an explicit WARN plus a fresh cold start, or a hard stop under <code>--no-auto-resnapshot</code>.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/migrate-from-azure-postgres/">Migrating from Azure Database for PostgreSQL</a> — the Postgres sibling: self-grantable REPLICATION, and the best TLS story in the series.</li>
+  <li><a href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a> — the other managed MySQL whose retention variable is honest.</li>
+  <li><a href="/field-notes/binlog-row-image-minimal/">Field note: the row image that drops your UPDATEs</a> — why MINIMAL loses column content while counts stay equal.</li>
+  <li><a href="/field-notes/managed-mysql-binlog-retention/">Field note: the retention variable that tells five different truths</a> — where Azure's never-expire default sits among the five.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-cloudsql-mysql/">← Migrating from Google Cloud SQL MySQL</a><a class="next" href="/docs/migrate-from-azure-postgres/">Migrating from Azure Database for PostgreSQL →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-azure-mysql/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from a Supabase read replica with sluice — sluice docs</title>
+<meta name="description" content="A Supabase read replica (an -rr- endpoint) is a fine bulk-migrate source that offloads the copy's read load from your primary — PG 16+ standby parallel snapshots engage unreduced — but CDC is refused: a replica can't host the sluice publication, so continuous sync must point at the primary. Plus the corrected CDC-preflight facts and how to verify safely against a lagging replica.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-supabase-read-replica/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk active" href="/docs/migrate-from-supabase-read-replica/">Migrating from a Supabase read replica</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-postgres/">Migrating from Google Cloud SQL Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a><a class="lnk" href="/docs/migrate-from-azure-mysql/">Migrating from Azure Database for MySQL</a><a class="lnk" href="/docs/migrate-from-azure-postgres/">Migrating from Azure Database for PostgreSQL</a><a class="lnk" href="/docs/migrate-from-vultr-mysql/">Migrating from Vultr Managed MySQL</a><a class="lnk" href="/docs/migrate-from-vultr-postgres/">Migrating from Vultr Managed PostgreSQL</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from a Supabase read replica with sluice</h1>
+    <p class="subtitle">A Supabase read replica (an -rr- endpoint) is a fine bulk-migrate source that offloads the copy's read load from your primary — PG 16+ standby parallel snapshots engage unreduced — but CDC is refused: a replica can't host the sluice publication, so continuous sync must point at the primary. Plus the corrected CDC-preflight facts and how to verify safely against a lagging replica.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#bulk">Bulk migrate: a first-class source</a></li><li><a href="#dsn">Reaching the replica: DSN shapes</a></li><li><a href="#cdc">CDC: point at the primary, never the replica</a></li><li><a href="#preflight">The CDC preflight facts (on the primary)</a></li><li><a href="#verify">Verifying against a replica: gate on replay lag</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>A Supabase read replica is managed Postgres running as a streaming-replication standby, so sluice drives it with the vanilla <code>postgres</code> engine. Live-probed 2026-07-17 (PG 17 replica, same region as its primary): it works as a <strong>bulk <code>sluice migrate</code> source</strong> with the full consistency story, and it is refused as a <strong>CDC source</strong> with a coded steer to the primary. This guide covers both, plus verifying safely against a replica. For the primary-endpoint essentials (IPv6-only direct host, Supavisor pooler modes, TLS, float display), start with the <a href="/docs/migrate-from-supabase/">main Supabase guide</a>.</p>
+
+<h2 id="bulk">Bulk migrate: a first-class source <a class="hlink" href="#bulk" aria-label="Permalink to this section">#</a></h2>
+<p>A read replica is a full bulk-migration source, and the reason to use one is load: it offloads the snapshot's read cost from the production primary. The consistency story is not reduced. <code>pg_export_snapshot()</code> is legal on a PG&nbsp;&ge;&nbsp;16 standby, so sluice's parallel, snapshot-pinned copy engages <strong>unreduced</strong> on the replica — one shared snapshot across every table and chunk reader, byte-exact (<code>float8send</code>-proven), evaluated at the replica's replay position.</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres \
+    <span class="f">--source</span> 'postgres://postgres.abcdefghijkl-rr-us-east-1-xyz:pass@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+
+<h2 id="dsn">Reaching the replica: DSN shapes <a class="hlink" href="#dsn" aria-label="Permalink to this section">#</a></h2>
+<p>A replica has its own hostnames, and the routing differs by whether you use the direct endpoint or the pooler:</p>
+<div class="table-scroll"><table>
+<thead><tr><th>Path</th><th>How the replica is addressed</th></tr></thead>
+<tbody>
+<tr><td><strong>Direct</strong></td><td class="desc"><code>db.&lt;ref&gt;-rr-&lt;region&gt;-&lt;suffix&gt;.supabase.co:5432</code> — its own hostname, IPv6-only exactly like the primary. The IPv4 add-on covers replicas too (one PATCH gives both endpoints A records), but Supabase bills IPv4 <strong>per database</strong>, so it costs 2&times; while a replica exists.</td></tr>
+<tr><td><strong>Pooler</strong></td><td class="desc">Same host/port as the primary — routing is <strong>by username</strong>: <code>postgres.&lt;ref&gt;</code> reaches the primary, <code>postgres.&lt;ref&gt;-rr-&lt;region&gt;-&lt;suffix&gt;</code> reaches the replica (session mode <code>:5432</code> for sluice).</td></tr>
+</tbody>
+</table></div>
+<p>The password is identical to the primary (the role catalog replicates physically). Sanity-check which end you're on with <code>SELECT pg_is_in_recovery()</code> — <code>t</code> means you're on the replica.</p>
+
+<h2 id="cdc">CDC: point at the primary, never the replica <a class="hlink" href="#cdc" aria-label="Permalink to this section">#</a></h2>
+<p>CDC has to manage the sluice publication on the source, and <code>CREATE</code>/<code>ALTER PUBLICATION</code> cannot run on a standby. sluice refuses up front with the coded <code>SLUICE-E-CDC-STANDBY-SOURCE</code> steer (before the fix this surfaced as a raw SQLSTATE 25006 &ldquo;read-only transaction&rdquo; at publication ensure). PG&nbsp;16+ standbys can technically host logical slots, but creation blocks on the primary's next running-xacts record and Supabase denies the <code>pg_log_standby_snapshot()</code> nudge that would unblock it — so the primary is the supported CDC source. Point <code>sync start</code> (and <code>backup</code> CDC chains) at <code>db.&lt;ref&gt;.supabase.co</code>, not the <code>-rr-</code> host.</p>
+
+<h2 id="preflight">The CDC preflight facts (on the primary) <a class="hlink" href="#preflight" aria-label="Permalink to this section">#</a></h2>
+<p>Once you're on the primary, three preconditions are worth knowing precisely — the first two are commonly mis-stated:</p>
+<ul>
+  <li><strong>Slots and senders default to 10 on a fresh Micro project</strong> (<code>max_replication_slots=10</code>, <code>max_wal_senders=10</code>) — plenty for one stream, but a shared budget if Realtime or ETL also consume the project. An earlier probe recorded 5/5; Supabase raised the platform default, so treat the exact number as observed in-band, not fixed.</li>
+  <li><strong><code>max_slot_wal_keep_size</code> scales with the COMPUTE tier, not PITR</strong> — 512&nbsp;MB on Micro, ~2048&nbsp;MB on Small+. This is the WAL runway a detached or lagging stream has before Postgres invalidates the slot (<code>wal_status='lost'</code>, re-snapshot required). The lever for a wider window is a compute-tier bump (~$15/mo Small), <strong>not</strong> the PITR add-on (~$100/mo) — PITR only reaches 2&nbsp;GB transitively because it requires Small compute. sluice's slot-health probe pages at 70/85% of whatever the live bound is; keep detach windows short.</li>
+  <li><strong>PITR is CDC-benign.</strong> Unlike Cloud SQL's binlog toggle (which destroys positions), enabling Supabase PITR leaves <code>wal_level</code>, <code>max_wal_senders</code>, <code>max_replication_slots</code>, and the logical-slot LSN untouched, adds no platform slot, and never rewinds a slot's position — it only extends archived-WAL retention. A sluice CDC stream behaves identically with PITR on or off.</li>
+</ul>
+
+<h2 id="verify">Verifying against a replica: gate on replay lag <a class="hlink" href="#verify" aria-label="Permalink to this section">#</a></h2>
+<p><code>sluice verify</code> against a lagging replica compares the target with the replica's <em>past</em> — it can false-flag rows the copy correctly took from the primary moments earlier, or false-clean a stale target. Prefer verifying against the endpoint you copied from (self-consistent), and treat the primary as the authoritative sign-off target. If you must verify against a replica, first confirm <code>pg_stat_replication.replay_lag</code> on the primary is &asymp;&nbsp;0 (or that receive-LSN == replay-LSN on the replica). Two operator traps:</p>
+<ul>
+  <li><code>now() - pg_last_xact_replay_timestamp()</code> on the replica reads <em>minutes</em> of &ldquo;lag&rdquo; on an <strong>idle</strong> primary — it timestamps the last replayed transaction, not the true lag. Check <code>replay_lag</code> on the primary instead.</li>
+  <li>A <strong>long</strong> copy from a replica under primary write load can be cancelled by WAL-replay recovery conflicts once it outlives <code>max_standby_streaming_delay</code>. sluice fails loudly; re-run, or copy from the primary.</li>
+</ul>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong><code>SLUICE-E-CDC-STANDBY-SOURCE</code></strong> — a CDC source that is a read-only standby (<code>pg_is_in_recovery()</code> = true) is refused up front with the primary-endpoint remedy, instead of surfacing later as a raw read-only-transaction error at publication ensure.</li>
+  <li><strong>Unreduced parallel snapshot on the standby</strong> — because <code>pg_export_snapshot()</code> works on a PG&nbsp;16+ standby, sluice does not silently downgrade to a single-reader copy; the shared-snapshot parallel copy engages, byte-exact.</li>
+  <li><strong>Slot-health paging on the live bound</strong> — the probe reads the actual <code>max_slot_wal_keep_size</code> and pages at 70/85% of it, so the alert reflects your compute tier rather than a hardcoded assumption.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/migrate-from-supabase/">Migrating from Supabase</a> — the primary-endpoint guide: IPv6-only direct host, Supavisor pooler modes, TLS, and float display vs identity.</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — the verification sluice runs, and why it compares values, not display text.</li>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — the slot lifecycle and retention story for the CDC leg on the primary.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-supabase/">← Migrating from Supabase</a><a class="next" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-supabase-read-replica/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

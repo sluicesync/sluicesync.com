@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from Vultr Managed PostgreSQL with sluice — sluice docs</title>
+<meta name="description" content="The only provider validated so far that ships CDC-ready with zero preparation: wal_level=logical and a REPLICATION-bearing admin role out of the box. Plus the pghoard_local platform-internal slot you must not drop, and Vultr's managed PgBouncer — the live counter-example where CDC actually traverses the pooler.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-vultr-postgres/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-supabase-read-replica/">Migrating from a Supabase read replica</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-postgres/">Migrating from Google Cloud SQL Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a><a class="lnk" href="/docs/migrate-from-azure-mysql/">Migrating from Azure Database for MySQL</a><a class="lnk" href="/docs/migrate-from-azure-postgres/">Migrating from Azure Database for PostgreSQL</a><a class="lnk" href="/docs/migrate-from-vultr-mysql/">Migrating from Vultr Managed MySQL</a><a class="lnk active" href="/docs/migrate-from-vultr-postgres/">Migrating from Vultr Managed PostgreSQL</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from Vultr Managed PostgreSQL with sluice</h1>
+    <p class="subtitle">The only provider validated so far that ships CDC-ready with zero preparation: wal_level=logical and a REPLICATION-bearing admin role out of the box. Plus the pghoard_local platform-internal slot you must not drop, and Vultr's managed PgBouncer — the live counter-example where CDC actually traverses the pooler.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#logical-replication">Enabling logical replication: nothing to do</a></li><li><a href="#pghoard-slot">The pghoard_local slot is platform-internal</a></li><li><a href="#tls">TLS</a></li><li><a href="#pooler">The connection pooler: CDC actually traverses it</a></li><li><a href="#decommissioning">Decommissioning</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>Vultr Managed Databases for PostgreSQL works with sluice's vanilla <code>postgres</code> engine — live-validated 2026-07-16 (PG 17.10) as a migration <strong>and</strong> slot-based CDC source: byte-identical bulk migrate on md5 ground truth (<code>NaN</code> in <code>numeric[]</code>, &plusmn;Infinity, denormal floats, 2-D arrays with NULL elements) and exact CDC convergence with a clean snapshot&nbsp;&rarr;&nbsp;CDC handoff.</p>
+
+<h2 id="logical-replication">Enabling logical replication: nothing to do <a class="hlink" href="#logical-replication" aria-label="Permalink to this section">#</a></h2>
+<p>Vultr (an Aiven-lineage platform) ships CDC-ready — the <strong>only provider validated so far where that is true</strong>. <code>wal_level=logical</code> is set out of the box, and the master user (<code>vultradmin</code>) carries the REPLICATION attribute from first boot, so <code>sync start</code> works with zero preparation. <code>max_replication_slots</code> / <code>max_wal_senders</code> default to 20/20 and are raisable to 64 via the database's advanced options. For a custom role, <code>ALTER ROLE &lt;role&gt; WITH REPLICATION</code> works as <code>vultradmin</code> (no superuser needed — the platform patches the grant, like Cloud SQL and Azure).</p>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> postgres \
+    <span class="f">--source</span> 'postgres://vultradmin:pass@vultr-prod-xxx.vultrdb.com:16751/defaultdb?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> vultr-pg-app</code></pre>
+
+<h2 id="pghoard-slot">The pghoard_local slot is platform-internal <a class="hlink" href="#pghoard-slot" aria-label="Permalink to this section">#</a></h2>
+<p>Every Vultr PG instance carries an always-active <em>physical</em> replication slot named <code>pghoard_local</code> (Aiven's pghoard backup daemon). sluice knows it: <code>sluice slot list</code> shows it labeled platform-internal, <code>sluice slot drop</code> refuses it without <code>--force</code>, and the slot-health probe (scoped to sluice's own slot) never flags it. <strong>Leave it alone</strong> — never drop it, and don't count it as a leaked consumer. It's the Aiven-lineage sibling of <a href="/docs/migrate-from-neon/#wal-proposer-slot">Neon's <code>wal_proposer_slot</code></a>.</p>
+
+<h2 id="tls">TLS <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
+<p>Plaintext is refused server-side; <code>sslmode=require</code> works out of the box, and <code>sslmode=verify-full</code> works with the project CA, which is delivered inline in the <code>database create</code>/<code>get</code> API response (<code>ca_certificate</code> field) — save it and pass it via <code>?sslrootcert=&lt;path&gt;</code> on the DSN. System roots do not verify (private per-project CA).</p>
+
+<h2 id="pooler">The connection pooler: CDC actually traverses it <a class="hlink" href="#pooler" aria-label="Permalink to this section">#</a></h2>
+<p>Vultr's managed PgBouncer pools listen on the <strong>primary hostname at port + 1</strong> with <code>dbname=&lt;poolname&gt;</code> (the API does not expose this — it's the platform convention). Unlike the Neon / Supavisor / RDS-Proxy pooler class, <strong>replication connections pass through</strong> (modern PgBouncer &ge; 1.24 forwards them 1:1 to the server): both bulk migrate (parallel, snapshot-pinned, no statement-cache trip) and slot-based CDC — slot creation, streaming, warm resume, clean stop — were validated end-to-end through a transaction-mode pool. This is the live counter-example that makes the &ldquo;a pooler always strips replication&rdquo; claim provider-dependent.</p>
+<p>Prefer the direct port anyway: a pool sized N permanently holds N of the plan's small connection budget (22 on the cheapest plan). Note that sluice's pooler-host WARN does <em>not</em> fire here — the pool hostname equals the primary's, only the port differs — which on Vultr is harmless, but it also means &ldquo;no WARN&rdquo; is not evidence of &ldquo;not a pooler&rdquo; on this provider.</p>
+
+<h2 id="decommissioning">Decommissioning <a class="hlink" href="#decommissioning" aria-label="Permalink to this section">#</a></h2>
+<p>A cleanly stopped sluice stream leaves its (resumable) replication slot in place; when done for good, <code>sluice slot drop --yes &lt;slot&gt;</code> — an abandoned slot retains WAL against the instance disk. (<code>pghoard_local</code> stays; see above.)</p>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>Slot-health monitoring that ignores <code>pghoard_local</code></strong> — Vultr's platform slot is never flagged as a leaked consumer, and <code>slot drop</code> refuses it without <code>--force</code>.</li>
+  <li><strong><code>SLUICE-E-CDC-REPLICATION-PERMISSION</code></strong> — present as a safety net, though on Vultr the default <code>vultradmin</code> already carries the attribute, so it stays quiet on defaults.</li>
+  <li><strong>Parallel copy through the pool with no statement-cache trip</strong> — the transaction-mode pool didn't trip pgx's statement cache in the validation run, so parallel copy engaged; a pool-exhaustion risk at high parallelism is the reason to prefer the direct port.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/migrate-from-vultr-mysql/">Migrating from Vultr Managed MySQL</a> — the MySQL sibling, whose binlog retention is the opposite story (no knob, ~10-minute floor).</li>
+  <li><a href="/docs/migrate-from-neon/">Migrating from Neon</a> — another managed PG with an always-present platform slot to leave alone.</li>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — the full slot lifecycle, retention, and failover story.</li>
+  <li><a href="/field-notes/postgres-slot-leaks/">Field note: replication slots don't die with your process</a> — why an abandoned slot pins WAL on the source.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-vultr-mysql/">← Migrating from Vultr Managed MySQL</a><a class="next" href="/docs/planetscale-schema-changes/">Online schema changes on PlanetScale →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-vultr-postgres/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
