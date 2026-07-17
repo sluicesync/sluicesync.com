@@ -3204,7 +3204,7 @@ Every Neon endpoint carries an always-present physical replication slot named wa
 
 Session vs transaction Supavisor pooler modes, the IPv6-only free-tier direct endpoint and what it means for CDC, float display vs float identity, and the platform schemas sluice already scopes out.
 
-Supabase is managed Postgres, so sluice drives it with the vanilla postgres engine. It has been live-validated as a bulk-migration source (2026-07-15) with bit-exact fidelity through both Supavisor pooler modes. Unlike Neon, wal_level=logical is on out of the box — the thing that gates CDC on Supabase is not a setting but network reachability of the direct endpoint. That's the first thing to understand.
+Supabase is managed Postgres, so sluice drives it with the vanilla postgres engine. It has been live-validated as a bulk-migration source (2026-07-15) with bit-exact fidelity through both Supavisor pooler modes, and as a continuous-CDC source (2026-07-16) over the direct endpoint. Unlike Neon, wal_level=logical is on out of the box — the thing that gates CDC on Supabase is not a setting but network reachability of the direct endpoint. That's the first thing to understand.
 
 ## The IPv6-only direct endpoint (the thing that bites first)
 
@@ -3238,7 +3238,7 @@ Prefer session mode (or the direct endpoint) for large copies. sluice's pooler-h
         --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
         --stream-id supabase-app
 
-CDC readiness. wal_level=logical is Supabase's default — nothing to enable (contrast Neon's project toggle). The CDC validation itself was environment-blocked in sluice's run (IPv4-only network + IPv6-only direct endpoint), not a sluice or Supabase defect; once the direct endpoint is reachable, the standard Postgres CDC path applies. See Prepare a Postgres source for the slot checklist.
+CDC readiness. wal_level=logical is Supabase's default — nothing to enable (contrast Neon's project toggle). CDC is validated end-to-end against the direct endpoint (2026-07-16): cold-start snapshot → logical-slot CDC → INSERT/UPDATE/DELETE convergence, a clean stop, and exactly-once warm-resume — with no slot leaked on the managed instance. The only prerequisite is reaching the direct endpoint: the free-tier default is IPv6-only, so from an IPv4-only host enable Supabase's IPv4 add-on (it swaps the endpoint's AAAA record for an A record while enabled, and reverts about ten seconds after you disable it — so don't disable it under a running stream from an IPv4-only host). A read replica is not a CDC source — sluice refuses a Supabase -rr- standby with SLUICE-E-CDC-STANDBY-SOURCE and steers you to the primary; see Migrating from a Supabase read replica for that recipe plus the CDC-preflight facts (slot budget, WAL-retention, PITR). See Prepare a Postgres source for the slot checklist.
 
 ## Float display is not float identity
 
@@ -3264,6 +3264,8 @@ Supabase ships its platform schemas (auth, storage, realtime, …) alongside pub
 - Transaction-mode fallback WARN — the SQLSTATE 42P05 statement-cache signature on :6543 triggers a WARN and a correct single-reader fallback rather than a failed copy; the WARN is your signal to switch to :5432 for parallelism.
 
 ## Next steps
+
+- Migrating from a Supabase read replica — the bulk-from-replica recipe, the CDC-standby refusal, and the corrected CDC-preflight facts.
 
 - Prepare a Postgres source — the CDC checklist once the direct endpoint is reachable.
 
