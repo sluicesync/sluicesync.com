@@ -87,6 +87,7 @@ const NAV = [
       { slug: "migrate-from-azure-postgres", label: "Migrating from Azure Database for PostgreSQL" },
       { slug: "migrate-from-vultr-mysql", label: "Migrating from Vultr Managed MySQL" },
       { slug: "migrate-from-vultr-postgres", label: "Migrating from Vultr Managed PostgreSQL" },
+      { slug: "migrate-from-mariadb", label: "Migrating from MariaDB" },
     ],
   },
   {
@@ -251,6 +252,8 @@ const FIELD_NOTES = [
   { slug: "read-replica-source-pg16", date: "2026-07-17", engine: "Postgres", label: "The read replica is a better migrate source and a worse CDC source than the docs", dek: "&ldquo;You can't do logical replication from a read replica&rdquo; is Postgres &le;15 lore, and PG 16 flipped both halves of it in opposite directions. <code>pg_export_snapshot()</code> now works on a standby &mdash; a fully snapshot-consistent bulk-migrate source the docs still say is impossible &mdash; while a slot <em>can</em> be created but <code>CREATE_REPLICATION_SLOT</code> hangs on an idle primary, and the publication DDL CDC needs can't run on a hot standby at all." },
   { slug: "gocloud-classifies-301-by-substring", date: "2026-07-17", engine: "Cross-cutting", label: "gocloud classifies \"301\" by substring", dek: "sluice's backup-chain CAS maps S3's <code>412 PreconditionFailed</code> to a coded conflict refusal &mdash; through gocloud, whose s3blob classifier carries <code>strings.Contains(err.Error(), \"301\")</code>. S3 stamps a random hex RequestID on every response, so about 2% of the time a genuine 412 is misread as <code>NoSuchBucket</code> &rarr; NotFound. An HTTP status code is a three-digit needle in a haystack of opaque identifiers; classify from the structured API error, never from a substring of the rendered string." },
   { slug: "active-healthy-not-liveness", date: "2026-07-17", engine: "Postgres", label: "ACTIVE_HEALTHY through a five-minute recovery", dek: "Flooding a 1&nbsp;GB Supabase Micro with WAL pushed it into crash recovery &mdash; every connection refused for five and a half minutes &mdash; while the Management API kept reporting <code>status=ACTIVE_HEALTHY</code>. A control-plane status field is an assertion of intent, not a data-plane liveness signal &mdash; misleading for backend readiness, so probe with a real query. And a logical slot's WAL runway is set by the compute tier (512&nbsp;MB Micro, 2&nbsp;GB Small), not the PITR add-on." },
+  { slug: "mariadb-default-collation-remap", date: "2026-07-17", engine: "MariaDB", label: "MariaDB 11.4's default collation doesn't exist on MySQL 8", dek: "MariaDB 11.4 defaults every string column to <code>utf8mb4_uca1400_ai_ci</code> (UCA 14.0.0) &mdash; a collation MySQL 8 has never heard of. Migrate to a MySQL-family target and sluice maps it to the closest equivalent, <code>utf8mb4_0900_ai_ci</code> (UCA 9.0.0), preserves every byte, and WARNs on nearly every string column. The warning is deliberate honesty, not a failure: the data is intact; only the sort order of the handful of characters that changed between UCA 14 and UCA 9 &mdash; and PAD semantics &mdash; can differ." },
+  { slug: "mariadb-geometry-axis-order", date: "2026-07-17", engine: "MariaDB", label: "MariaDB and MySQL 8 disagree on which coordinate comes first", dek: "Migrate a <code>POINT</code> in SRID 4326 from MariaDB to MySQL 8 and a naive <code>ST_AsText</code> diff shows longitude and latitude swapped. Nothing is corrupt: sluice copied the WKB faithfully and the point is in the same place &mdash; <code>ST_Latitude</code>/<code>ST_Longitude</code> match exactly. The two engines simply default to opposite axis orders when they <em>display</em> a geographic SRID; compare the coordinates, not the rendered text." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -371,6 +374,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "migrate-from-azure-postgres",
     "migrate-from-vultr-mysql",
     "migrate-from-vultr-postgres",
+    "migrate-from-mariadb",
     "planetscale-vitess",
     "planetscale-schema-changes",
     "planetscale-region-move",
@@ -3756,7 +3760,99 @@ ${pre(`sluice sync start \\
 </ul>
 `,
     prev: { href: "/docs/migrate-from-vultr-mysql/", label: "Migrating from Vultr Managed MySQL" },
-    next: { href: "/docs/planetscale-schema-changes/", label: "Online schema changes on PlanetScale" },
+    next: { href: "/docs/migrate-from-mariadb/", label: "Migrating from MariaDB" },
+  })
+);
+
+// nav-label: Migrating from MariaDB
+write(
+  "migrate-from-mariadb",
+  page({
+    slug: "migrate-from-mariadb",
+    title: "Migrating from MariaDB with sluice",
+    subtitle: "MariaDB is a first-class MySQL-family source engine — use the mariadb driver, not mysql. Bulk migrate to vanilla MySQL or PlanetScale round-trips cleanly (validated live); the divergences are all on the catalog and CDC side — a different COLUMN_DEFAULT dialect, per-table CHECK-constraint names, a geometry SRID it stores but won't echo, native uuid/inet types, domain-based GTIDs for continuous sync, and MariaDB 11.4's new default collation that remaps on a MySQL target.",
+    body: `
+<p>MariaDB works with sluice's <code>mariadb</code> engine — a MySQL-family flavor that shares vanilla MySQL's reader, decoder, type mapping, and binlog/loader path. A one-time <code>sluice migrate</code> from MariaDB into a MySQL-family target was validated live (2026-07-17): <strong>MariaDB 11.4 → vanilla MySQL 8.4</strong> and <strong>MariaDB 11.4 → PlanetScale (MySQL)</strong>, both completing all seven tables with a clean <code>verify --depth count</code> and byte-identical values on the representative rows. Everything that makes MariaDB <em>not</em> vanilla MySQL is on the catalog and CDC side — this guide is that list.</p>
+
+<div class="note"><strong>Use the <code>mariadb</code> driver name, not <code>mysql</code>.</strong> sluice fingerprints the server and steers you if the two are mismatched. The <code>mariadb</code> flavor exists precisely so the catalog-reading and CDC divergences below are handled correctly; pointing the vanilla <code>mysql</code> reader at a MariaDB server would misread its defaults and constraint catalog. Its <em>migrate</em> behavior matches the <code>mysql</code> engine cell-for-cell — see <a href="/docs/supported-directions/">Supported directions</a>.</div>
+
+<h2 id="connect">Source DSN + driver</h2>
+<p>MariaDB uses the same Go MySQL DSN grammar as vanilla MySQL — <code>user:pass@tcp(host:3306)/db</code>, with <code>?tls=true</code> (or <code>--source-tls-ca &lt;pem&gt;</code>) for an encrypted connection. Pick the target driver by where you're landing the data: <code>mysql</code> for self-hosted or managed vanilla MySQL, <code>planetscale</code> for PlanetScale MySQL. A dry run confirms the plan and the connection before anything writes:</p>
+${pre(`# MariaDB → vanilla MySQL
+sluice migrate \\
+    --source-driver mariadb --source 'app:pass@tcp(mariadb-host:3306)/app' \\
+    --target-driver mysql   --target 'root:pass@tcp(mysql-host:3306)/app' \\
+    --dry-run
+
+# MariaDB → PlanetScale (MySQL)
+sluice migrate \\
+    --source-driver mariadb     --source 'app:pass@tcp(mariadb-host:3306)/app' \\
+    --target-driver planetscale --target 'USER:PASS@tcp(aws.connect.psdb.cloud:3306)/mydb?tls=true'`)}
+<p>Everything below is target-agnostic unless a heading says otherwise — the vanilla-MySQL and PlanetScale runs produced identical target schemas and values.</p>
+
+<h2 id="collation">MariaDB 11.4's default collation remaps (the most visible WARN)</h2>
+<p>MariaDB 11.4 changed its default collation to <code>utf8mb4_uca1400_ai_ci</code> (UCA 14.0.0). That collation does not exist on a MySQL 8 server family, so on a MySQL or PlanetScale target sluice maps each affected string column to the closest equivalent — <code>utf8mb4_0900_ai_ci</code> — and emits a per-column <strong>WARN</strong> naming the remap. This fires on essentially every <code>VARCHAR</code>/<code>TEXT</code> column of an 11.4 source, so expect a run of them; it is the single most common MariaDB-specific line in the log:</p>
+${pre(`WARN mysql: column data is preserved; some source collations do not exist on this
+     target's server family, so the closest equivalent is used (edge-case sort/comparison
+     order may differ — UCA version and PAD semantics)
+     table=customers columns="email (utf8mb4_uca1400_ai_ci → utf8mb4_0900_ai_ci)"`)}
+<p><strong>Column data is preserved</strong> — the WARN is about sort/comparison semantics, not bytes. UCA 14.0.0 and UCA 9.0.0 order a handful of scripts differently and have different PAD semantics, so a rarely-material edge case is index/ORDER-BY ordering of exotic strings. If exact collation ordering matters to your application, review the affected columns; for the common case the closest-equivalent mapping is correct and lossless. Why this fires on nearly every column, and when it actually matters: <a href="/field-notes/mariadb-default-collation-remap/">MariaDB 11.4's default collation doesn't exist on MySQL 8</a>.</p>
+
+<h2 id="json-checks">JSON columns and the CHECK-constraint fan-out</h2>
+<p>MariaDB has no distinct <code>JSON</code> storage type: a <code>JSON</code> column is stored as <code>LONGTEXT</code> plus an auto-generated <code>CHECK (json_valid(&lt;col&gt;))</code> constraint <strong>named after the column</strong>. MariaDB's constraint names are unique <em>per table</em>, not per schema — so two tables that each have a <code>meta JSON</code> column both carry a CHECK named <code>meta</code>. A catalog join that is provably 1:1 on MySQL 8 fans out to a cartesian product on MariaDB, which historically could emit a duplicate CHECK and fail <code>CREATE TABLE</code>.</p>
+<p>The validation exercised exactly this shape — two tables (<code>orders</code>, <code>customers</code>) each with a <code>meta JSON</code> column, both source CHECKs named <code>meta</code> — and it migrated cleanly: on the MySQL-family target each <code>JSON</code> column lands as a native <code>json</code> type (the <code>json_valid</code> check is subsumed by the native type), <strong>no duplicate CHECK is emitted, and there is no fan-out</strong>. The mechanics of why the fix can't be symmetric (MySQL 8's <code>CHECK_CONSTRAINTS</code> has no <code>TABLE_NAME</code> column to join on) are in the field note: <a href="/field-notes/mariadb-check-constraint-fanout/">the join that's 1:1 on MySQL 8 and fans out on MariaDB</a>.</p>
+
+<h2 id="geometry">Geometry: the SRID it stores but won't show you</h2>
+<p>Declare <code>POINT REF_SYSTEM_ID=4326</code> and MariaDB stores the SRID — but <code>SHOW CREATE TABLE</code> echoes the column as a bare <code>point DEFAULT NULL</code>, and unlike MySQL 8 there is no <code>srs_id</code> catalog column. The declared value lives only in the OGC-standard <code>information_schema.GEOMETRY_COLUMNS</code> view, which is where sluice reads it. In the validation the target <code>places.geom</code> came back as <code>point /*!80003 SRID 4326 */</code> with <code>SRS_ID = 4326</code> — <strong>the SRID is carried, not silently reset to 0</strong>. Background: <a href="/field-notes/mariadb-geometry-srid-hidden/">MariaDB accepts a geometry SRID it won't show you</a>.</p>
+<div class="note"><strong>Verify geometry with <code>ST_Latitude</code>/<code>ST_Longitude</code>, not a raw <code>ST_AsText</code> diff.</strong> MariaDB stores an SRID-4326 point in <em>long-lat</em> order and its <code>ST_AsText</code> prints long-lat; MySQL 8 honors the EPSG:4326 <em>lat-long</em> axis order and prints lat-long by default. So a point that reads <code>POINT(-122.4194 37.7749)</code> on the MariaDB source reads <code>POINT(37.7749 -122.4194)</code> on the MySQL target — the coordinates <em>look</em> swapped, but the geographic location is identical: <code>ST_Latitude</code>/<code>ST_Longitude</code> on the target match the source exactly, and <code>ST_AsText(geom, 'axis-order=long-lat')</code> reproduces the source string. This is an engine axis-order convention difference, not data loss — but a naive text comparison will flag a false mismatch. The full mechanism (sluice moves the WKB byte-faithful; only the engines' output rendering defaults differ): <a href="/field-notes/mariadb-geometry-axis-order/">MariaDB and MySQL 8 disagree on which coordinate comes first</a>.</div>
+
+<h2 id="native-types">Native uuid / inet types</h2>
+<p>MariaDB has native <code>uuid</code>, <code>inet6</code>, and <code>inet4</code> column types. Under a bulk <code>migrate</code> they round-trip cleanly — the driver hands them back as formatted text, so <code>uuid</code> lands as <code>char(36)</code> and <code>inet6</code>/<code>inet4</code> as <code>varchar(45)</code> on the target, with byte-identical values (verified in the run: every UUID and IP string matched source to target). <strong>&ldquo;It migrated fine&rdquo; is a statement about the bulk path only</strong> — under continuous CDC these same columns travel as their <em>raw storage bytes</em>, a different code path. sluice decodes them faithfully through CDC as of v0.99.272 (canonical big-endian UUID, length-prefixed with trailing <code>0x00</code> stripped, BSD <code>inet_ntop6</code> text); the history of why this is a separate hazard from migrate is in <a href="/field-notes/mariadb-native-type-cdc/">the type that migrates clean and corrupts under CDC</a>.</p>
+
+<h2 id="defaults">The <code>COLUMN_DEFAULT</code> dialect</h2>
+<p>MariaDB's <code>information_schema</code> reports column defaults in a different dialect than MySQL 8: string defaults keep their quotes, a defaultless nullable column's default is the literal word <code>NULL</code>, and <code>DEFAULT CURRENT_TIMESTAMP</code> reads as <code>current_timestamp()</code> with an empty <code>extra</code>. A reader written to MySQL conventions would silently corrupt every default; the <code>mariadb</code> flavor reads them correctly (in the run, <code>DEFAULT CURRENT_TIMESTAMP</code>, <code>DEFAULT 'unnamed'</code>, and defaultless-nullable columns all reproduced on the target). The same dialect note also covers why SYSTEM VERSIONED tables and SEQUENCEs hide from the <code>BASE TABLE</code> filter: <a href="/field-notes/mariadb-catalog-default-dialect/">MariaDB reports its defaults in a different dialect</a>.</p>
+
+<h2 id="planetscale">Landing on PlanetScale</h2>
+<p>Nothing about the MariaDB source changes when the target is PlanetScale — the target-side behavior is the standard PlanetScale copy path, which differs from vanilla MySQL in a few ways worth expecting:</p>
+<ul>
+  <li><strong>Batched / interpolated INSERT, not <code>LOAD DATA</code></strong> — PlanetScale (a Vitess flavor) uses client-side parameter interpolation for the copy; sluice logs the write path at start.</li>
+  <li><strong>Connection-budget capping</strong> — copy parallelism is auto-capped to the tier's connection budget (in the run, effective copy budget of 2 against a PS-10), and sluice notes that a PlanetScale target is tier-CPU-bound, not connection-bound (ADR-0116): a larger tier or Metal is the real throughput lever, not more parallelism.</li>
+  <li><strong>Foreign keys</strong> — if your MariaDB schema has FK constraints, enable &ldquo;Allow foreign key constraints&rdquo; on the PlanetScale database before migrating (the test schema had none, so no toggle was needed). See <a href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a>.</li>
+  <li><strong>A plain <code>migrate</code> applies DDL directly</strong> — no deploy-request / safe-migrations interaction on the branch you point at.</li>
+</ul>
+
+<h2 id="verify">Verifying the migration</h2>
+<p>sluice treats <code>mariadb</code> and <code>mysql</code>/<code>planetscale</code> as distinct engines, so cross-engine content-hash verification (<code>--depth sample</code>) is not yet available for MariaDB → MySQL-family — it refuses loudly and steers you to count mode rather than half-checking:</p>
+${pre(`sluice verify \\
+    --source-driver mariadb --source 'app:pass@tcp(mariadb-host:3306)/app' \\
+    --target-driver mysql   --target 'root:pass@tcp(mysql-host:3306)/app' \\
+    --depth count
+# → 7 table(s) checked, 7 clean, 0 mismatched, 0 could not be verified`)}
+<p><code>--depth count</code> is the cross-engine verification path and passed clean in both runs. For content-level confirmation of the MariaDB-specific columns, spot-check them directly on the target — the geometry note above is the one place a naive comparison misleads.</p>
+
+<h2 id="cdc">Continuous sync: domain-based GTIDs</h2>
+<p>For a zero-downtime cutover (snapshot → CDC → cutover) rather than a one-time copy, a MariaDB source streams its <strong>native binlog</strong>, but MariaDB's GTIDs are <em>domain</em>-based (e.g. <code>0-100-38</code>) — a distinct format from MySQL's GTIDs, and sluice parses and resumes off them (since v0.99.271). Two MariaDB CDC realities to plan around, both covered in <a href="/field-notes/mariadb-gtid-no-begin/">MariaDB has no BEGIN, and won't tell you if your position survived</a>: a MariaDB transaction opens with a <code>MariadbGTIDEvent</code> and no <code>BEGIN</code> event, and you <em>cannot</em> pre-check whether a stored position is still reachable — <code>@@gtid_binlog_state</code> is unchanged across <code>PURGE BINARY LOGS</code>, so a dead position looks live and the stream throwing error 1236 is the only honest signal. The native <code>uuid</code>/<code>inet</code> columns decode faithfully through this path (v0.99.272).</p>
+
+<h2 id="checks">What sluice checks for you</h2>
+<ul>
+  <li><strong>Engine fingerprint steering</strong> — pointing the <code>mysql</code> driver at a MariaDB server (or vice-versa) is caught and steered, so the catalog-reading divergences are always handled by the right flavor.</li>
+  <li><strong>The collation-remap WARN</strong> — every string column whose source collation has no target-family equivalent is announced with the exact <code>from → to</code> mapping, never silently changed.</li>
+  <li><strong>No CHECK fan-out</strong> — MariaDB's per-table CHECK-constraint names are read per-table, so same-named auto-CHECKs on <code>JSON</code> columns across tables don't collide into a duplicate-constraint <code>CREATE TABLE</code> failure.</li>
+  <li><strong>Geometry SRID carried from <code>GEOMETRY_COLUMNS</code></strong> — the SRID that <code>SHOW CREATE</code> omits is read from the OGC catalog view, so it isn't silently reset to 0.</li>
+  <li><strong>Faithful native-type CDC decode</strong> — <code>uuid</code>/<code>inet6</code>/<code>inet4</code> decode from their raw binlog bytes rather than being stringified into a wrong value a MySQL-family target would silently accept.</li>
+  <li><strong>Cross-engine sample refusal</strong> — <code>verify --depth sample</code> refuses across the MariaDB/MySQL engine boundary instead of returning a misleading partial result; <code>--depth count</code> is the supported path.</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the full snapshot → CDC → verify → cutover flow, once the domain-GTID stream is running.</li>
+  <li><a href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a> — the PlanetScale target path in depth (the MariaDB source slots into the same recipe).</li>
+  <li><a href="/field-notes/mariadb-catalog-default-dialect/">MariaDB field notes</a> — the five catalog/CDC divergences, each with the ground truth behind it.</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — count-mode verification and what to do when it flags a delta.</li>
+</ul>
+`,
+    prev: { href: "/docs/migrate-from-vultr-postgres/", label: "Migrating from Vultr Managed PostgreSQL" },
+    next: { href: "/docs/planetscale-vitess/", label: "PlanetScale & Vitess" },
   })
 );
 
@@ -8573,6 +8669,85 @@ DEFAULT CURRENT_TIMESTAMP  CURRENT_TIMESTAMP          current_timestamp()
   <li>MariaDB Knowledge Base — <code>information_schema.COLUMNS</code> (<code>COLUMN_DEFAULT</code> quoting and the <code>NULL</code>-string convention), system-versioned tables and sequences (<code>TABLE_TYPE</code>), and the implicit <code>json_valid()</code> CHECK on <code>JSON</code> columns.</li>
   <li>MySQL 8.0 Reference Manual — <code>information_schema.COLUMNS</code> (bare default rendering, <code>DEFAULT_GENERATED</code> extra) and <code>SRS_ID</code>.</li>
   <li>Related field notes — <a href="/field-notes/inherits-rows-it-doesnt-own/">the parent table that returns rows it doesn't own</a> (the BASE-TABLE-filter miss on Postgres) and <a href="/field-notes/mariadb-check-constraint-fanout/">the join that's 1:1 on MySQL 8 and fans out on MariaDB</a> (more MariaDB catalog divergence).</li>
+</ul>
+`,
+  })
+);
+
+// nav-label: MariaDB 11.4's default collation doesn't exist on MySQL 8
+write(
+  "field-notes/mariadb-default-collation-remap",
+  page({
+    slug: "field-notes/mariadb-default-collation-remap",
+    title: "MariaDB 11.4's default collation doesn't exist on MySQL 8",
+    subtitle: "Migrate a MariaDB 11.4 schema to a MySQL-family target and sluice WARNs on nearly every string column — because 11.4 made utf8mb4_uca1400_ai_ci (UCA 14.0.0) the server default, and no MySQL 8 server implements it. sluice maps each affected column to the closest equivalent MySQL 8 has, utf8mb4_0900_ai_ci (UCA 9.0.0), preserves every byte, and surfaces the swap. This note is why that WARN is correct-by-design, not a data problem: the bytes are intact; only the collation weights (and PAD semantics) for a small set of characters change.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — live-validating MariaDB as a migrate source (2026-07-17): <strong>MariaDB 11.4 &rarr; vanilla MySQL 8.4</strong> and <strong>MariaDB 11.4 &rarr; PlanetScale (MySQL)</strong> on the shipped <code>mariadb</code> flavor (v0.99.268+). Both runs completed all seven tables with a clean <code>verify --depth count</code> — and both logged a collation WARN on essentially every string column. Nothing was wrong. This note is why that WARN is the tool being honest, not a failure.</p>
+
+<h2 id="the-warn">A warning on almost every VARCHAR</h2>
+<p>Point <code>sluice migrate</code> at a MariaDB 11.4 source landing on a MySQL or PlanetScale target and the log fills with a repeating line, once per table, naming each string column:</p>
+${pre(`WARN mysql: column data is preserved; some source collations do not exist on this
+     target's server family, so the closest equivalent is used (edge-case sort/comparison
+     order may differ — UCA version and PAD semantics)
+     table=customers columns="email (utf8mb4_uca1400_ai_ci → utf8mb4_0900_ai_ci)"`)}
+<p>On a schema of any width that is a lot of WARNs — it fires on essentially every <code>VARCHAR</code>/<code>TEXT</code>/<code>CHAR</code> column of an 11.4 source. The volume is alarming the first time you see it. It is also entirely expected, and it means exactly what it says.</p>
+
+<h2 id="mechanism">Where the collation went</h2>
+<p>MariaDB 11.4 changed its <em>server default</em> collation to <code>utf8mb4_uca1400_ai_ci</code> — the Unicode Collation Algorithm 14.0.0 weight tables, accent- and case-insensitive. So a column declared with no explicit <code>COLLATE</code> clause on an 11.4 server inherits <code>uca1400</code>, and that is now the common case rather than the exotic one.</p>
+<p>MySQL 8's newest UCA collation is <code>utf8mb4_0900_ai_ci</code> — UCA <strong>9.0.0</strong>. There is no <code>uca1400</code> collation on <em>any</em> MySQL 8 server, of any flavor. A <code>CREATE TABLE</code> that names <code>utf8mb4_uca1400_ai_ci</code> on a MySQL 8 target fails outright with <code>Error 1273: Unknown collation</code>. The two engines' newest Unicode collations are five UCA revisions apart, and the names don't overlap.</p>
+
+<h2 id="what-sluice-does">What sluice does — and why it isn't loss</h2>
+<p>sluice's cross-flavor collation remap (roadmap item 73) maps every <code>utf8mb4_uca1400_*</code> collation to the closest same-semantics collation the MySQL 8 target actually implements — <code>utf8mb4_uca1400_ai_ci &rarr; utf8mb4_0900_ai_ci</code>, and the accent/case-sensitive and binary variants alongside it — so the emitted DDL is valid on the whole supported MySQL-family floor instead of dying on <code>Error 1273</code>. Crucially, the remap is <strong>never silent</strong>: the CREATE-TABLE path emits one WARN per table naming each remapped column, and the ALTER paths emit one per column, both carrying the same message — <em>&ldquo;column data is preserved &hellip; the closest equivalent is used &hellip;&rdquo;</em>.</p>
+<p>That first clause is the whole point. A collation is a <em>comparison and sort rule</em>, not an encoding — it does not touch the stored bytes. Every string value migrates byte-for-byte identical; what the remap changes is only the rule the target uses to order and compare those bytes. And even that rule is <em>almost</em> the same: UCA 14.0.0 and UCA 9.0.0 assign identical weights to the overwhelming majority of characters, differing only for scripts and codepoints added or reweighted between the two Unicode revisions. The one genuine semantic delta beyond that is PAD: the <code>uca1400</code> collations are <code>PAD SPACE</code> while the <code>0900</code> set is <code>NO PAD</code>, so trailing-space handling in comparisons can differ. sluice deliberately declines to guess for language-specific tailorings (<code>utf8mb4_uca1400_de_*</code> and friends): those pass through verbatim and fail loudly on a target that lacks them, rather than silently substituting a different language's collation table.</p>
+
+<h2 id="verify">When to actually care</h2>
+<p>For the common case — application text compared for equality, sorted for display, indexed for lookup — the closest-equivalent mapping is correct and you can ignore the WARN. It matters only if your application depends on the <em>exact</em> collation ordering of characters that were reweighted between UCA 9.0.0 and 14.0.0, or on <code>PAD SPACE</code> trailing-space equality. If it does, review the named columns and set an explicit <code>COLLATE</code> that both engines share (or one you have validated on the target), rather than relying on the inherited default. A future UX polish could de-noise the per-column storm into a single per-run summary; the honesty of surfacing every swap is the part that must not change.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>&ldquo;Compatible&rdquo; engines drift at their defaults, and a version bump can move a default from exotic to universal overnight — MariaDB 11.4 turned <code>uca1400</code> from a column you had to ask for into the collation every string column inherits. When the target can't reproduce a source attribute exactly, the right move is a preserving substitution that fails loud when it can't be honest, and a WARN that says precisely what changed and what didn't. A warning on every column is not the tool struggling; it is the tool refusing to let a semantic difference cross the boundary unannounced. Read the message: <em>&ldquo;column data is preserved&rdquo;</em> is a promise, not a hedge.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice roadmap item 73 (MariaDB flavor) — <code>crossFlavorCollationRemap</code> and the <code>utf8mb4_uca1400_* &harr; utf8mb4_0900_*</code> remap tables in <code>internal/engines/mysql</code>, with the per-table (CREATE) and per-column (ALTER) WARNs; live-validated on <code>mariadb:11.4</code> → <code>mysql:8.4</code> and → PlanetScale (2026-07-17).</li>
+  <li>MariaDB Knowledge Base — Unicode collation versions; <code>utf8mb4_uca1400_ai_ci</code> as the 11.4 default (UCA 14.0.0, <code>PAD SPACE</code>).</li>
+  <li>MySQL 8.0 Reference Manual — <code>utf8mb4_0900_ai_ci</code> (UCA 9.0.0, <code>NO PAD</code>); <code>Error 1273 Unknown collation</code>.</li>
+  <li>Related — the <a href="/docs/migrate-from-mariadb/">Migrating from MariaDB</a> guide (this WARN in context), and sibling MariaDB notes: <a href="/field-notes/mariadb-catalog-default-dialect/">MariaDB reports its defaults in a different dialect</a> and <a href="/field-notes/mariadb-geometry-axis-order/">MariaDB and MySQL 8 disagree on which coordinate comes first</a> (another correct-by-design MariaDB divergence).</li>
+</ul>
+`,
+  })
+);
+
+// nav-label: MariaDB and MySQL 8 disagree on which coordinate comes first
+write(
+  "field-notes/mariadb-geometry-axis-order",
+  page({
+    slug: "field-notes/mariadb-geometry-axis-order",
+    title: "MariaDB and MySQL 8 disagree on which coordinate comes first",
+    subtitle: "Migrate a POINT in SRID 4326 from MariaDB to MySQL 8 and a naive ST_AsText diff shows the longitude and latitude swapped — POINT(-122.4194 37.7749) on the source reads POINT(37.7749 -122.4194) on the target. Nothing is corrupt. sluice copied the WKB faithfully and re-attached the SRID; the point is in the same place, and ST_Latitude/ST_Longitude match to the digit. The two engines just default to opposite axis orders when they render a geographic SRID as text. Compare the coordinates, not the string.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — live-validating MariaDB as a migrate source (2026-07-17): <strong>MariaDB 11.4 &rarr; vanilla MySQL 8.4</strong> and <strong>MariaDB 11.4 &rarr; PlanetScale (MySQL)</strong> on the shipped <code>mariadb</code> flavor. A <code>places</code> table with a <code>POINT REF_SYSTEM_ID=4326</code> column migrated with the SRID carried and a clean row count — and a first-glance <code>ST_AsText</code> comparison showed the coordinates reversed. This note is why that reversal is a display convention, not data loss.</p>
+
+<h2 id="the-swap">The diff that looks like corruption</h2>
+<p>The source point on MariaDB renders as <code>POINT(-122.4194 37.7749)</code> — longitude first. Read the same migrated point back on the MySQL 8 target with plain <code>ST_AsText</code> and you get <code>POINT(37.7749 -122.4194)</code> — latitude first. If your validation is a text diff of <code>ST_AsText(geom)</code> source vs target, every SRID-4326 geometry flags as a mismatch, and a raw byte comparison of <code>ST_AsBinary(geom)</code> differs too. It reads exactly like the coordinates were transposed in flight.</p>
+
+<h2 id="mechanism">What sluice actually moved</h2>
+<p>sluice's geometry value contract (<code>docs/value-types.md</code>) is <strong>raw WKB</strong> — Well-Known Binary — carried as bytes, with the column's SRID recorded separately (read, for MariaDB, from the OGC-standard <code>information_schema.GEOMETRY_COLUMNS</code> view, since MariaDB won't echo the SRID any other way — see the sibling note below). On write, the MySQL row writer prepends MySQL's on-wire <code>&lt;srid uint32 little-endian&gt;</code> prefix to that <em>byte-identical</em> WKB payload and hands it to the server. WKB, by the OGC standard, is always stored in Cartesian x-y (longitude-latitude) order regardless of SRID, and <code>ST_GeomFromWKB</code> reads it that way — so the point MySQL stores is the same point MariaDB held. The proof is in the coordinate accessors, which are axis-order-agnostic: on the target, <code>ST_Latitude(geom) = 37.7749</code> and <code>ST_Longitude(geom) = -122.4194</code> — matching the source to the digit. The location did not move.</p>
+
+<h2 id="convention">Two engines, two default axis orders</h2>
+<p>What differs is only how each engine <em>renders</em> a geographic SRID back to text and to output-WKB. EPSG:4326 formally defines its axis order as latitude-then-longitude. MySQL 8 honors that: its <code>ST_AsText</code> and <code>ST_AsBinary</code> default to lat-long for a geographic SRS. MariaDB defaults to long-lat (x-y) display for the same SRID. Same stored point, two conventions for printing it — so the text renderings disagree while the geometry is identical. It is the geospatial cousin of comparing two dates by their formatted strings: <code>07/08</code> and <code>08/07</code> can be the same day.</p>
+
+<h2 id="verify">How to compare correctly</h2>
+<p>Do not diff <code>ST_AsText(geom)</code> or <code>ST_AsBinary(geom)</code> across the two engines. Compare with the axis-order-agnostic accessors — <code>ST_Latitude(geom)</code> and <code>ST_Longitude(geom)</code> — or pin the rendering explicitly: on the MySQL 8 target, <code>ST_AsText(geom, 'axis-order=long-lat')</code> reproduces the MariaDB source string exactly. Either check confirms what the migration actually did: preserved the point, byte-faithful in the WKB and correct in its SRID.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A byte-level or text-level diff of a geometry across engines tests the engines' <em>rendering conventions</em>, not the fidelity of the value. sluice's job at the boundary is to move the WKB and the SRID intact, and it does — but SRID 4326 carries a standardized axis order that MySQL applies to its output functions and MariaDB does not, so the honest comparison is one that reads the coordinates by name, not by position. When a spatial value &ldquo;looks swapped&rdquo; after a cross-engine copy, reach for <code>ST_Latitude</code>/<code>ST_Longitude</code> before you reach for the panic button; a naive <code>ST_AsText</code> diff is comparing two spellings of the same place.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice geometry value contract (<code>docs/value-types.md</code>: <code>ir.Geometry</code> = raw WKB) and the MySQL row writer's <code>&lt;srid LE&gt;&lt;wkb&gt;</code> prefix; live-validated <code>mariadb:11.4</code> → <code>mysql:8.4</code> and → PlanetScale (2026-07-17), <code>ST_Latitude</code>/<code>ST_Longitude</code> matched source to target.</li>
+  <li>MySQL 8.0 Reference Manual — geographic-SRS axis order; the <code>axis-order</code> option to <code>ST_AsText</code>/<code>ST_GeomFromText</code>; WKB is SRS-independent x-y.</li>
+  <li>MariaDB Knowledge Base — geometry <code>ST_AsText</code> / axis-order handling for SRID 4326.</li>
+  <li>Related — the <a href="/docs/migrate-from-mariadb/">Migrating from MariaDB</a> guide, and sibling MariaDB notes: <a href="/field-notes/mariadb-geometry-srid-hidden/">MariaDB accepts a geometry SRID it won't show you</a> (where the SRID lives) and <a href="/field-notes/mariadb-default-collation-remap/">MariaDB 11.4's default collation doesn't exist on MySQL 8</a> (another correct-by-design MariaDB divergence).</li>
 </ul>
 `,
   })
