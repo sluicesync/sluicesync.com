@@ -14,7 +14,7 @@ sluice is an open-source tool for moving and keeping databases in sync between M
 Postgres, in all four directions. SQLite files (and a wrangler d1 export .sql dump),
 live Cloudflare D1 databases, CSV / TSV / NDJSON files, and mydumper / pscale dump
 directories also import into Postgres or MySQL, and SQLite is itself a migrate target —
-13 engines are registered today (run sluice engines to list them). It is built around three surfaces you can
+14 engines are registered today (run sluice engines to list them). It is built around three surfaces you can
 use independently or end to end:
 
 - Migrate — a one-shot schema + data copy, with deferred indexes/constraints for fast bulk load and per-table resume.
@@ -252,7 +252,7 @@ List the database engines built into this binary and their bulk-load / CDC capab
 
     sluice engines
 
-  13 engines are registered today: mysql (binlog CDC), planetscale and self-hosted vitess (both VStream CDC), postgres (logical-replication CDC), sqlite and d1 (migrate sources — sqlite is also a target — no CDC), the trigger-CDC engines postgres-trigger (slot-less Postgres), sqlite-trigger (local SQLite file), and d1-trigger (live Cloudflare D1), and the flat-file migrate sources csv, tsv, ndjson (ADR-0163) and mydumper (a mydumper / pscale database dump directory, ADR-0161). The vitess flavor shares the PlanetScale engine code with a self-hosted-vtgate capability set, and warm-resumes since v0.99.44.
+  14 engines are registered today: mysql (binlog CDC), planetscale and self-hosted vitess (both VStream CDC), mariadb (a MySQL-family flavor — bulk migrate source and target plus backup/restore/verify; CDC is not yet supported because MariaDB replicates with domain-based GTIDs the MySQL binlog reader can't resume, roadmap item 73), postgres (logical-replication CDC), sqlite and d1 (migrate sources — sqlite is also a target — no CDC), the trigger-CDC engines postgres-trigger (slot-less Postgres), sqlite-trigger (local SQLite file), and d1-trigger (live Cloudflare D1), and the flat-file migrate sources csv, tsv, ndjson (ADR-0163) and mydumper (a mydumper / pscale database dump directory, ADR-0161). The vitess flavor shares the PlanetScale engine code with a self-hosted-vtgate capability set, and warm-resumes since v0.99.44.
 
 Engine · Role · Notes ·
 
@@ -1093,6 +1093,12 @@ SLUICE-E-INDEX-DIRECT-DDL-DISABLED · runtime · PlanetScale safe-migrations is 
 SLUICE-E-CDC-REPLICATION-PERMISSION · runtime · The connecting role lacks the REPLICATION attribute. · ALTER ROLE x REPLICATION; see Prepare a Postgres source. ·
 
 SLUICE-E-CDC-POOLER-ENDPOINT · runtime · The replication-slot creation command was rejected by the source as a SQL syntax error (SQLSTATE 42601 on/near CREATE_REPLICATION_SLOT) — the signature of a connection pooler (Supabase Supavisor, pgbouncer) in front of the database: the pooler strips the replication=database startup parameter, so the replication-protocol command reaches a normal backend as plain SQL. Logical replication cannot run through a pooler. · Point --source at the DIRECT database endpoint (Supabase: the db.<ref>.supabase.co host, not *.pooler.supabase.com; note the direct endpoint is IPv6-only on Supabase — from an IPv4-only network the IPv4 add-on is required). See managed-services. ·
+
+SLUICE-E-CDC-ROW-IMAGE-PARTIAL · refusal · The MySQL source streams partial binlog row images — binlog_row_image is MINIMAL or NOBLOB, or binlog_row_value_options is PARTIAL_JSON (all read at CDC start: sync cold-start, warm resume, and backup incremental; the binlog_row_value_options read is tolerant since the variable only exists on MySQL &ge; 8.0.3). Under a partial image the UPDATE before-image omits non-key columns and the after-image omits unchanged columns, so sluice's CDC would silently lose every UPDATE (stream green, counts equal, only content diverges). Azure Database for MySQL Flexible Server ships MINIMAL as its platform default; DO/RDS/GCP ship FULL. sluice refuses at CDC start instead. · Set full row images: SET GLOBAL binlog_row_image=FULL and/or SET GLOBAL binlog_row_value_options='' (dynamic, no restart; applies to sessions opened after the change). On Azure: az mysql flexible-server parameter set --name binlog_row_image --value FULL. Segments already written under the partial mode stay partial — start the sync fresh after the flip. See managed-services. ·
+
+SLUICE-E-CDC-STANDBY-SOURCE · refusal · The CDC source is a read-only hot standby / read replica (pg_is_in_recovery() = true) — e.g. a Supabase read replica (db.<ref>-rr-…supabase.co) or any streaming-replication standby. CDC has to manage the sluice publication on the source, and CREATE/ALTER PUBLICATION cannot run on a standby (pre-fix this surfaced as a raw SQLSTATE 25006 "read-only transaction" error). PG 16+ standbys can host logical slots, but slot creation blocks on the primary's next running-xacts record and managed platforms gate the nudge, so the primary is the supported CDC source. · Point --source at the PRIMARY endpoint (Supabase: db.<ref>.supabase.co, not the -rr- replica host). A standby remains a fine source for bulk sluice migrate. See managed-services. ·
+
+SLUICE-E-CDC-MARIADB-UNSUPPORTED · refusal · CDC from a MariaDB source (sync start, backup stream/incremental, mid-stream schema add-table) is not supported yet: MariaDB replicates with domain-based GTID positions (e.g. 0-100-38) that sluice's MySQL binlog reader cannot parse or resume. The mariadb flavor's current surface is bulk migrate (source and target) plus backup/restore/verify. · Use bulk sluice migrate plus an application cutover, or sluice backup / sluice restore for point-in-time copies, until MariaDB CDC ships. ·
 
 SLUICE-E-CONNECT-IPV6-ONLY · runtime · The DSN host failed to resolve from this machine but carries an AAAA (IPv6) record — the host is IPv6-only and this network appears IPv4-only. Seen on Supabase free-tier direct endpoints, where IPv4 is a paid add-on. · For bulk migrate, use the provider's pooler endpoint (it has an A record); for CDC, the direct endpoint is required — a pooler cannot proxy replication — so enable the provider's IPv4 add-on or run sluice from an IPv6-capable network. See managed-services. ·
 
@@ -5053,6 +5059,18 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
+- 2026-07-17MySQL & Vitess The retention variable that tells five different truths — binlog_expire_logs_seconds means five different things across DigitalOcean, RDS, Cloud SQL, Vultr, and Azure: on two it lies (days on the label, minutes in practice), on one it's honest and enforced, on one it's honest the other way (never-expire), and on one there's no knob behind it at all. The number isn't the answer &mdash; whether anything SQL-visible is decides whether a tool can detect the trap or only guess from the hostname.
+
+- 2026-07-17MySQL & Vitess The platform default that eats every UPDATE — Azure Database for MySQL ships binlog_row_image=MINIMAL, under which an UPDATE's before-image carries only the primary key. A CDC applier builds a WHERE that matches nothing, replay-tolerance swallows the zero-row miss, and every UPDATE silently vanishes on a green stream. Azure is the first major platform to default to MINIMAL &mdash; and PARTIAL_JSON is the same class one knob over.
+
+- 2026-07-17Postgres The one-line fix that unpinned itself through the pooler — Pinning extra_float_digits=3 before you read sounds like one line. It's four &mdash; sluice renders floats as text in four different sessions, including the verifier that was blessing the corruption it exists to catch &mdash; and a bare SET before a COPY lands on two different backends under a transaction-mode pooler, silently unpinned, while the fix's own hint steered users onto that pooler.
+
+- 2026-07-17Postgres Your floats are fine; your diff tool is comparing two renderings — One server sets extra_float_digits=0, another the modern default of 1, and every text-level float comparison between them reports differences that don't exist &mdash; the bits are identical, only the rendering moved. The reassuring direction (data exact, report wrong) is what makes it waste hours; and if any stage of your pipeline moves floats as text, the setting stops being cosmetic.
+
+- 2026-07-17Postgres pgx's AfterConnect replaces, it doesn't chain — pgx stdlib gives you one slot to run per-connection setup. Install a session GUC pin and a PostGIS codec through it and the second silently evicts the first &mdash; no error, one feature just stops working on exactly the connections that need it. A single-writer callback slot is a shared resource; composition has to be the only way in.
+
+- 2026-07-17Postgres information_schema reports a numeric scale of 2046 — Since PG 15, numeric(5,-2) is legal &mdash; and information_schema.columns reports its scale as 2046. The catalog view masks an 11-bit two's-complement scale field without sign-extending it, so the portable, standards-blessed way to read numeric scale is quietly wrong for every negative-scale column. When a number looks impossible, read the typmod.
+
 - 2026-07-16Postgres The parent table that returns rows it doesn't own — Old-style INHERITS parents present to information_schema as ordinary, unrelated BASE TABLEs &mdash; while a SELECT on the parent, without ONLY, also returns every child's rows. The standard enumerate-and-copy recipe lands the child data twice, silently, exit 0 &mdash; and the same filter hides FDW foreign tables entirely.
 
 - 2026-07-16Cross-cutting The Parquet library nulled every false — Hand parquet-go rows as map[string]any and it decides NULL-vs-present for optional columns by asking whether the Go value is the zero value &mdash; so false, 0, "", and the epoch all silently export as NULL. And a Parquet NULL reads back as exactly the zero value, so the naive round-trip test goes green while the file says NULL.
@@ -5087,7 +5105,7 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-07-16Postgres Postgres writes +00; your parser expects +00:00 — ISO 8601 admits at least four spellings of a UTC offset and Postgres COPY picks the shortest: bare +00. A layout list that stops at &plusmn;hh:mm refuses Postgres's own default text output &mdash; and the naive fix reads a time zone out of every bare date's day-of-month, because 2026-07-02 ends in exactly the two-digit offset shape.
 
-- 2026-07-16Cross-cutting Object stores can now say "that changed since you read it" — the portability layer can't ask — Every writer of the backup-chain catalog was last-Put-wins. The textbook fix is compare-and-swap, and the stores now have it &mdash; but the portable object-store surface exposes only create-if-absent, so the guard is a CAS built from create-only claim markers, ground-truthed on real S3, with the millisecond residual it can't close stated honestly.
+- 2026-07-16Cross-cutting Object stores can now say "that changed since you read it" — the portability layer can't ask — Every writer of the backup-chain catalog was last-Put-wins. The textbook fix is compare-and-swap, and the stores now have it &mdash; but the portable object-store surface exposes only create-if-absent, so the guard is a CAS built from create-only claim markers, ground-truthed on real S3, GCS, and Azure &mdash; three stores that answer an occupied key with three different status codes, all absorbed in the error mapping &mdash; with the millisecond residual it can't close stated honestly.
 
 - 2026-07-14MySQL & Vitess MySQL's own certificate can't pass verify-full — The certificate mysqld generates for itself carries no SubjectAltName, and modern Go won't fall back to the Common Name &mdash; so tls=true (verify-full) can never validate a stock MySQL server. The secure middle ground is Postgres's sslmode=verify-ca: trust a CA, verify the chain, skip the hostname the cert can't satisfy.
 
@@ -7435,9 +7453,9 @@ MySQL's default TLS posture quietly forces you into verify-ca, and the reason is
 # Object stores can now say "that changed since you read it" — the portability layer can't ask
 (https://sluicesync.com/field-notes/object-store-create-only-cas/)
 
-Every writer of a backup chain shared one read-modify-write JSON catalog with no arbitration — last Put wins, loser's update silently vanishes. The fix wants compare-and-swap on the object, and the major stores now have it — but the portable object-store surface exposes only create-if-absent. You can build a CAS out of create-only (since ground-truthed live on real S3). You can also be honest about the millisecond window it can't close — and about the fact that the primitive that would close it exists upstream, one abstraction layer away.
+Every writer of a backup chain shared one read-modify-write JSON catalog with no arbitration — last Put wins, loser's update silently vanishes. The fix wants compare-and-swap on the object, and the major stores now have it — but the portable object-store surface exposes only create-if-absent. You can build a CAS out of create-only (since ground-truthed live on real S3, GCS, and Azure Blob — three stores that answer an occupied-key conditional write with three different status codes). You can also be honest about the millisecond window it can't close — and about the fact that the primitive that would close it exists upstream, one abstraction layer away.
 
-Observed — hardening sluice's backup-chain catalog (ADR-0160, shipped v0.99.246), then ground-truthed against real AWS S3 (us-east-1, 2026-07-16): conditional-PUT enforcement, exactly-one-winner concurrency, and sluice's own coded conflict refusal all observed end to end through the production path. The unguarded race was real but never field-observed; the design constraint — no portable conditional overwrite — turned out to be a property of the portability layer, not the stores, and that reversal is the note.
+Observed — hardening sluice's backup-chain catalog (ADR-0160, shipped v0.99.246), then ground-truthed against real AWS S3 (us-east-1), Google Cloud Storage (us-east1), and Azure Blob (eastus), all 2026-07-16: conditional-PUT enforcement, exactly-one-winner concurrency, and sluice's own coded conflict refusal observed end to end through the production path on all three. The unguarded race was real but never field-observed; the design constraint — no portable conditional overwrite — turned out to be a property of the portability layer, not the stores, and that reversal is the note.
 
 ## What happened
 
@@ -7463,9 +7481,21 @@ The scheme was originally pinned against MinIO and derived for AWS from document
 
 One nuance the probe surfaced without reproducing: under truly simultaneous in-flight conditional PUTs, S3 can hand the loser a 409 ConditionalRequestConflict instead of the 412. gocloud maps only the 412 to the failed-precondition error the guard's conflict branch keys on, so a 409 loser would fall through to the guard's capability-degrade path — an unguarded write plus a WARN whose &ldquo;the store may not support conditional PUTs&rdquo; wording would be wrong in that instant. Safe direction (the loser is unguarded, never corrupted-by-guard, and the store's own arbitration already refused it), but it's a mapped-wrong degrade rather than the coded refusal; sluice v0.99.263 closed it by treating the 409 as a conflict, not a capability signal — a 409 means another conditional request was in flight and nothing was written, so the PUT is retried once (a clean retry means this writer won after all), and any still-contended outcome routes to the coded chain-conflict refusal, never the degrade path. The transferable half: when you build on a conditional primitive, audit the error mapping too — a store can refuse your precondition with a status your library doesn't translate.
 
+## Three clouds, three loser shapes
+
+S3 was the first cloud row verified; GCS and Azure closed the matrix on the same day, and the interesting part is that all three answer &ldquo;that key already exists&rdquo; with a different status code — yet a portable guard survives all three, because the portability layer absorbs the divergence. The occupied-key create-only PUT returns:
+
+- S3: 412 PreconditionFailed — the normal loser, with the rare 409 ConditionalRequestConflict as an in-flight artifact under truly simultaneous PUTs (the one the v0.99.263 retry closes).
+
+- GCS: 412 conditionNotMet, uniformly — no 409-analogue exists. Under an eight-way simultaneous race GCS produced only 412s; it serializes conditional writes on the object generation, so there is no in-flight-conflict code to catch. The v0.99.263 S3-409 classifier never engages here — correct scoping, not a coverage gap.
+
+- Azure: 409 BlobAlreadyExists, uniformly — and this is Azure's normal occupied-key answer, not an anomaly. On Azure the codes are cleanly split: 409 is the create-only (If-None-Match: *) loser and 412 is the overwrite (If-Match) loser, where S3 folds both onto 412.
+
+Azure was the row that could have gone wrong. If gocloud mapped only the 412-family codes, every Azure conflict would have landed on the degrade-WARN path and the guard would be useless there. It doesn't: gocloud's azureblob driver explicitly routes BlobAlreadyExists (alongside the ConditionNotMet family) to the same failed-precondition error, with an in-source comment noting that the documented code is a variation of ConditionNotMet but BlobAlreadyExists &ldquo;has also been observed&rdquo; — the upstream maintainers hit exactly this divergence and absorbed it. Through sluice's own BlobStore, all three stores produced exactly one winner and the coded SLUICE-E-BACKUP-CHAIN-CONFLICT refusal for every loser, zero degrade-shaped errors, at both two-way and eight-way concurrency. Each store also has a residual throttling loser shape (GCS 429 rateLimitExceeded, Azure 503 ServerBusy) that maps to the degrade path rather than the coded refusal — safe direction, structurally unlikely against one-shot per-generation claim markers, not reproduced even at eight-way. The lesson the matrix carries: portability across object stores is real, but it lives in the error mapping, and the mapping is where a store's idiosyncratic status code either gets absorbed or silently breaks your guard.
+
 ## The residual, stated honestly
 
-A create-only CAS narrows the race; it cannot close it. Claim and Put are two operations, and a competitor whose observation lands inside another writer's claim-to-Put window — normally milliseconds, a marker PUT followed by the catalog PUT of an already-marshaled body — reads the pre-Put catalog, claims the next generation, and both writers Put unconditionally: last-write-wins again, undetected. The guard shrinks the silently-vulnerable window from the whole seconds-wide read-modify-write span to that millisecond gap. (The probe confirmed the window is real on live S3: the final catalog Put is an unconditional 200-overwrite.) True closure needs conditional overwrite on the catalog object itself — and the same probe confirmed that primitive now exists on the store: If-Match PUT returned 200 against the current ETag and 412 against a stale one, exactly the lost-update refusal the catalog wants. Closure no longer waits on the provider; it waits on the portability layer growing If-Match, or on a per-provider SDK write (aws-sdk-go-v2's PutObject takes it today). That residual is documented in the ADR and accepted for v1 — a guard whose limits you can state is worth more than one you believe is airtight.
+A create-only CAS narrows the race; it cannot close it. Claim and Put are two operations, and a competitor whose observation lands inside another writer's claim-to-Put window — normally milliseconds, a marker PUT followed by the catalog PUT of an already-marshaled body — reads the pre-Put catalog, claims the next generation, and both writers Put unconditionally: last-write-wins again, undetected. The guard shrinks the silently-vulnerable window from the whole seconds-wide read-modify-write span to that millisecond gap. (The probe confirmed the window is real on live S3: the final catalog Put is an unconditional 200-overwrite.) True closure needs conditional overwrite on the catalog object itself — and the probes confirmed that primitive now exists on all three stores: an If-Match / generation-match PUT returned success against the current ETag/generation and a failed-precondition against a stale one, exactly the lost-update refusal the catalog wants (S3's If-Match, GCS's ifGenerationMatch=<N>, Azure's If-Match). Closure no longer waits on any provider; it waits on the portability layer growing conditional overwrite, or on a per-provider SDK write (aws-sdk-go-v2's PutObject takes it today, GCS's storage.Conditions{GenerationMatch: N}, Azure's If-Match). That residual is documented in the ADR and accepted for v1 — a guard whose limits you can state is worth more than one you believe is airtight.
 
 ## The transferable lesson
 
@@ -7475,9 +7505,9 @@ If your coordination lives on an object store, inventory the conditional primiti
 
 - gocloud.dev/blob — WriterOptions.IfNotExist and its per-provider mapping (S3/Azure If-None-Match: *, GCS generation-0, local O_EXCL); no If-Match field in v0.46.0 (verified in source).
 
-- AWS S3 — conditional requests: If-None-Match creates and If-Match ETag overwrites (GA November 2024); 409 ConditionalRequestConflict on overlapping in-flight conditional writes.
+- AWS S3 — conditional requests: If-None-Match creates and If-Match ETag overwrites (GA November 2024); 409 ConditionalRequestConflict on overlapping in-flight conditional writes. GCS generation-match preconditions (ifGenerationMatch); Azure Blob If-None-Match: * (returning 409 BlobAlreadyExists on an occupied key) and If-Match.
 
-- Real-AWS ground-truth probe (2026-07-16, us-east-1) — the 412/409 matrix, exactly-one-winner concurrency, and wire-level confirmation that gocloud sends the precondition header through sluice's own BlobStore path.
+- Real-cloud ground-truth probes (2026-07-16) — S3 (us-east-1), GCS (us-east1), and Azure Blob (eastus): the per-store loser-code matrix (S3 412+rare-409, GCS uniform 412, Azure uniform 409 BlobAlreadyExists), exactly-one-winner concurrency at two- and eight-way, and wire-level confirmation that gocloud sends the precondition and maps each store's loser code to the failed-precondition error through sluice's own BlobStore path.
 
 - sluice ADR-0160 — the backup-chain concurrent-writer guard: the marker scheme, the rejected alternatives, and the claim-to-Put residual.
 
@@ -8630,3 +8660,339 @@ If you enumerate Postgres tables for any copy-shaped purpose, information_schema
 - PostgreSQL documentation — information_schema.tables (foreign tables are not BASE TABLE; inheritance is not represented).
 
 - sluice v0.99.253 changelog — the INHERITS refusal and foreign-table WARN census, including the verify-your-target advice for prior releases; the v0.92.0 changelog for the declarative twin (Bug 100).
+
+
+===============================================================
+# information_schema reports a numeric scale of 2046
+(https://sluicesync.com/field-notes/numeric-scale-2046/)
+
+Ask information_schema.columns for the scale of a numeric(5,-2) column and it answers 2046. The real scale is -2. The standards-blessed, portable way to read numeric precision and scale is quietly wrong for every negative-scale column — because the catalog view forgot to sign-extend a field the rest of Postgres sign-extends.
+
+Observed — while fixing sluice's Postgres schema reader for array-element type modifiers (Bug 195, fixed v0.99.265); the 2046 reading was ground-truthed on PostgreSQL 17. The sluice-side loss it caused — negative-scale and array-element numeric columns mis-sized on read — is fixed; the information_schema behavior it exposed is PostgreSQL's own and reproducible in seconds.
+
+## What happened
+
+Since PostgreSQL 15, numeric accepts a negative scale: numeric(5,-2) is a five-digit number rounded to the nearest hundred, so 12345 stores as 12300. It is a real, occasionally useful feature. It also introduced a corner the standards view never learned about.
+
+Inside the catalog, a column's precision and scale live packed into pg_attribute.atttypmod — a single integer. For numeric, the scale is an 11-bit two's-complement field. Postgres's own macro, NUMERIC_TYPMOD_SCALE, sign-extends that field when it decodes it, so a stored scale of &minus;2 comes back as &minus;2. information_schema.columns does not sign-extend. It masks the raw 11 bits and returns them as-is, so the &minus;2 comes back as its raw two's-complement encoding: 2046 (that is 2048 &minus; 2).
+
+The arithmetic is checkable by hand: numeric(5,-2) has typmod 329730; the low 16 bits are 2046, the next bits are the precision 5. Decode the typmod the way the server does and you get scale &minus;2; decode it the way the catalog view does — or with a naive typmod reader that masks without sign-extending — and you get 2046, a scale that exceeds the precision cap and is on its face impossible.
+
+## Why it matters
+
+Reading precision/scale from information_schema is the portable, engine-agnostic move — it is what you reach for precisely to avoid poking at pg_attribute and version-specific typmod encodings. That is what makes this quiet: the &ldquo;correct,&rdquo; standards-first path mis-sizes every negative-scale numeric column, and a tool that then recreates the column downstream carries the 2046 forward as if it were a real scale. The same 2046 also falls out of any hand-rolled typmod decoder that masks the scale bits without sign-extending them — the mistake is the catalog view's, and it is easy to reproduce in your own code.
+
+## Is the catalog "wrong"?
+
+Worth stating carefully. Negative numeric scale landed in PG 15; information_schema.columns predates it by decades and reports numeric_scale as an int derived from the typmod without the sign extension the type system now needs. Whether that is a documented limitation or an oversight worth an upstream report is a fair question we have not resolved — the fact itself is reproducible in seconds, so nothing downstream depends on the answer. The pragmatic reading: the standards view is a rendering of the catalog, and renderings go stale when the type system grows new corners.
+
+## Reproducing it
+
+Any PostgreSQL 15 or later:
+
+    CREATE TABLE t (n numeric(5,-2));
+
+    SELECT numeric_precision, numeric_scale
+      FROM information_schema.columns
+     WHERE table_name = 't' AND column_name = 'n';
+    -- numeric_precision | numeric_scale
+    --                 5 |          2046   <- the raw 11-bit encoding of -2
+
+    -- the ground truth, decoded the way the server does:
+    SELECT atttypmod FROM pg_attribute
+     WHERE attrelid = 't'::regclass AND attname = 'n';   -- 329730
+    -- scale     = sign-extend( (atttypmod - 4) & 0x7FF )  = -2
+    -- precision = ((atttypmod - 4) >> 16) & 0xFFFF        =  5
+
+## What sluice does about it
+
+sluice's Postgres reader now decodes the numeric typmod directly and sign-extends it the way NUMERIC_TYPMOD_SCALE does, preferring the typmod over information_schema for the numeric family — scalar columns and array elements alike. It keeps information_schema only as a fallback for the case where the typmod genuinely isn't available (a DOMAIN-unwrapped column carries atttypmod = -1).
+
+## The transferable lesson
+
+When a number out of information_schema looks impossible — a scale larger than its own precision, a length that can't be right — don't paper over it; go read the typmod, and decode it the way the server does, sign extension included. The standards view is a convenience projection of the catalog, and every time the type system grows a new corner (negative scale here, and there will be others), the projection can lag it. 2046 is the tell that you have crossed one of those corners.
+
+## Primary sources
+
+- PostgreSQL documentation — arbitrary-precision numbers (negative scale for numeric, PG 15+) and information_schema.columns.
+
+- PostgreSQL source — the NUMERIC_TYPMOD_SCALE / NUMERIC_TYPMOD_PRECISION typmod macros (the sign-extended decode the catalog view omits).
+
+- sluice Bug 195 and CHANGELOG v0.99.265 — the negative-scale/array-element typmod fix and the 2046 ground-truth on PG 17.
+
+
+===============================================================
+# pgx's AfterConnect replaces, it doesn't chain
+(https://sluicesync.com/field-notes/pgx-afterconnect-replaces/)
+
+pgx stdlib gives you one slot to run setup on each new physical connection. Install two features through it — a session GUC pin and a PostGIS codec registration — and the second silently evicts the first. Whichever you register last is the only one that runs. No error, no warning; one of your two features just quietly stops working, on exactly the connections that need it.
+
+Observed — while wiring an engine-wide extra_float_digits pin as a per-connection default (Bug 194's belt, shipped v0.99.265). Caught during code review before it shipped, so this was never a released defect — but the trap is one refactor away for anyone using pgx's connection hooks, so it is worth writing down.
+
+## What happened
+
+Fixing a float-rendering class (a server default of extra_float_digits=0 rounds floats rendered as text) called for a belt-and-suspenders default: every pgx pool sluice opens should run SET extra_float_digits = 3 on each new physical connection. Why per-connection rather than trusting the typed decode path? Because the typed lanes are only immune while pgx returns binary results. A DSN carrying default_query_exec_mode=exec or simple_protocol flips pgx to text results, where the float decoder parses whatever the session happened to render. So the pin has to be a genuine per-connection default, not a one-shot on a single connection.
+
+The natural home for that is stdlib.OptionAfterConnect — a callback pgx runs after each connection opens. The problem is its shape: it is a single option that holds one function, and registering it replaces whatever was there. It does not chain. sluice's change applier already used AfterConnect to register the PostGIS geometry codec on its connections. Installing the float pin as a pool default the obvious way would have overwritten that registration — so the geometry codec would silently stop loading on exactly the pools that apply CDC changes. Wire it the other way and the pin is the one that gets dropped. Either ordering is a silent one-or-the-other: two features, one slot, last writer wins.
+
+## The mechanism, stated plainly
+
+OptionAfterConnect is a set-the-callback API, not an add-a-callback API. It reads like registration — &ldquo;run this after connect&rdquo; — but it is assignment: the field holds exactly one function, and each call clobbers the previous one. Two independent features that both legitimately need per-connection setup collide with no diagnostic, because assignment doesn't fail; it just wins.
+
+## What sluice does about it
+
+The fix is a one-line compose helper that explicitly chains hooks — it wraps the existing callback so both run, in order — and every place that needs AfterConnect installs through it. It is unit-pinned, so a future third hook can't quietly reintroduce the eviction: the test asserts that composing two hooks runs both.
+
+## The transferable lesson
+
+When a library exposes a single-slot callback for per-connection (or per-anything) setup, treat &ldquo;install my hook&rdquo; as &ldquo;overwrite whoever's hook was there.&rdquo; Before you add one, grep for existing installers of the same slot — and if you find one, don't reorder the two calls and call it fixed, because the collision will come back the next time someone adds a third. Make composition the only supported way to install: a helper that chains, and a test that fails if a raw assignment sneaks back in. This is the connection-hook cousin of a broader rule — a single-writer slot is a shared resource, and shared resources need an arbiter, not a convention.
+
+## Primary sources
+
+- pgx stdlib documentation — OptionAfterConnect (the per-connection callback and its last-wins assignment semantics) and the query exec modes (exec / simple_protocol) that select text vs binary results.
+
+- sluice Bug 194 review finding F2 and CHANGELOG v0.99.265 — the engine-wide extra_float_digits per-connection pin, the geometry-codec collision, and the composeAfterConnect helper with its unit pin.
+
+- sluice field note — the one-line fix that unpinned itself through the pooler (the float-rendering class this belt backs up).
+
+
+===============================================================
+# Your floats are fine; your diff tool is comparing two renderings
+(https://sluicesync.com/field-notes/extra-float-digits/)
+
+One server sets extra_float_digits=0, another runs the modern default of 1, and every text-level float comparison between them reports differences that do not exist. The stored bits are identical; only the rendering moved. The reassuring direction of this bug — data exact, report wrong — is exactly what makes it waste hours: everything you inspect by hand re-renders through the same setting that skewed the report.
+
+Observed — validating a Supabase-sourced migration (2026-07-15), where ::text comparisons disagreed while float8send proved the copy bit-exact. Internally part of roadmap item 69's Supabase leg. This is the reader-facing cut of the fact; the engineering story of pinning the setting across every session sluice renders in is its own note — the one-line fix that unpinned itself through the pooler (Bug 194, fixed v0.99.265).
+
+## What happened
+
+A float8 value has one binary identity and, historically, more than one text rendering. Since PostgreSQL 12 the default extra_float_digits is 1, which selects shortest-round-trip formatting: the fewest digits that parse back to exactly the same double. Before that the default was 0 — roughly 15 significant digits, a rendering that can round away the low bits of the printed form even though the stored value is untouched.
+
+Supabase ships extra_float_digits=0 as a server default. So a pipeline that copies floats between a stock-default source and a Supabase target — or the reverse — and then verifies with any text-level comparison (::text, a CSV export diff, a checksum over rendered rows) sees phantom mismatches on values whose double-precision bits are identical. The data is right. The report is wrong.
+
+## Why (the mechanism)
+
+Text formatting is a session/server GUC, not a property of the value. The same stored double renders differently under extra_float_digits 0 and 1, and any comparison performed at the text layer inherits whichever setting each session happened to have. The failure is doubly treacherous because it points in the reassuring direction: an operator who sees float diffs after a migration assumes the copy corrupted the data, when here the copy is provably exact and only the two renderings diverge.
+
+The proof, when you need it, is to compare at the layer where the value actually lives:
+
+    -- the binary identity of the stored value, rendering-independent:
+    SELECT md5(string_agg(float8send(f)::text, ',' ORDER BY id)) FROM t;
+
+    -- or pin the rendering before comparing through it:
+    SET extra_float_digits = 1;
+
+float8send returns the raw 8 bytes of the double; if those agree on both sides, the values agree, whatever the text says.
+
+## The part that isn't just cosmetic
+
+It is tempting to file this as a pure display concern — the bits are safe, so any binary copy is fine. That is true only for a pipeline that never renders a float as text. sluice does, in several places: a raw-copy lane that can move floats as server-rendered text, CDC paths that render tuple text server-side, and — the sharp edge — a verifier that hashes server-rendered ::text samples. In each of those, extra_float_digits governs the actual bytes crossing the boundary, so a source at 0 could round a value in transit, and the verifier could both report a false mismatch on identical data and, worse, a false clean: a source at 0 renders a true value byte-for-byte the same as a target holding that value's rounded corruption. A checker that reads through the setting under test cannot adjudicate it. sluice closed all of this in v0.99.265 by pinning extra_float_digits=3 in every session it renders a float in — the four-pin fix arc is the companion note. The point for anyone else: &ldquo;the bits are safe, text is cosmetic&rdquo; holds only until some layer of your pipeline moves the value as text.
+
+## Reproducing it
+
+Any Postgres 12+; no provider account needed (Supabase just ships the non-default as a server default):
+
+    SET extra_float_digits = 0;
+    SELECT pi()::float8::text;        -- 3.14159265358979    (15 digits, lossy text)
+
+    SET extra_float_digits = 1;
+    SELECT pi()::float8::text;        -- 3.141592653589793   (shortest round-trip)
+
+    -- same stored value both times; only the rendering moved:
+    SELECT float8send(pi());          -- \x400921fb54442d18  (identical under both)
+
+Run the first SELECT on a Supabase session and the second on stock Postgres and you have the cross-server &ldquo;mismatch&rdquo; in miniature: two texts, one value, and float8send as the tiebreaker.
+
+## The transferable lesson
+
+A float's text form is a session setting wearing a value's clothes. Never let a text-level comparison adjudicate float fidelity across two servers unless you have pinned the rendering GUC on both sides — and when a float &ldquo;mismatch&rdquo; appears after a migration, check the formatting layer before the data layer. The reassuring direction of this bug is exactly why it wastes hours: everything you inspect by hand re-renders through the same setting that skewed the report. And if any stage of your own pipeline moves floats as text, the setting stops being cosmetic and becomes a corruption surface — pin it, on every session that renders.
+
+## Primary sources
+
+- PostgreSQL documentation — extra_float_digits: shortest-round-trip output at the default of 1 (PG 12+); smaller values round the rendering.
+
+- PostgreSQL release notes (12) — the change of the default from 0 to 1.
+
+- sluice managed-services notes — the Supabase section (server default extra_float_digits=0); and the field note on pinning the setting across every session sluice renders in.
+
+
+===============================================================
+# The one-line fix that unpinned itself through the pooler
+(https://sluicesync.com/field-notes/float-pin-through-pooler/)
+
+A server that ships extra_float_digits=0 rounds every float Postgres renders as text, and sluice renders floats as text in four different sessions. The fix reads like one line — SET extra_float_digits = 3 before you read. It is four pins and a transaction, because a bare SET followed by a COPY silently lands on two different backends under a transaction-mode pooler, the fix's own error hint was steering users onto that pooler, and one of the four sessions is the verifier — which had been blessing the corruption it exists to catch.
+
+Observed — hardening sluice against the extra_float_digits float-rendering class (Bug 194, filed against a Supabase-sourced validation; the class fix and its four review findings shipped in v0.99.265). The unpinned-through-the-pooler shape was caught in pre-land review and was never in any released version; the shipped v0.99.265 pins are transaction-scoped from day one. This is the engineering companion to a shorter note on the reader-facing fact — your floats are fine; your diff tool is comparing two renderings.
+
+## What the setting does, and why it's a data bug not just a display bug
+
+A float8 has one binary identity and, historically, more than one text rendering. Since PostgreSQL 12 the default extra_float_digits is 1, which selects shortest-round-trip output: the fewest digits that parse back to exactly the same double. At 0 — the pre-12 default, which some managed providers (Supabase among them) still ship server-wide — Postgres renders through the legacy ~15-significant-digit path, which can round away the low bits of the printed form.
+
+The comfortable assumption is that this is only a display concern: the stored bits are untouched, so a binary copy is safe. That assumption was wrong for sluice, because sluice does not always move floats in binary. Its raw-copy lane can move them as server-rendered text; its CDC paths render tuple text server-side; and its verifier hashes server-rendered text. Every one of those is a session in which extra_float_digits governs the bytes that actually cross the boundary — so at 0, a float could be rounded in transit, a genuine value corruption, not a cosmetic one. On the Supabase run, pi drifted through a green stream; only DBL_MAX was loud enough to fail visibly.
+
+## Four faces, four reasons the obvious pin can't reach them
+
+The fix is to pin SET extra_float_digits = 3 (maximum precision) in every session that renders a float as text. There turned out to be four, and each resisted the naive placement for its own reason:
+
+- The raw-copy TEXT lane. The COPY reads floats as text; pin the session before the COPY. This is the one that looks trivial and is the subject of the pooler trap below.
+
+- The pgoutput CDC stream. Tuple text is rendered in the walsender's session, not the applier's. A logical replication=database walsender accepts a plain SQL SET — verified live — so the pin goes there.
+
+- The trigger-CDC capture function. The change image is built by to_jsonb() in the firing application's session — a session sluice never opens and can never pin from the outside. The only surface that survives arbitrary application sessions is the trigger function itself, so the pin becomes a per-function SET extra_float_digits = 3 clause on the capture function's definition.
+
+- The verifier. Its server-side ::text sample hashes were the quiet horror. Two endpoints with different extra_float_digits render the same stored float differently, so verify reported false mismatches on identical data — and, worse, a source at 0 renders a true value byte-for-byte the same as a target holding that value's rounded corruption, so verify reported a false clean, blessing the exact corruption it exists to catch. A verifier that reads through the setting under test cannot adjudicate it.
+
+## The pin that unpinned itself
+
+The raw-copy pin looked like the easy one, and it hid the sharpest finding. The first instinct — pin the GUC as a startup parameter on the connection — cannot work here: Supabase's pooler names this exact GUC in its ignore_startup_parameters list, and pgbouncer refuses startup packets carrying parameters it does not track. So the pin has to be a SQL statement issued after connect.
+
+But a bare autocommit SET followed by a COPY is also not pooler-proof. Under transaction-mode pooling — Supabase's recommended :6543 endpoint, and the default shape of pgbouncer's busiest mode — a server backend is assigned per transaction. Two separate autocommit statements can land on two different backends: the SET pins backend A, the COPY reads from backend B, still at the default rounding. Result: rc=0, stream green, bug fully alive. And the cruelest detail — the fix's own IPv6-only remediation hint had been telling users to reach for the transaction-mode :6543 endpoint, i.e. steering them directly onto the one path where the pin evaporates.
+
+The resolution is an explicit transaction with SET LOCAL. A transaction is precisely what pins one backend for its duration under transaction-mode pooling, so the SET LOCAL and the COPY are guaranteed to share a backend; LOCAL scopes the pin to that transaction so nothing leaks back into the shared pool. This was pinned against a real pgbouncer 1.25 in pool_mode=transaction with a Supavisor-shaped ignore_startup_parameters, not a mock.
+
+One more trap lived inside that transaction. sluice's snapshot reader already runs its COPY inside the exported-snapshot transaction that pins consistency across parallel readers. Wrapping the pin in a fresh BEGIN there would warn (a transaction already open) and a COMMIT would destroy the exported snapshot, breaking every other reader. So the pins detect the ambient transaction via the connection's TxStatus and join it — issuing SET LOCAL inside the snapshot transaction — rather than opening a nested one.
+
+## What sluice does about it
+
+Since v0.99.265, all four faces are pinned, transaction-scoped, and proven through a real pooler. There is one operational step the release notes flag as action-required: trigger-CDC users must re-run sluice trigger setup after upgrading, because the capture-function pin lands via CREATE OR REPLACE — installed triggers keep capturing rounded floats until the function is replaced. Nothing here is an upstream bug to file: Supavisor stripping the GUC and pgbouncer's transaction-mode backend assignment are documented, intended pooler behavior. The lesson is entirely about building on top of them correctly.
+
+## The transferable lesson
+
+A session-GUC fix is only as strong as the session model underneath it. Before you trust SET x = y; <do work>, ask three questions: can a pooler strip it (then it can't be a startup parameter); can the pooler put the SET and the work on different backends (then it must be one transaction with SET LOCAL); and are you already inside a transaction whose semantics a naive BEGIN/COMMIT would wreck (then join, don't nest). Then find every session that renders the value, not just the one you were looking at — including the verifier, because a checker that reads through the setting under test will confirm both the false mismatch and the false clean, and the false clean is the one that ships.
+
+## Primary sources
+
+- PostgreSQL documentation — extra_float_digits (shortest-round-trip at the default of 1 since PG 12) and the streaming-replication protocol (replication=database walsenders accept SQL).
+
+- pgbouncer documentation — pool_mode=transaction (per-transaction server assignment) and ignore_startup_parameters; Supabase's Supavisor docs for the stripped GUC and the transaction-mode :6543 endpoint.
+
+- sluice Bug 194 and CHANGELOG v0.99.265 — the four-face pin, the F1 pooler-unpin finding, the SET LOCAL + ambient-snapshot-transaction resolution against real pgbouncer 1.25, and the trigger-setup re-run action-required note.
+
+- sluice field notes — your floats are fine; your diff tool is comparing two renderings (the reader-facing GUC fact), and the verifier rode the same reader (the false-clean kinship).
+
+
+===============================================================
+# The platform default that eats every UPDATE
+(https://sluicesync.com/field-notes/binlog-row-image-minimal/)
+
+Point a MySQL CDC pipeline at Azure Database for MySQL and the cold copy is exact, the stream stays green, the counts stay equal — and every UPDATE silently vanishes. The cause is a one-line server default nobody set on purpose: Azure ships binlog_row_image=MINIMAL, and under MINIMAL an UPDATE's before-image carries only the primary key. Azure is the first major managed platform to make MINIMAL the out-of-box posture.
+
+Observed — a live probe of a throwaway Azure Database for MySQL Flexible Server (8.0.45-azure, defaults, 2026-07-16) on the shipped v0.99.263 binary; filed as Bug 193, fixed and closed in v0.99.266. The silent-loss half was demonstrated end to end: twelve source UPDATEs, zero target changes, on a stream that reported healthy the whole time. This is the MySQL sibling of an earlier Postgres note — same class, different engine, different knob.
+
+## What happened
+
+binlog_row_image controls how much of a row MySQL writes into a ROW-format binlog event. Under the stock default, FULL, an UPDATE logs the complete before-image (every column's old value) and the complete after-image. Under MINIMAL, the server logs only the columns it needs: the primary key in the before-image, and only the changed columns in the after-image. It is a bandwidth optimization, and for MySQL-to-MySQL replication where both ends agree on the row identity, it is harmless.
+
+For a CDC applier that reconstructs an UPDATE as UPDATE target SET ... WHERE <old row>, it is not harmless. sluice built its WHERE clause from the full before-image. Under MINIMAL every non-PK column in that before-image arrives as nil — not &ldquo;NULL the value,&rdquo; but &ldquo;absent from the event&rdquo; — and the applier turned each absent column into a col IS NULL predicate. The resulting WHERE matched no real row. And here the second mechanism closes the trap: a CDC applier must tolerate an UPDATE that affects zero rows, because on a warm resume it may replay a change already applied, and refusing zero-row updates would wedge every resume. So the zero-row miss was swallowed by design, logged at DEBUG and nowhere else. The stream stayed green, the lifetime row counts stayed equal, and the content quietly diverged.
+
+The live numbers make the shape concrete: twelve UPDATEs on the source produced zero changes on the target, while INSERTs and DELETEs in the same batches applied fine. Eleven rows of 4997 ended up diverged — about 0.2%. verify --depth sample at its default 100-row draw passed over that divergence; only full-table sampling named the diverged primary keys. A safety net calibrated for 5%-scale corruption cannot see a 0.2% one.
+
+## The irony inside our own code
+
+sluice had already fixed this exact class — for DELETE. An earlier bug (Bug 88) taught the DELETE path that a MINIMAL before-image is PK-only, and its narrowing helper carries a comment that spells out the whole nil → IS NULL → zero-match → silent-divergence chain. The narrowing lived one switch-case above the UPDATE arm and never reached it. Fixing the instance and not the class, inside the same function: the DELETE path knew the danger by name while the UPDATE path a few lines down walked straight into it.
+
+## The trap waiting for the fixer
+
+The naive fix — narrow the UPDATE's WHERE to the primary key, the way DELETE was fixed — converts a silent skip into a silent corruption. MINIMAL's after-image also omits unchanged columns. So a PK-narrowed UPDATE would SET every after-image column, and the columns MINIMAL left out would be written as NULL, nulling out data the UPDATE never touched. &ldquo;Nil because absent from the event&rdquo; and &ldquo;nil because the value is NULL&rdquo; are different facts that look identical in a decoded row, and telling them apart requires the binlog's present-columns bitmap, not the value. The fix has to restrict the SET list to columns actually present in the event.
+
+## Same class, one variable over: PARTIAL_JSON
+
+Setting binlog_row_image=FULL is not the end of the family. A sibling option, binlog_row_value_options=PARTIAL_JSON (MySQL 8.0.3+), makes the server log in-place JSON updates as diffs — PARTIAL_UPDATE_ROWS_EVENTs carrying JSON_SET/JSON_REPLACE/JSON_REMOVE deltas — rather than whole column values. An applier that writes whole values silently drops the update, even under FULL row images. Proven live: an in-place JSON_SET under PARTIAL_JSON left the target at its old value on a green stream — the identical symptom as MINIMAL, one knob to the left of the headline knob. The lesson generalizes: any server option that lets MySQL log less than a whole value is a silent-loss surface for a value-reconstructing applier, and the row-image knob is only the loudest member of the set.
+
+## What sluice does about it
+
+Since v0.99.266, a coded preflight (SLUICE-E-CDC-ROW-IMAGE-PARTIAL) reads @@GLOBAL.binlog_row_image at every CDC start — the sync snapshot opener, so a cold start refuses before the bulk copy rather than after; warm resume; and backup incremental. When it is not FULL, the run refuses loudly and names the remedy: SET GLOBAL binlog_row_image=FULL, or on Azure az mysql flexible-server parameter set --name binlog_row_image --value FULL (dynamic, about 19 seconds, no restart, after which UPDATEs converge exactly). NOBLOB refuses too. The PARTIAL_JSON option gets its own preflight, read tolerantly — the variable does not exist before MySQL 8.0.3, and a read failure must not itself refuse — with the SET GLOBAL binlog_row_value_options='' remedy.
+
+Behind the preflight sits a defense-in-depth belt keyed on the present-columns bitmap, for any partial image that slips a session-level override the global preflight couldn't see. The belt carries one more subtlety worth stating, because it is where identity and visibility diverge. It refuses a partial image that skipped a column — but on DELETE it must fire only on the PK-less case. With a real primary key the before-image always carries the PK, so MINIMAL images are correct by construction and belting there would regress the working replay of MINIMAL-era DELETE segments. The trap is a table with a UNIQUE NOT NULL column but no declared primary key: MySQL keys its MINIMAL before-image on that unique index (the &ldquo;primary key equivalent&rdquo;), which a WHERE index_name = 'PRIMARY' catalog lookup cannot see — so the applier thinks the table is keyless, keeps the nil-filled columns, and zero-matches silently. A truly keyless table's MINIMAL before-image, by contrast, carries every column (there is no PKE to minimize toward), skips nothing, and must still replay. The belt is placed exactly where the identity MySQL logged is not the identity a PRIMARY-only lookup can reconstruct.
+
+## Reproducing it
+
+Requires a MySQL 8.0+ server you can set globals on (any local container works; Azure Database for MySQL reproduces it out of the box with no configuration at all):
+
+    SET GLOBAL binlog_row_image = MINIMAL;   -- Azure's default; stock MySQL default is FULL
+    -- cold-copy a table, start CDC, then on the source:
+    UPDATE t SET note = 'changed' WHERE id = 200;
+    -- the before-image carries only the id column; every other column is absent (nil)
+    -- a WHERE built from the full before-image emits note IS NULL, matches nothing,
+    -- and a zero-rows-affected UPDATE is tolerated for resume idempotency -> silent drop
+
+On Azure specifically: SELECT @@binlog_row_image; returns MINIMAL on a fresh Flexible Server. Watch a handful of UPDATEs apply as zero target changes while INSERT/DELETE in the same run land correctly, and confirm verify --depth sample passes over the divergence at its default draw. Setting binlog_row_image=FULL (dynamic, no restart) makes subsequent UPDATEs converge.
+
+## The transferable lesson
+
+The row image decides whether your UPDATEs can be matched on the target, and replay tolerance — the thing that makes resumes safe — is exactly what hides the miss when they can't. When a managed platform's default differs from stock, treat that default as part of the wire contract, not an operator choice you can assume away: Azure's out-of-box MINIMAL means every Azure-MySQL sync source hits this on the first run. And when you fix a silent-match class, fix it for every statement kind that reconstructs a row, not the one that crashed — the DELETE arm knowing this by name while the UPDATE arm a few lines down did not is how a fixed bug reappears under a different verb.
+
+## Primary sources
+
+- MySQL Reference Manual — binlog_row_image (FULL/MINIMAL/NOBLOB) and binlog_row_value_options (PARTIAL_JSON, 8.0.3+); the ROW-format before-image/after-image semantics.
+
+- Azure Database for MySQL Flexible Server — server-parameter defaults (binlog_row_image=MINIMAL) and az mysql flexible-server parameter set (dynamic parameter changes without restart).
+
+- sluice Bug 193 and the Azure Flexible Server probe report — the twelve-UPDATE/zero-change differential, the verify-sampling-power finding, the present-columns-bitmap fix, and the PARTIAL_JSON and PKE-visibility beats.
+
+- sluice field note — REPLICA IDENTITY FULL ate our UPDATEs (the Postgres analogue: the row image, not the engine, decides whether your UPDATEs match).
+
+
+===============================================================
+# The retention variable that tells five different truths
+(https://sluicesync.com/field-notes/managed-mysql-binlog-retention/)
+
+binlog_expire_logs_seconds is the variable every MySQL CDC preflight checks to learn how long it has before the resume position is purged. On five managed platforms it means five different things: on two it lies (the number is days, the real window is minutes); on one it is honest and enforced; on one it is honest the other way (never-expire); and on one there is no knob behind it at all. Whether anything SQL-visible is the answer decides whether a tool can detect the trap or only guess at it from the hostname.
+
+Observed — a wave of live throwaway probes across DigitalOcean, AWS RDS, Google Cloud SQL, Vultr, and Azure managed MySQL (2026-07-16/17, on the shipped v0.99.263 binary), each created, watched for its true purge cadence, and torn down. Every cadence below is one probe at one instance size — measured, not a platform constant. The sluice-side advisories named here shipped across v0.99.253–264.
+
+## Why a snapshot-then-CDC tool cares
+
+The binlog retention window bounds how long the initial copy may take. A snapshot-then-CDC migration captures its CDC start position up front, copies the tables, then resumes streaming from that position. If the binlogs behind the position are purged before the copy finishes — or during any later pause — the resume point is gone. In sluice's case that surfaces loudly (a coded position-invalid error naming the purged file), which sounds safe until you notice the failure mode that follows: an auto-resnapshot retry re-copies from scratch, exceeds the same window again, and loses its restart point again. Every individual error is loud; the loop as a whole silently never converges. So the true window is not a nicety — it is the difference between a migration that finishes and one that livelocks.
+
+## Five platforms, five meanings of the same number
+
+DigitalOcean — the variable lies (API-only truth). On a fresh Managed MySQL cluster, @@binlog_expire_logs_seconds reads 259200 (three days). An out-of-band platform reaper purges every binlog file roughly 13–16 minutes after it's created. There is no SQL query that reveals the real policy — the DO config API doesn't even expose a retention field until you set one. The only signal you're in this regime is the host suffix *.db.ondigitalocean.com. The remedy is a hidden knob: a config-API binlog_retention_period (seconds, 600–86400), immediate, no restart.
+
+AWS RDS — the variable lies, but tighter, and the truth is SQL-visible. @@binlog_expire_logs_seconds reads 2592000 (thirty days); the real window in our probe was about 5–11 minutes, as RDS purges each file once its automated backup has uploaded, on a sweep that runs roughly every five minutes. Plan for the floor. Crucially, RDS exposes the real policy to SQL: CALL mysql.rds_show_configuration; returns the actual binlog retention hours (NULL means &ldquo;purge as soon as possible&rdquo;), and the remedy is plain SQL too — CALL mysql.rds_set_configuration('binlog retention hours', 24) — capped at 168 hours (seven days). An attached, caught-up stream does not hold the purger back: files behind a live stream purged on schedule, and a persisted position was dead about ten minutes after a clean detach.
+
+Google Cloud SQL — the variable is honest and the floor is enforced. @@binlog_expire_logs_seconds reads 86400 (one day), it is the real on-disk window, and no out-of-band reaper exists on any observable timescale — files sat 3+ hours past creation, and a 35-minute detached stream warm-resumed on pure defaults. The platform even refuses to set the window below a day (a database-flag value under 86400 returns HTTP 400). The one genuinely dangerous knob is the point-in-time-recovery toggle: disabling binary logging restarts the instance and deletes every binlog, and re-enabling restarts it again and resets numbering to 000001, permanently invalidating positions on either side of the round-trip. And a decoy: --retained-transaction-log-days looks like the retention knob but governs the PITR copies in Cloud Storage, which the replication protocol can't read — the database flag binlog_expire_logs_seconds is the real one.
+
+Vultr — the variable lies, and there is no knob at all. Vultr's DBaaS is the same Aiven-derived platform as DigitalOcean's, and it shares DO's headline hazard without DO's escape hatch: @@binlog_expire_logs_seconds reads 259200 (the identical DO value), the real window is ~10–16 minutes, and Vultr exposes no retention control anywhere. The advanced-options API rejects binlog_retention_period by name (&ldquo;is not a valid configuration option&rdquo;), the database-update API silently ignores it, and SET GLOBAL / SET PERSIST / PURGE BINARY LOGS are all denied to the admin user. The ~10-minute floor is permanent and unconfigurable — treat Vultr MySQL as a migrate-and-cut-over source, not a pausable one.
+
+Azure — the variable is honest in the other direction. Azure Database for MySQL Flexible Server ships binlog_expire_logs_seconds=0, which in stock MySQL means &ldquo;never expire&rdquo; — and across 85 minutes of observation, including straight through a full backup, nothing was purged; a 35-minute detached stream warm-resumed on defaults. The risk inverts: with no effective expiry, binlogs accumulate against the instance's storage, so on Azure the operator's job is to bound retention, not extend it. (Azure has its own separate, sharper trap — a binlog_row_image=MINIMAL default that silently drops UPDATEs — but that is a different note.)
+
+## The comparative picture
+
+                    DigitalOcean   AWS RDS       Cloud SQL      Vultr          Azure
+    var reads       3 days         30 days       1 day          3 days         0 (never)
+    real window     ~13-16 min     ~5-11 min     1 day (floor)  ~10-16 min     unbounded
+    truth lives     API-only       SQL-visible   the variable   nowhere        the variable
+    remedy          config API     plain SQL     gcloud flag    NONE           set knob (storage)
+    detect by       host suffix    host + SQL    @@version      host suffix    host + @@version
+                                                 (-google)      *.vultrdb.com  (-azure)
+
+## Detection beats pattern-guessing
+
+The pivotal axis isn't the window length — it's where the truth lives, because that decides what kind of preflight is even possible. Where a platform exposes its real policy to SQL (RDS's mysql.rds_configuration, Cloud SQL's honest variable, Azure's honest variable), a tool can read the actual value and stay silent when the operator has already fixed it — a precise, no-false-positive check. Where the truth is invisible to SQL (DO's API-only policy, Vultr's absent knob), the only honest signal is the connection-string hostname, so the tool is stuck with a blunter instrument: an unconditional warning triggered by the host suffix, which fires even on a correctly-configured cluster because it has no way to know. A variable-based preflight there would be worse than nothing — it would confidently report a three-day window the platform doesn't honor.
+
+There is one more wrinkle: Cloud SQL has no hostname to match at all — it connects by bare IP, or through an auth proxy at 127.0.0.1. Its in-band fingerprint carries the detection instead: @@version ends in -google. Vultr, at the other extreme, has a clean host suffix (*.vultrdb.com) but a bare @@version_comment of &ldquo;Source distribution&rdquo; — no in-band signal — so the host pattern is the only thing to match on. Fingerprint the platform however you can, then check for a SQL-visible truth source before you decide whether to detect or to guess.
+
+## What sluice does about it
+
+- DigitalOcean (v0.99.253): an unconditional host-pattern WARN on *.db.ondigitalocean.com at sync and backup start, naming the binlog_retention_period config-API knob — because the host is the only signal that exists.
+
+- AWS RDS (v0.99.263): a detect-first advisory — sluice reads binlog retention hours from mysql.rds_configuration and WARNs only when it is NULL or under a day, staying silent when the operator has set it, and degrading to the DO-style unconditional pattern WARN if the probe can't run. It also fires on warm resumes, because an attached stream is no shield.
+
+- Google Cloud SQL (v0.99.264): detection keys on @@version -google (no host to match); there's nothing to warn about at defaults, so the advisory is the inverse — recovery text on a position-invalid error explaining that the PITR toggle resets binlog numbering and invalidates prior positions.
+
+- Vultr: the same platform lineage as DO with no SQL-visible truth and no remedy, so it warrants the DO-style unconditional host-pattern WARN — with stronger wording than DO's, because DO's message can point at a knob and Vultr's cannot.
+
+- Azure: retention is safe by default, so no retention WARN; the Azure teeth are elsewhere (the row-image preflight). A mild INFO to bound retention for storage hygiene on long-lived syncs is the only retention-flavored note it needs.
+
+## The transferable lesson
+
+On managed databases, binlog_expire_logs_seconds reports what the engine would do, not what the platform does — and the gap runs in both directions, from &ldquo;3 days on the label, 15 minutes in practice&rdquo; to &ldquo;0 means never, and the risk is your disk.&rdquo; Never let the variable stand in for the window. Instead: fingerprint which platform you're on (host suffix or @@version), look for a platform-native truth source you can query, and only fall back to hostname pattern-guessing where none exists. Set the window explicitly through the platform's own knob — and if there is no knob (Vultr), design around a fixed, unconfigurable floor. Then audit your retry logic for the livelock shape, because &ldquo;every error was loud&rdquo; is no defense when the loop as a whole silently never terminates.
+
+## Primary sources
+
+- DigitalOcean Managed MySQL configuration API (binlog_retention_period, 600–86400 s); AWS RDS mysql.rds_set_configuration / mysql.rds_show_configuration (binlog retention hours, default NULL, max 168) and the automated-backups prerequisite; Google Cloud SQL database flags (binlog_expire_logs_seconds, floor 86400) and the PITR binlog coupling; Azure Database for MySQL Flexible Server server parameters.
+
+- MySQL Reference Manual — binlog_expire_logs_seconds (what the variable governs when the engine, not a platform reaper, owns expiry).
+
+- sluice managed-services notes and the five probe reports — DO, RDS, Cloud SQL, Vultr, and Azure MySQL retention observations and detect-first advisories.

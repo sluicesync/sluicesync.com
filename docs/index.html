@@ -35,7 +35,7 @@
 <strong>Postgres</strong>, in all four directions. <strong>SQLite</strong> files (and a <code>wrangler d1 export</code> <code>.sql</code> dump),
 live <strong>Cloudflare D1</strong> databases, <strong>CSV / TSV / NDJSON</strong> files, and <strong>mydumper / pscale dump</strong>
 directories also import into Postgres or MySQL, and SQLite is itself a migrate target —
-13 engines are registered today (run <code>sluice engines</code> to list them). It is built around three surfaces you can
+14 engines are registered today (run <code>sluice engines</code> to list them). It is built around three surfaces you can
 use independently or end to end:</p>
 <ul>
   <li><strong>Migrate</strong> — a one-shot schema + data copy, with deferred indexes/constraints for fast bulk load and per-table resume.</li>
