@@ -10,6 +10,8 @@ Engine · Driver name · DSN format ·
 
 MySQL · mysql · user:pass@tcp(host:3306)/dbname ·
 
+MariaDB · mariadb · MySQL DSN shape (user:pass@tcp(host:3306)/dbname) against a MariaDB server — a MySQL-family flavor with binlog / domain-GTID CDC (v0.99.271). Use this driver, not mysql; sluice fingerprints the server and steers you on a mismatch. ·
+
 Postgres · postgres · postgres://user:pass@host:5432/dbname?sslmode=require ·
 
 PlanetScale · planetscale · MySQL DSN against the PlanetScale host (TLS required). ·

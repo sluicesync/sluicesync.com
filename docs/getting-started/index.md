@@ -29,7 +29,7 @@ Self-contained binaries (Linux / macOS / Windows &times; amd64 / arm64) and .deb
 
 - A source and a target database you can reach over the network.
 
-- Engines available out of the box (nine — run sluice engines to confirm): mysql, the planetscale and self-hosted vitess MySQL flavors, postgres, sqlite and d1 (migrate sources; sqlite is also a target), and the trigger-CDC engines postgres-trigger, sqlite-trigger, d1-trigger.
+- Engines available out of the box (14 — run sluice engines to confirm): mysql, mariadb, the planetscale and self-hosted vitess MySQL flavors, postgres, sqlite and d1 (migrate sources; sqlite is also a target), the trigger-CDC engines postgres-trigger, sqlite-trigger, d1-trigger, and the flat-file migrate sources csv, tsv, ndjson, and mydumper.
 
 - For continuous sync from Postgres, the source normally needs logical replication (a replication slot). Managed Postgres that blocks slots (e.g. Heroku) can use the slot-less trigger engine instead.
 
@@ -42,6 +42,8 @@ Source and target are passed as DSNs (connection strings). The driver is named s
 Engine · DSN format ·
 
 mysql · user:pass@tcp(host:3306)/dbname ·
+
+mariadb · Same shape as mysql (user:pass@tcp(host:3306)/dbname) — use the mariadb driver for a MariaDB server; sluice fingerprints the server and steers you if the driver and server family are mismatched. ·
 
 postgres · postgres://user:pass@host:5432/dbname?sslmode=require ·
 

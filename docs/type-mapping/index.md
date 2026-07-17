@@ -18,6 +18,8 @@ Adding a new engine never amends the core; it declares which extension types it 
 
 The most-travelled direction. Notable rows below; the full table is in the canonical doc.
 
+MariaDB reads and writes through this same MySQL mapping. As a MySQL-family flavor it uses the mysql rows here in both directions; the divergences are all on the catalog side, not the type table — MariaDB's native uuid / inet6 / inet4 types, its per-table (not per-schema) CHECK-constraint names, a geometry SRID it stores but won't echo in SHOW CREATE, and a different COLUMN_DEFAULT dialect. The MariaDB field notes cover each.
+
 MySQL · Postgres · Notes ·
 
 TINYINT(1) · boolean · The MySQL boolean convention. A value outside {0,1} collapses to true; sluice WARNs loudly once per column and names the row. Override with --type-override col=smallint to keep the integer (smallint is the safe floor — a tinyint override could round-trip back to a boolean). ·

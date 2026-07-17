@@ -10,43 +10,51 @@ sluice moves data between database engines through two surfaces: migrate (a one-
 
 Migrate reads a source once and writes a fresh copy into a target. Every migrate source copies to every migrate target — the cell is never "unsupported", only "faster" on the same-engine diagonal. Cross-engine pairs flow through the typed IR; same-engine pairs take an optimized path but the same fidelity.
 
-Source ↓  /  Target → · MySQL · PlanetScale / Vitess · Postgres · SQLite ·
+Source ↓  /  Target → · MySQL · MariaDB · PlanetScale / Vitess · Postgres · SQLite ·
 
-MySQL · ✓ a · ✓ b · ✓ · ✓ ·
+MySQL · ✓ a · ✓ · ✓ b · ✓ · ✓ ·
 
-PlanetScale / Vitess · ✓ · ✓ b · ✓ · ✓ ·
+MariaDB · ✓ · ✓ a · ✓ b · ✓ · ✓ ·
 
-Postgres · ✓ · ✓ b · ✓ c · ✓ ·
+PlanetScale / Vitess · ✓ · ✓ · ✓ b · ✓ · ✓ ·
 
-SQLite (file / .sql dump) · ✓ · ✓ b · ✓ · ✓ ·
+Postgres · ✓ · ✓ · ✓ b · ✓ c · ✓ ·
 
-Cloudflare D1 (live) · ✓ · ✓ b · ✓ · ✓ ·
+SQLite (file / .sql dump) · ✓ · ✓ · ✓ b · ✓ · ✓ ·
 
-CSV / TSV / NDJSON (file, csv/tsv/ndjson) · ✓ · ✓ b · ✓ · ✓ ·
+Cloudflare D1 (live) · ✓ · ✓ · ✓ b · ✓ · ✓ ·
 
-mydumper / pscale dump (directory, mydumper) · ✓ · ✓ b · ✓ · ✓ ·
+CSV / TSV / NDJSON (file, csv/tsv/ndjson) · ✓ · ✓ · ✓ b · ✓ · ✓ ·
 
-a same-engine MySQL uses the native LOAD DATA LOCAL INFILE loader.   b a PlanetScale / Vitess target blocks LOAD DATA LOCAL, so cold-copy falls back to batched multi-row INSERT (use the planetscale / vitess engine name, not mysql, against a Vitess-backed host).   c same-engine Postgres byte-pipes the native COPY stream — the raw-copy fast lane — when there's no transform to apply. See How sluice copies your data for which internal path each cell takes.
+mydumper / pscale dump (directory, mydumper) · ✓ · ✓ · ✓ b · ✓ · ✓ ·
 
-Targets are MySQL, PlanetScale / Vitess, Postgres, or SQLite. Cloudflare D1 is a migrate source only (read live over its HTTP API), never a migrate target. The flat-file engines — csv, tsv, ndjson (each staged byte-exact into a temp SQLite database; file conventions declared with the --csv-* flags, never sniffed — ADR-0163) and mydumper (a mydumper / pscale database dump directory, ADR-0161) — are migrate sources only. Plain mysqldump / pg_dump .sql dumps are deliberately not parsed (loud refusal with a scratch-server recipe). The trigger-CDC engines (postgres-trigger, sqlite-trigger, d1-trigger) are sync-only and don't appear here.
+a same-engine MySQL or MariaDB uses the native LOAD DATA LOCAL INFILE loader (a MariaDB target falls back to batched multi-row INSERT per table on local_infile=OFF servers and geometry-bearing tables).   b a PlanetScale / Vitess target blocks LOAD DATA LOCAL, so cold-copy falls back to batched multi-row INSERT (use the planetscale / vitess engine name, not mysql, against a Vitess-backed host).   c same-engine Postgres byte-pipes the native COPY stream — the raw-copy fast lane — when there's no transform to apply. See How sluice copies your data for which internal path each cell takes.
+
+MariaDB is a MySQL-family flavor. Use the mariadb engine name (not mysql) against a MariaDB server — sluice fingerprints the server and steers you if they're mismatched. Its migrate cells match the mysql column/row; the one place it diverges from vanilla MySQL is on continuous sync (domain-GTID binlog, below) and a handful of catalog conventions covered in the MariaDB field notes.
+
+Targets are MySQL, MariaDB, PlanetScale / Vitess, Postgres, or SQLite. Cloudflare D1 is a migrate source only (read live over its HTTP API), never a migrate target. The flat-file engines — csv, tsv, ndjson (each staged byte-exact into a temp SQLite database; file conventions declared with the --csv-* flags, never sniffed — ADR-0163) and mydumper (a mydumper / pscale database dump directory, ADR-0161) — are migrate sources only. Plain mysqldump / pg_dump .sql dumps are deliberately not parsed (loud refusal with a scratch-server recipe). The trigger-CDC engines (postgres-trigger, sqlite-trigger, d1-trigger) are sync-only and don't appear here.
 
 ## Sync — continuous change-data-capture
 
-Sync does an initial snapshot, then streams every subsequent change from the source until you cut over. It has more sources than migrate — including three trigger-based engines for platforms that can't hand out a native replication feed — but fewer targets: changes are only ever applied to a MySQL-family or Postgres target.
+Sync does an initial snapshot, then streams every subsequent change from the source until you cut over. It has more sources than migrate — including three trigger-based engines for platforms that can't hand out a native replication feed — but fewer targets: changes are only ever applied to a MySQL-family (MySQL, MariaDB, PlanetScale / Vitess) or Postgres target.
 
-Source ↓  /  Target → · MySQL · PlanetScale / Vitess · Postgres ·
+Source ↓  /  Target → · MySQL · MariaDB · PlanetScale / Vitess · Postgres ·
 
-MySQL — binlog · ✓ · ✓ · ✓ ·
+MySQL — binlog · ✓ · ✓ · ✓ · ✓ ·
 
-PlanetScale / Vitess — VStream · ✓ · ✓ · ✓ ·
+MariaDB — binlog / domain-GTID d · ✓ · ✓ · ✓ · ✓ ·
 
-Postgres — replication slot · ✓ · ✓ · ✓ ·
+PlanetScale / Vitess — VStream · ✓ · ✓ · ✓ · ✓ ·
 
-Postgres — slot-less (postgres-trigger) · ✓ · ✓ · ✓ ·
+Postgres — replication slot · ✓ · ✓ · ✓ · ✓ ·
 
-SQLite — sqlite-trigger · ✓ · ✓ · ✓ ·
+Postgres — slot-less (postgres-trigger) · ✓ · ✓ · ✓ · ✓ ·
 
-Cloudflare D1 — d1-trigger · ✓ · ✓ · ✓ ·
+SQLite — sqlite-trigger · ✓ · ✓ · ✓ · ✓ ·
+
+Cloudflare D1 — d1-trigger · ✓ · ✓ · ✓ · ✓ ·
+
+d A MariaDB source streams its native binlog, parsing MariaDB's domain-based GTIDs (e.g. 0-100-38) and resuming off them — a distinct format from MySQL's GTIDs, and one MariaDB won't let you pre-check for reachability (the stream itself is the only honest signal; see the field note). Native uuid/inet6/inet4 columns decode faithfully through CDC (v0.99.272).
 
 SQLite and D1 are sync sources, not sync targets. A continuous stream from SQLite or D1 runs through the sqlite-trigger / d1-trigger engines (the plain sqlite / d1 engines have no CDC); a stream never lands into SQLite or D1. For managed Postgres that can't grant a replication slot (Heroku, some RDS/Supabase tiers), postgres-trigger is the slot-less source path.
 
@@ -58,7 +66,7 @@ The combination sluice was built for — the fully bidirectional MySQL ↔ Postg
 
 - MySQL → MySQL and Postgres → Postgres — same-engine, nothing to translate; the native loader / raw-COPY fast lane applies on migrate.
 
-PlanetScale and self-hosted Vitess are MySQL-dialect flavors, so anywhere this page says "MySQL" as a direction, the Vitess-backed flavors slot into the same cell — you just pick the matching engine name so sluice uses VStream and batched-insert instead of binlog and LOAD DATA.
+PlanetScale, self-hosted Vitess, and MariaDB are all MySQL-dialect flavors, so anywhere this page says "MySQL" as a direction, they slot into the same cell — you just pick the matching engine name. PlanetScale / Vitess use VStream and batched-insert instead of binlog and LOAD DATA; MariaDB uses the vanilla-MySQL binlog and loader path, differing only in its domain-GTID stream format and a few catalog conventions (the MariaDB field notes cover them).
 
 ## Next steps
 

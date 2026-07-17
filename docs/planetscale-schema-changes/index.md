@@ -43,7 +43,7 @@ When the schema change itself is already handled — or you're not on PlanetScal
         --where 'full_name IS NULL' \
         --verify
 
-- Engines: --driver is one of mysql, planetscale, vitess, postgres; SQLite/D1 refuse with SLUICE-E-BACKFILL-UNSUPPORTED-ENGINE. --set / --where are native SQL for that engine, emitted verbatim; --set splits at the first =, so CASE arms pass through.
+- Engines: --driver is one of mysql, mariadb, planetscale, vitess, postgres; SQLite/D1 refuse with SLUICE-E-BACKFILL-UNSUPPORTED-ENGINE. --set / --where are native SQL for that engine, emitted verbatim; --set splits at the first =, so CASE arms pass through.
 
 - Resume is automatic. The cursor persists in the same database's control tables, keyed by a hash of the spec (--set + --where); a killed run resumes where it stopped, replaying at most one chunk — which is why the --where guard should self-describe doneness, so the replay is a no-op. --restart discards the cursor; --batch-size is excluded from the spec hash, so retuning it never orphans a cursor.
 

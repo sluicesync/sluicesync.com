@@ -38,6 +38,8 @@ planetscale · CDC source · migrate source & target · PlanetScale MySQL flavor
 
 vitess · CDC source · migrate source & target · Self-hosted Vitess/vtgate: shares the planetscale engine code (VStream CDC) with a self-hosted-vtgate capability set; warm-resumes since v0.99.44. ·
 
+mariadb · CDC source · migrate source & target · MySQL-family flavor: binlog/domain-GTID CDC (parses MariaDB domain GTIDs like 0-100-38 and resumes off them, v0.99.271/ADR-0170), bulk migrate source & target, and backup/restore/verify. Native uuid/inet6/inet4 columns decode faithfully through CDC as of v0.99.272/ADR-0171; SHOW BINLOG STATUS / SHOW BINARY LOG STATUS / SHOW MASTER STATUS fallback covers 10.11→13.1. ·
+
 postgres · CDC source · migrate source & target · Logical-replication (replication-slot) CDC and COPY cold-copy. Roles, extensions, and slot lifecycle are surfaced explicitly, never silently auto-handled. ·
 
 sqlite · migrate source (file or .sql dump) and target · Pure-Go modernc.org/sqlite, no CGO. Imports a binary .db or an auto-detected wrangler d1 export .sql dump into Postgres / MySQL; as a target emits a .db (decimals byte-exact as TEXT). Migrate only (no CDC). ·
@@ -526,7 +528,7 @@ Backfill is single-endpoint — it runs INSIDE one database (no source/target pa
 
 Flag · Purpose ·
 
---driver · Required. Engine name for the database (mysql, planetscale, vitess, or postgres — the engines that implement the in-place backfill surface). SQLite/D1 refuse with SLUICE-E-BACKFILL-UNSUPPORTED-ENGINE (a single-file/edge database doesn't need the online-safety machinery — run the UPDATE directly). ·
+--driver · Required. Engine name for the database (mysql, mariadb, planetscale, vitess, or postgres — the engines that implement the in-place backfill surface). SQLite/D1 refuse with SLUICE-E-BACKFILL-UNSUPPORTED-ENGINE (a single-file/edge database doesn't need the online-safety machinery — run the UPDATE directly). ·
 
 --dsn · Required. Database DSN. Backfill is same-database: it reads and updates this one endpoint. ·
 
