@@ -73,6 +73,8 @@ The master user has the replication grants CDC needs out of the box (REPLICATION
 
 - Migrating from AWS RDS Postgres — the Postgres sibling: parameter groups, role membership, force_ssl.
 
+- Migrating from Google Cloud SQL MySQL — the managed MySQL where the retention variable tells the truth and defaults are already CDC-safe.
+
 - Zero-downtime migration — sync → verify → cutover once retention is configured.
 
 - Field note: the transaction that lands in neither the snapshot nor the binlog — the exact hazard the no-freeze WARN describes.

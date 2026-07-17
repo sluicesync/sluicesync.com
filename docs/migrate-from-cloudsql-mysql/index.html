@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from Google Cloud SQL MySQL with sluice — sluice docs</title>
+<meta name="description" content="The first managed MySQL whose binlog retention is honest and safe by default (a 1-day floor), the --retained-transaction-log-days decoy, the PITR toggle that invalidates every position, and the per-instance-CA TLS recipe.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-cloudsql-mysql/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-postgres/">Migrating from Google Cloud SQL Postgres</a><a class="lnk active" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from Google Cloud SQL MySQL with sluice</h1>
+    <p class="subtitle">The first managed MySQL whose binlog retention is honest and safe by default (a 1-day floor), the --retained-transaction-log-days decoy, the PITR toggle that invalidates every position, and the per-instance-CA TLS recipe.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#retention">Retention: honest and safe by default (a 1-day floor)</a></li><li><a href="#decoy">The decoy knob: --retained-transaction-log-days</a></li><li><a href="#pitr-toggle">The PITR toggle destroys positions (both directions)</a></li><li><a href="#ftwrl">FTWRL works — frozen snapshots, no WARNs</a></li><li><a href="#tls">Connecting: the per-instance CA</a></li><li><a href="#defaults">Defaults that are already right</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>Google Cloud SQL for MySQL works with sluice's vanilla <code>mysql</code> engine — cold copy, the CDC handoff, and a 35-minute-detached warm resume were all validated live (2026-07-16, MySQL 8.0.45). It's the third managed MySQL in this guide set, and the first with genuinely good news: the binlog-retention hazard that headlines the <a href="/docs/migrate-from-digitalocean-mysql/">DigitalOcean</a> and <a href="/docs/migrate-from-rds-mysql/">RDS</a> guides is, here, both truthful and safe by default. What earns the headline instead is a Cloud-SQL-specific hazard of its own: the PITR toggle.</p>
+
+<h2 id="retention">Retention: honest and safe by default (a 1-day floor) <a class="hlink" href="#retention" aria-label="Permalink to this section">#</a></h2>
+<p>On Cloud SQL, <code>@@binlog_expire_logs_seconds</code> reads <strong>86400 (1 day)</strong> — and unlike DO and RDS, <strong>the variable is the real governing knob</strong>. No out-of-band reaper purges ahead of it: in ~80 minutes of rotation-forced observation, zero purges occurred, with files surviving 48+ minutes past rotation (on DO defaults every one of those files dies at ~13–16 minutes of age; on RDS at ~5–11). The platform also <em>refuses</em> to set the flag below 86400 (allowed values: 0 = never expire, or 86400–4294967295 seconds), so the CDC window can't be misconfigured short.</p>
+<p>The live-proven consequence: a sluice stream detached for <strong>35 minutes on pure defaults</strong> — the exact gap length demonstrated fatal on RDS defaults — warm-resumed cleanly with exact backlog replay. Defaults are CDC-safe for any cold-copy-plus-reattach gap under ~24 hours; most migrations need no retention knob at all.</p>
+<div class="table-scroll"><table>
+<thead><tr><th></th><th>DigitalOcean</th><th>AWS RDS</th><th>Cloud SQL</th></tr></thead>
+<tbody>
+<tr><td class="desc">Default effective window</td><td class="desc">~13–16 min (out-of-band reaper)</td><td class="desc">~5–11 min (post-backup-upload purge)</td><td class="desc"><strong>1 day</strong> (variable-governed)</td></tr>
+<tr><td class="desc">Does <code>@@binlog_expire_logs_seconds</code> tell the truth?</td><td class="desc">No (reads 3 days)</td><td class="desc">No (reads 30 days)</td><td class="desc"><strong>Yes</strong></td></tr>
+<tr><td class="desc">The real knob</td><td class="desc">config API, 600–86400 s</td><td class="desc"><code>mysql.rds_set_configuration</code>, cap 168 h</td><td class="desc">database flag, floor 86400 s, no practical cap</td></tr>
+<tr><td class="desc">Defaults CDC-safe?</td><td class="desc">No</td><td class="desc">No</td><td class="desc"><strong>Yes</strong> (gaps &lt; 24 h)</td></tr>
+</tbody>
+</table></div>
+<p>When a planned pause will exceed a day, stretch the window with the database flag — applied live, no restart, ~20 seconds (validated with a sync stream attached and uninterrupted):</p>
+<pre><code>gcloud sql instances patch my-instance <span class="f">--database-flags</span>=binlog_expire_logs_seconds=604800
+
+<span class="c"># Careful: --database-flags REPLACES the entire flag set — include any existing flags.</span></code></pre>
+<p>Unlike RDS there is no 7-day cap — multi-week windows are possible. Two soft edges: on-disk binlogs count against storage (watch it if auto-grow is off), and Google documents early purging under disk pressure — don't treat the window as contractual on a nearly-full disk.</p>
+
+<h2 id="decoy">The decoy knob: --retained-transaction-log-days <a class="hlink" href="#decoy" aria-label="Permalink to this section">#</a></h2>
+<p>Cloud SQL has a second, better-advertised retention setting, and it is <strong>not</strong> the one that matters. <code>--retained-transaction-log-days</code> (<code>transactionLogRetentionDays</code>) governs the <em>PITR log copies uploaded to Cloud Storage</em> — invisible to the replication protocol, useless to a CDC client, and capped at 7 days on the Enterprise edition anyway. The two are provably decoupled: patching it 7→1→7 completed in ~3 seconds with no restart and left <code>@@binlog_expire_logs_seconds</code> untouched. It <em>looks</em> like RDS's <code>binlog retention hours</code>; the database flag above is the actual CDC knob.</p>
+<p>Also worth knowing: <code>SET GLOBAL binlog_expire_logs_seconds</code> and <code>PURGE BINARY LOGS</code> are both denied from SQL (root lacks SUPER) — every retention change goes through gcloud — but the <em>reading</em> is SQL-visible and honest, which is more than DO or RDS offer.</p>
+
+<h2 id="pitr-toggle">The PITR toggle destroys positions (both directions) <a class="hlink" href="#pitr-toggle" aria-label="Permalink to this section">#</a></h2>
+<p>For Cloud SQL MySQL, <code>--enable-bin-log</code> <em>is</em> the PITR switch, and binary logging is coupled to automated backups (disabling backups with binlog on is refused with an HTTP 400; creating with <code>--enable-bin-log</code> silently implies backups on). The hazard is the toggle itself, live-probed in both directions:</p>
+<ul>
+  <li><strong><code>--no-enable-bin-log</code> restarts the instance</strong> (an ~10-minute operation), sets <code>log_bin=0</code>, and <strong>destroys every existing binlog</strong>. A live sluice stream rode the restart's connection refusals through its retry loop, reconnected, and then failed loudly and correctly: <code>ERROR 1236 (HY000): Binary log is not open</code>.</li>
+  <li><strong>Re-enabling restarts the instance again and resets binlog numbering to <code>mysql-bin.000001</code></strong> — so every position persisted on either side of the round-trip is permanently invalid, even though binlogs exist again.</li>
+</ul>
+<p>sluice recovers from this the loud way, validated live across the full toggle round-trip: the restart's warm resume detects the invalid position — <em>&ldquo;persisted position is no longer valid; falling through to cold start &hellip; binlog file &lsquo;mysql-bin.000012&rsquo; is no longer available on the source (purged)&rdquo;</em> — WARNs, and auto-resnapshots (fresh copy, re-attach at the new numbering, counts exact after). If a full re-copy is expensive and you'd rather decide by hand, <code>sync start --no-auto-resnapshot</code> converts that into a hard stop with named recovery commands. Database flags survive the toggle; positions do not.</p>
+<div class="note"><strong>One honest caveat.</strong> Today the recovery WARN describes the position as <em>purged</em> — accurate, but it doesn't yet name the PITR toggle as the likely Cloud SQL cause (there's no hostname to detect the platform by; a fingerprint via <code>@@version</code> ending in <code>-google</code> is the planned refinement, not shipped at the time of writing). If you see position-invalid recovery on Cloud SQL and retention was at defaults, check the instance's operation log for a binlog toggle before suspecting the window.</div>
+
+<h2 id="ftwrl">FTWRL works — frozen snapshots, no WARNs <a class="hlink" href="#ftwrl" aria-label="Permalink to this section">#</a></h2>
+<p>Cloud SQL's root user holds effective <code>RELOAD</code>/<code>FLUSH_TABLES</code> and the platform honors them — <code>FLUSH TABLES WITH READ LOCK</code> succeeds. sluice's consistent multi-table cold copy therefore runs <strong>concurrent, with a frozen snapshot position</strong>, and none of the fallback WARNs from the <a href="/docs/migrate-from-rds-mysql/#ftwrl">RDS guide</a> apply: no serial-copy fallback, no no-freeze capture. The <a href="/field-notes/snapshot-position-gap/">snapshot-position gap</a> is closed here the way it's meant to be.</p>
+
+<h2 id="tls">Connecting: the per-instance CA <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
+<p>Defaults accept plaintext (<code>sslMode: ALLOW_UNENCRYPTED_AND_ENCRYPTED</code>) — a plain DSN works and gets sluice's unencrypted-binlog-stream WARN. A bare <code>?tls=true</code> fails (<code>x509: certificate signed by unknown authority</code>): each instance has its own private CA (<code>CN=Google Cloud SQL Server CA</code>), the same class as DigitalOcean's — and unlike RDS there is no public bundle URL; the fetch is an authenticated API call:</p>
+<pre><code>gcloud sql instances describe my-instance <span class="f">--format</span>='value(serverCaCert.cert)' &gt; cloudsql-ca.pem
+
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'root:pass@tcp(34.148.x.y:3306)/app' \
+    <span class="f">--source-tls-ca</span> cloudsql-ca.pem \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> cloudsql-app</code></pre>
+<p><code>--source-tls-ca</code> covers both the SQL connections and the binlog/CDC stream — validated end-to-end on Cloud SQL. The server certificate's CN is <code>project:instance</code>, not the IP; sluice's CA-pinned <em>verify-ca</em> mode handles that without a hostname-verification failure (see <a href="/field-notes/mysql-cert-no-san/">why MySQL certificates can't pass verify-full</a>).</p>
+
+<h2 id="defaults">Defaults that are already right <a class="hlink" href="#defaults" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong><code>binlog_format=ROW</code>, <code>binlog_row_image=FULL</code>, <code>gtid_mode=ON</code> out of the box — even on 8.0</strong> (contrast RDS 8.0's <code>MIXED</code> and its custom-parameter-group dance). sluice's file/position CDC works as-is; positions carry the <code>server_uuid</code>.</li>
+  <li><strong>Replication grants present on root</strong> (<code>REPLICATION SLAVE</code>, <code>REPLICATION CLIENT</code>) — nothing to GRANT.</li>
+  <li><strong><code>sql_require_primary_key=OFF</code></strong> — keyless tables land fine as targets, unlike DO.</li>
+  <li><strong>Stock-strict <code>sql_mode</code></strong> — no DO-style <code>ANSI</code> surprise; double-quoted strings are strings.</li>
+</ul>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>Mostly: nothing fires — correctly.</strong> Cloud SQL connects by bare IP (or the Auth Proxy at localhost), so the DO/RDS host-pattern retention advisories have nothing to match — and nothing to say: at defaults the window is a day, not minutes, so a quiet preflight is the right result on this platform, not a blind spot.</li>
+  <li><strong>Loud position-invalid recovery</strong> — a mid-stream binlog loss is a loud <code>1236</code> failure, and a resume from an invalidated position (the PITR toggle's signature) is an explicit &ldquo;persisted position is no longer valid&rdquo; WARN plus a fresh cold start — validated live on Cloud SQL across the toggle round-trip; <code>--no-auto-resnapshot</code> makes it a hard stop with named recovery commands instead.</li>
+  <li><strong>Unencrypted-binlog-stream WARN</strong> — a plaintext DSN gets a warning that the CDC stream is unencrypted; <code>--source-tls-ca</code> resolves it (and refuses to combine with a DSN-level <code>tls=</code>, or to apply to non-MySQL engines).</li>
+  <li><strong>The FTWRL WARNs are absent by design</strong> — on this platform their absence means the frozen-snapshot concurrent copy actually ran.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a> — the sibling where defaults purge in minutes and the remedy is one SQL call.</li>
+  <li><a href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a> — the other purge-window platform, where no SQL-visible truth exists at all.</li>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the full sync → verify → cutover flow.</li>
+  <li><a href="/field-notes/snapshot-position-gap/">Field note: the transaction that lands in neither the snapshot nor the binlog</a> — the seam FTWRL closes, and on Cloud SQL actually can.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-cloudsql-postgres/">← Migrating from Google Cloud SQL Postgres</a><a class="next" href="/docs/planetscale-schema-changes/">Online schema changes on PlanetScale →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-cloudsql-mysql/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

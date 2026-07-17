@@ -35,6 +35,8 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 - [Migrating from DigitalOcean MySQL](https://sluicesync.com/docs/migrate-from-digitalocean-mysql/): The ~13–16-minute binlog purge window on defaults (and the config-API knob that fixes it), the private CA via --source-tls-ca, sql_mode differences, and the resnapshot-livelock hazard sluice warns about.
 - [Migrating from AWS RDS MySQL](https://sluicesync.com/docs/migrate-from-rds-mysql/): The detect-first binlog-retention advisory (what the WARN means and the one-line SQL remedy), 8.0-family parameter groups, the platform-blocked FTWRL, and the regional truststore bundle.
 - [Migrating from AWS RDS Postgres](https://sluicesync.com/docs/migrate-from-rds-postgres/): The rds.logical_replication parameter-group flip, the rds_replication role-membership model (nothing to grant for the master user), force_ssl and the trust bundle, and the trigger-engine fallback.
+- [Migrating from Google Cloud SQL Postgres](https://sluicesync.com/docs/migrate-from-cloudsql-postgres/): The cloudsql.logical_decoding flag (restart included, about a minute), the self-service ALTER ROLE ... REPLICATION grant, default-plaintext TLS and the per-instance CA, and the validated migrate + CDC recipe.
+- [Migrating from Google Cloud SQL MySQL](https://sluicesync.com/docs/migrate-from-cloudsql-mysql/): The first managed MySQL whose binlog retention is honest and safe by default (a 1-day floor), the --retained-transaction-log-days decoy, the PITR toggle that invalidates every position, and the per-instance-CA TLS recipe.
 
 ## PlanetScale Guides
 

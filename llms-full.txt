@@ -3414,6 +3414,8 @@ The master user has the replication grants CDC needs out of the box (REPLICATION
 
 - Migrating from AWS RDS Postgres — the Postgres sibling: parameter groups, role membership, force_ssl.
 
+- Migrating from Google Cloud SQL MySQL — the managed MySQL where the retention variable tells the truth and defaults are already CDC-safe.
+
 - Zero-downtime migration — sync → verify → cutover once retention is configured.
 
 - Field note: the transaction that lands in neither the snapshot nor the binlog — the exact hazard the no-freeze WARN describes.
@@ -3505,6 +3507,218 @@ The full lifecycle (setup → run → teardown, payload tuning, pruning) is in M
 - Migrating from AWS RDS MySQL — the MySQL sibling: binlog retention, FTWRL, the regional bundle.
 
 - Field note: the idle-slot failover trap — the hazard behind the Aurora HA advisory.
+
+
+===============================================================
+# Migrating from Google Cloud SQL Postgres with sluice
+(https://sluicesync.com/docs/migrate-from-cloudsql-postgres/)
+
+The cloudsql.logical_decoding flag (restart included, about a minute), the self-service ALTER ROLE ... REPLICATION grant, default-plaintext TLS and the per-instance CA, and the validated migrate + CDC recipe.
+
+Google Cloud SQL for PostgreSQL works with sluice's vanilla postgres engine — live-validated 2026-07-16 (PostgreSQL 16.14) as a bulk-migration and slot-based CDC source: byte-identical md5 ground truth on the bulk copy (including NaN-in-numeric[], &plusmn;Infinity, denormal floats, and 2-D arrays with NULL elements), an exact snapshot → CDC handoff with live-write convergence, and a clean stop with zero orphaned slots. The pleasant surprise, coming from the RDS guide: Cloud SQL has no platform-specific role model to learn. Two self-service steps take a fresh instance to CDC-ready, and both of sluice's preflight refusals name remedies that work verbatim here.
+
+## Enabling logical replication (one flag, about a minute)
+
+A fresh Cloud SQL instance sits at wal_level=replica regardless of backup settings — there is no RDS-style &ldquo;retention 0 means minimal&rdquo; trap, so you are always exactly one flag from CDC-ready. wal_level itself is not directly settable; the knob is the database flag cloudsql.logical_decoding:
+
+    # The patch performs the required restart INLINE — about a minute end-to-end (validated live).
+    gcloud sql instances patch my-instance --database-flags=cloudsql.logical_decoding=on
+
+    # Careful: --database-flags REPLACES the entire flag set. On an instance with
+    # existing flags, include them all in the same patch:
+    #   --database-flags=cloudsql.logical_decoding=on,max_connections=200
+
+Notes from the validation run:
+
+- The restart is automatic and fast. No separate reboot step to schedule — wal_level=logical was queryable about 50 seconds after the patch started (contrast RDS: custom parameter group + explicit reboot, ~3 minutes).
+
+- The slot budget is already provisioned: max_replication_slots=10 / max_wal_senders=10 before the flip, unchanged by it. Plenty for sluice's one slot; only heavy multi-consumer setups need explicit raises.
+
+- The --database-flags replace-everything behaviour is the one real gotcha — a patch that names only the new flag silently clears every other flag on the instance.
+
+## Roles: ALTER ROLE ... REPLICATION actually works here
+
+The default postgres user is not a superuser (rolsuper=f), but it is a member of cloudsqlsuperuser — and Cloud SQL patches the standard &ldquo;must be superuser to alter replication users&rdquo; check for its members. So the fix is one standard-Postgres statement, run as yourself:
+
+    ALTER ROLE postgres WITH REPLICATION;   -- succeeds as the (non-superuser) master user
+
+That statement is exactly the first remedy in sluice's SLUICE-E-CDC-REPLICATION-PERMISSION refusal — Cloud SQL is the first managed provider in this validation series where it applies verbatim. One honest caveat: the refusal's provider-specific examples currently name platforms where the attribute is not grantable (RDS's role membership, Heroku's support ticket), and don't yet name Cloud SQL as the &ldquo;just run it&rdquo; case — don't let those examples talk you out of trying the ALTER ROLE.
+
+- Membership confers nothing. The platform roles cloudsqlreplica / cloudsqllogical carry rolreplication themselves, but the REPLICATION attribute is not inherited via membership in stock Postgres, and Cloud SQL does not patch that — a role granted IN ROLE cloudsqlreplica still cannot create a slot (validated live). Those roles are platform-internal; the attribute on your role is the mechanism, unlike RDS's rds_replication membership model.
+
+- Expect the refusals in role → flag order. On a stock instance, sync start meets the replication-permission refusal first; after the grant, the wal_level refusal (whose provider matrix names the Cloud SQL flag). Doing both steps up front skips the second round-trip.
+
+## TLS: plaintext is accepted by default
+
+Cloud SQL's default sslMode is ALLOW_UNENCRYPTED_AND_ENCRYPTED — a public-IP DSN without sslmode=require sends credentials and data in the clear, and nothing refuses (contrast RDS Postgres, where force_ssl is the default). Set sslmode=require or stronger on every Cloud SQL DSN yourself, or flip the instance to --ssl-mode=ENCRYPTED_ONLY server-side.
+
+Mode · On a default Cloud SQL instance ·
+
+sslmode=disable · Accepted. Nothing server-side refuses plaintext unless the instance was created/patched to ENCRYPTED_ONLY. ·
+
+sslmode=require · Works (TLS 1.3). What the validation ran on throughout — the sensible floor. ·
+
+sslmode=verify-ca · Works with the per-instance CA (recipe below). The ceiling on default instances. ·
+
+sslmode=verify-full · Fails on default instances: the server certificate names .sql.goog DNS names — never the public IP — and the default (per-instance-CA) mode publishes no matching dnsName. Instances created with --server-ca-mode=GOOGLE_MANAGED_CAS_CA get a resolvable name that should allow it (unvalidated). ·
+
+The per-instance CA is an authenticated API fetch (like DigitalOcean's, unlike RDS's public bundle URL); Postgres endpoints take it as sslrootcert= in the DSN (the --source-tls-ca flag is for MySQL-family endpoints and refuses on Postgres rather than being silently ignored):
+
+    gcloud sql instances describe my-instance --format='value(serverCaCert.cert)' > cloudsql-ca.pem
+
+    sluice migrate \
+        --source-driver postgres \
+        --source 'postgres://postgres:pass@34.148.x.y:5432/app?sslmode=verify-ca&sslrootcert=cloudsql-ca.pem' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+## The Auth Proxy is a tunnel, not a pooler
+
+The Cloud SQL Auth Proxy is untested with sluice, but it is categorically different from the pgbouncer/Supavisor/RDS-Proxy class that breaks CDC: it's a per-connection encrypted TCP tunnel with IAM auth, not a transaction pooler, so the replication protocol should traverse it. Treat that as unvalidated — the validated path is the direct instance IP with an authorized-network entry, which needs no proxy at all. Two things to know if you route through it anyway: sluice's pooler-host preflight WARN cannot see the hop (the DSN host becomes localhost, so a quiet preflight there is not a verdict), and Cloud SQL's separate Managed Connection Pooling feature is a pooler and belongs in the CDC-incompatible class (also untested).
+
+## The validated recipe
+
+Public IP + an authorized-network entry for the migration host is enough — no proxy, no VPC peering. One-shot copy first:
+
+    sluice migrate \
+        --source-driver postgres --source 'postgres://postgres:pass@34.148.x.y:5432/app?sslmode=require' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+Continuous sync, after the flag flip and the role grant:
+
+    sluice sync start \
+        --source-driver postgres --source 'postgres://postgres:pass@34.148.x.y:5432/app?sslmode=require' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --stream-id cloudsql-app
+
+## Decommissioning: drop the slot
+
+A cleanly stopped sluice stream leaves its replication slot in place — that's what makes the stream resumable. When you're done for good, drop it: an abandoned slot retains WAL and will eventually fill the instance disk (a 10 GB starter disk has little slack).
+
+    sluice slot list --source-driver postgres --source 'postgres://...'
+    sluice slot drop sluice_slot --yes --source-driver postgres --source 'postgres://...'
+
+An empty slot catalog is the Cloud SQL baseline — there are no Neon-style platform-internal slots to leave alone; anything listed is a consumer someone created.
+
+## What sluice checks for you
+
+- The wal_level preflight refusal — CDC against a replica-level instance refuses at startup, before touching any slot, pointing at the provider matrix whose Cloud SQL row (cloudsql.logical_decoding = on, restart included) was validated correct by this run.
+
+- SLUICE-E-CDC-REPLICATION-PERMISSION — a role without the REPLICATION attribute refuses with the exact ALTER ROLE remedy, and on Cloud SQL that remedy genuinely works as the master user (see the caveat above about the refusal's provider examples).
+
+- Slot-health monitoring — wal_status transitions and decode-spill counters, the same as any Postgres source; the validation stream ran WARN-free throughout.
+
+- SLUICE-E-CONFIRMATION-REQUIRED — slot drop refuses without --yes, so a decommissioning script can't destroy a resumable position by accident.
+
+## Next steps
+
+- Prepare a Postgres source — the full slot lifecycle, retention, and failover story (provider matrix included).
+
+- Migrating from AWS RDS Postgres — the AWS sibling: everything Cloud SQL does differently (role membership, parameter-group reboot, force_ssl).
+
+- Verify & reconcile — confirm the target matches the source after the copy.
+
+- Field note: replication slots don't die with your process — why the decommissioning step matters.
+
+
+===============================================================
+# Migrating from Google Cloud SQL MySQL with sluice
+(https://sluicesync.com/docs/migrate-from-cloudsql-mysql/)
+
+The first managed MySQL whose binlog retention is honest and safe by default (a 1-day floor), the --retained-transaction-log-days decoy, the PITR toggle that invalidates every position, and the per-instance-CA TLS recipe.
+
+Google Cloud SQL for MySQL works with sluice's vanilla mysql engine — cold copy, the CDC handoff, and a 35-minute-detached warm resume were all validated live (2026-07-16, MySQL 8.0.45). It's the third managed MySQL in this guide set, and the first with genuinely good news: the binlog-retention hazard that headlines the DigitalOcean and RDS guides is, here, both truthful and safe by default. What earns the headline instead is a Cloud-SQL-specific hazard of its own: the PITR toggle.
+
+## Retention: honest and safe by default (a 1-day floor)
+
+On Cloud SQL, @@binlog_expire_logs_seconds reads 86400 (1 day) — and unlike DO and RDS, the variable is the real governing knob. No out-of-band reaper purges ahead of it: in ~80 minutes of rotation-forced observation, zero purges occurred, with files surviving 48+ minutes past rotation (on DO defaults every one of those files dies at ~13–16 minutes of age; on RDS at ~5–11). The platform also refuses to set the flag below 86400 (allowed values: 0 = never expire, or 86400–4294967295 seconds), so the CDC window can't be misconfigured short.
+
+The live-proven consequence: a sluice stream detached for 35 minutes on pure defaults — the exact gap length demonstrated fatal on RDS defaults — warm-resumed cleanly with exact backlog replay. Defaults are CDC-safe for any cold-copy-plus-reattach gap under ~24 hours; most migrations need no retention knob at all.
+
+ · DigitalOcean · AWS RDS · Cloud SQL ·
+
+Default effective window · ~13–16 min (out-of-band reaper) · ~5–11 min (post-backup-upload purge) · 1 day (variable-governed) ·
+
+Does @@binlog_expire_logs_seconds tell the truth? · No (reads 3 days) · No (reads 30 days) · Yes ·
+
+The real knob · config API, 600–86400 s · mysql.rds_set_configuration, cap 168 h · database flag, floor 86400 s, no practical cap ·
+
+Defaults CDC-safe? · No · No · Yes (gaps < 24 h) ·
+
+When a planned pause will exceed a day, stretch the window with the database flag — applied live, no restart, ~20 seconds (validated with a sync stream attached and uninterrupted):
+
+    gcloud sql instances patch my-instance --database-flags=binlog_expire_logs_seconds=604800
+
+    # Careful: --database-flags REPLACES the entire flag set — include any existing flags.
+
+Unlike RDS there is no 7-day cap — multi-week windows are possible. Two soft edges: on-disk binlogs count against storage (watch it if auto-grow is off), and Google documents early purging under disk pressure — don't treat the window as contractual on a nearly-full disk.
+
+## The decoy knob: --retained-transaction-log-days
+
+Cloud SQL has a second, better-advertised retention setting, and it is not the one that matters. --retained-transaction-log-days (transactionLogRetentionDays) governs the PITR log copies uploaded to Cloud Storage — invisible to the replication protocol, useless to a CDC client, and capped at 7 days on the Enterprise edition anyway. The two are provably decoupled: patching it 7→1→7 completed in ~3 seconds with no restart and left @@binlog_expire_logs_seconds untouched. It looks like RDS's binlog retention hours; the database flag above is the actual CDC knob.
+
+Also worth knowing: SET GLOBAL binlog_expire_logs_seconds and PURGE BINARY LOGS are both denied from SQL (root lacks SUPER) — every retention change goes through gcloud — but the reading is SQL-visible and honest, which is more than DO or RDS offer.
+
+## The PITR toggle destroys positions (both directions)
+
+For Cloud SQL MySQL, --enable-bin-log is the PITR switch, and binary logging is coupled to automated backups (disabling backups with binlog on is refused with an HTTP 400; creating with --enable-bin-log silently implies backups on). The hazard is the toggle itself, live-probed in both directions:
+
+- --no-enable-bin-log restarts the instance (an ~10-minute operation), sets log_bin=0, and destroys every existing binlog. A live sluice stream rode the restart's connection refusals through its retry loop, reconnected, and then failed loudly and correctly: ERROR 1236 (HY000): Binary log is not open.
+
+- Re-enabling restarts the instance again and resets binlog numbering to mysql-bin.000001 — so every position persisted on either side of the round-trip is permanently invalid, even though binlogs exist again.
+
+sluice recovers from this the loud way, validated live across the full toggle round-trip: the restart's warm resume detects the invalid position — &ldquo;persisted position is no longer valid; falling through to cold start &hellip; binlog file &lsquo;mysql-bin.000012&rsquo; is no longer available on the source (purged)&rdquo; — WARNs, and auto-resnapshots (fresh copy, re-attach at the new numbering, counts exact after). If a full re-copy is expensive and you'd rather decide by hand, sync start --no-auto-resnapshot converts that into a hard stop with named recovery commands. Database flags survive the toggle; positions do not.
+
+One honest caveat. Today the recovery WARN describes the position as purged — accurate, but it doesn't yet name the PITR toggle as the likely Cloud SQL cause (there's no hostname to detect the platform by; a fingerprint via @@version ending in -google is the planned refinement, not shipped at the time of writing). If you see position-invalid recovery on Cloud SQL and retention was at defaults, check the instance's operation log for a binlog toggle before suspecting the window.
+
+## FTWRL works — frozen snapshots, no WARNs
+
+Cloud SQL's root user holds effective RELOAD/FLUSH_TABLES and the platform honors them — FLUSH TABLES WITH READ LOCK succeeds. sluice's consistent multi-table cold copy therefore runs concurrent, with a frozen snapshot position, and none of the fallback WARNs from the RDS guide apply: no serial-copy fallback, no no-freeze capture. The snapshot-position gap is closed here the way it's meant to be.
+
+## Connecting: the per-instance CA
+
+Defaults accept plaintext (sslMode: ALLOW_UNENCRYPTED_AND_ENCRYPTED) — a plain DSN works and gets sluice's unencrypted-binlog-stream WARN. A bare ?tls=true fails (x509: certificate signed by unknown authority): each instance has its own private CA (CN=Google Cloud SQL Server CA), the same class as DigitalOcean's — and unlike RDS there is no public bundle URL; the fetch is an authenticated API call:
+
+    gcloud sql instances describe my-instance --format='value(serverCaCert.cert)' > cloudsql-ca.pem
+
+    sluice sync start \
+        --source-driver mysql --source 'root:pass@tcp(34.148.x.y:3306)/app' \
+        --source-tls-ca cloudsql-ca.pem \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --stream-id cloudsql-app
+
+--source-tls-ca covers both the SQL connections and the binlog/CDC stream — validated end-to-end on Cloud SQL. The server certificate's CN is project:instance, not the IP; sluice's CA-pinned verify-ca mode handles that without a hostname-verification failure (see why MySQL certificates can't pass verify-full).
+
+## Defaults that are already right
+
+- binlog_format=ROW, binlog_row_image=FULL, gtid_mode=ON out of the box — even on 8.0 (contrast RDS 8.0's MIXED and its custom-parameter-group dance). sluice's file/position CDC works as-is; positions carry the server_uuid.
+
+- Replication grants present on root (REPLICATION SLAVE, REPLICATION CLIENT) — nothing to GRANT.
+
+- sql_require_primary_key=OFF — keyless tables land fine as targets, unlike DO.
+
+- Stock-strict sql_mode — no DO-style ANSI surprise; double-quoted strings are strings.
+
+## What sluice checks for you
+
+- Mostly: nothing fires — correctly. Cloud SQL connects by bare IP (or the Auth Proxy at localhost), so the DO/RDS host-pattern retention advisories have nothing to match — and nothing to say: at defaults the window is a day, not minutes, so a quiet preflight is the right result on this platform, not a blind spot.
+
+- Loud position-invalid recovery — a mid-stream binlog loss is a loud 1236 failure, and a resume from an invalidated position (the PITR toggle's signature) is an explicit &ldquo;persisted position is no longer valid&rdquo; WARN plus a fresh cold start — validated live on Cloud SQL across the toggle round-trip; --no-auto-resnapshot makes it a hard stop with named recovery commands instead.
+
+- Unencrypted-binlog-stream WARN — a plaintext DSN gets a warning that the CDC stream is unencrypted; --source-tls-ca resolves it (and refuses to combine with a DSN-level tls=, or to apply to non-MySQL engines).
+
+- The FTWRL WARNs are absent by design — on this platform their absence means the frozen-snapshot concurrent copy actually ran.
+
+## Next steps
+
+- Migrating from AWS RDS MySQL — the sibling where defaults purge in minutes and the remedy is one SQL call.
+
+- Migrating from DigitalOcean MySQL — the other purge-window platform, where no SQL-visible truth exists at all.
+
+- Zero-downtime migration — the full sync → verify → cutover flow.
+
+- Field note: the transaction that lands in neither the snapshot nor the binlog — the seam FTWRL closes, and on Cloud SQL actually can.
 
 
 ===============================================================

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrating from Google Cloud SQL Postgres with sluice — sluice docs</title>
+<meta name="description" content="The cloudsql.logical_decoding flag (restart included, about a minute), the self-service ALTER ROLE ... REPLICATION grant, default-plaintext TLS and the per-instance CA, and the validated migrate + CDC recipe.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-cloudsql-postgres/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><a class="lnk active" href="/docs/migrate-from-cloudsql-postgres/">Migrating from Google Cloud SQL Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Migrating from Google Cloud SQL Postgres with sluice</h1>
+    <p class="subtitle">The cloudsql.logical_decoding flag (restart included, about a minute), the self-service ALTER ROLE ... REPLICATION grant, default-plaintext TLS and the per-instance CA, and the validated migrate + CDC recipe.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#logical-replication">Enabling logical replication (one flag, about a minute)</a></li><li><a href="#roles">Roles: ALTER ROLE ... REPLICATION actually works here</a></li><li><a href="#tls">TLS: plaintext is accepted by default</a></li><li><a href="#auth-proxy">The Auth Proxy is a tunnel, not a pooler</a></li><li><a href="#recipe">The validated recipe</a></li><li><a href="#decommissioning">Decommissioning: drop the slot</a></li><li><a href="#checks">What sluice checks for you</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>Google Cloud SQL for PostgreSQL works with sluice's vanilla <code>postgres</code> engine — live-validated 2026-07-16 (PostgreSQL 16.14) as a bulk-migration <strong>and</strong> slot-based CDC source: byte-identical md5 ground truth on the bulk copy (including <code>NaN</code>-in-<code>numeric[]</code>, &plusmn;Infinity, denormal floats, and 2-D arrays with NULL elements), an exact snapshot&nbsp;→&nbsp;CDC handoff with live-write convergence, and a clean stop with zero orphaned slots. The pleasant surprise, coming from the <a href="/docs/migrate-from-rds-postgres/">RDS guide</a>: Cloud SQL has no platform-specific role model to learn. Two self-service steps take a fresh instance to CDC-ready, and both of sluice's preflight refusals name remedies that work verbatim here.</p>
+
+<h2 id="logical-replication">Enabling logical replication (one flag, about a minute) <a class="hlink" href="#logical-replication" aria-label="Permalink to this section">#</a></h2>
+<p>A fresh Cloud SQL instance sits at <code>wal_level=replica</code> regardless of backup settings — there is no RDS-style &ldquo;retention 0 means <code>minimal</code>&rdquo; trap, so you are always exactly one flag from CDC-ready. <code>wal_level</code> itself is not directly settable; the knob is the database flag <strong><code>cloudsql.logical_decoding</code></strong>:</p>
+<pre><code><span class="c"># The patch performs the required restart INLINE — about a minute end-to-end (validated live).</span>
+gcloud sql instances patch my-instance <span class="f">--database-flags</span>=cloudsql.logical_decoding=on
+
+<span class="c"># Careful: --database-flags REPLACES the entire flag set. On an instance with</span>
+<span class="c"># existing flags, include them all in the same patch:</span>
+<span class="c">#   --database-flags=cloudsql.logical_decoding=on,max_connections=200</span></code></pre>
+<p>Notes from the validation run:</p>
+<ul>
+  <li><strong>The restart is automatic and fast.</strong> No separate reboot step to schedule — <code>wal_level=logical</code> was queryable about 50 seconds after the patch started (contrast RDS: custom parameter group + explicit reboot, ~3 minutes).</li>
+  <li><strong>The slot budget is already provisioned</strong>: <code>max_replication_slots=10</code> / <code>max_wal_senders=10</code> before the flip, unchanged by it. Plenty for sluice's one slot; only heavy multi-consumer setups need explicit raises.</li>
+  <li><strong>The <code>--database-flags</code> replace-everything behaviour is the one real gotcha</strong> — a patch that names only the new flag silently clears every other flag on the instance.</li>
+</ul>
+
+<h2 id="roles">Roles: ALTER ROLE ... REPLICATION actually works here <a class="hlink" href="#roles" aria-label="Permalink to this section">#</a></h2>
+<p>The default <code>postgres</code> user is not a superuser (<code>rolsuper=f</code>), but it is a member of <code>cloudsqlsuperuser</code> — and Cloud SQL patches the standard &ldquo;must be superuser to alter replication users&rdquo; check for its members. So the fix is one standard-Postgres statement, run as yourself:</p>
+<pre><code>ALTER ROLE postgres WITH REPLICATION;   -- succeeds as the (non-superuser) master user</code></pre>
+<p>That statement is exactly the first remedy in sluice's <code>SLUICE-E-CDC-REPLICATION-PERMISSION</code> refusal — Cloud SQL is the first managed provider in this validation series where it applies verbatim. One honest caveat: the refusal's provider-specific examples currently name platforms where the attribute is <em>not</em> grantable (RDS's role membership, Heroku's support ticket), and don't yet name Cloud SQL as the &ldquo;just run it&rdquo; case — don't let those examples talk you out of trying the <code>ALTER ROLE</code>.</p>
+<ul>
+  <li><strong>Membership confers nothing.</strong> The platform roles <code>cloudsqlreplica</code> / <code>cloudsqllogical</code> carry <code>rolreplication</code> themselves, but the REPLICATION attribute is not inherited via membership in stock Postgres, and Cloud SQL does not patch that — a role granted <code>IN ROLE cloudsqlreplica</code> still cannot create a slot (validated live). Those roles are platform-internal; the attribute on <em>your</em> role is the mechanism, unlike RDS's <code>rds_replication</code> membership model.</li>
+  <li><strong>Expect the refusals in role → flag order.</strong> On a stock instance, <code>sync start</code> meets the replication-permission refusal first; after the grant, the <code>wal_level</code> refusal (whose provider matrix names the Cloud SQL flag). Doing both steps up front skips the second round-trip.</li>
+</ul>
+
+<h2 id="tls">TLS: plaintext is accepted by default <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
+<p>Cloud SQL's default <code>sslMode</code> is <code>ALLOW_UNENCRYPTED_AND_ENCRYPTED</code> — a public-IP DSN without <code>sslmode=require</code> sends credentials and data in the clear, and <em>nothing refuses</em> (contrast RDS Postgres, where <code>force_ssl</code> is the default). Set <code>sslmode=require</code> or stronger on every Cloud SQL DSN yourself, or flip the instance to <code>--ssl-mode=ENCRYPTED_ONLY</code> server-side.</p>
+<div class="table-scroll"><table>
+<thead><tr><th>Mode</th><th class="desc">On a default Cloud SQL instance</th></tr></thead>
+<tbody>
+<tr><td><code>sslmode=disable</code></td><td class="desc">Accepted. Nothing server-side refuses plaintext unless the instance was created/patched to <code>ENCRYPTED_ONLY</code>.</td></tr>
+<tr><td><code>sslmode=require</code></td><td class="desc">Works (TLS 1.3). What the validation ran on throughout — the sensible floor.</td></tr>
+<tr><td><code>sslmode=verify-ca</code></td><td class="desc">Works with the per-instance CA (recipe below). <strong>The ceiling on default instances.</strong></td></tr>
+<tr><td><code>sslmode=verify-full</code></td><td class="desc">Fails on default instances: the server certificate names <code>.sql.goog</code> DNS names — never the public IP — and the default (per-instance-CA) mode publishes no matching <code>dnsName</code>. Instances <em>created</em> with <code>--server-ca-mode=GOOGLE_MANAGED_CAS_CA</code> get a resolvable name that should allow it (unvalidated).</td></tr>
+</tbody>
+</table></div>
+<p>The per-instance CA is an authenticated API fetch (like DigitalOcean's, unlike RDS's public bundle URL); Postgres endpoints take it as <code>sslrootcert=</code> in the DSN (the <code>--source-tls-ca</code> flag is for MySQL-family endpoints and refuses on Postgres rather than being silently ignored):</p>
+<pre><code>gcloud sql instances describe my-instance <span class="f">--format</span>='value(serverCaCert.cert)' &gt; cloudsql-ca.pem
+
+<span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres \
+    <span class="f">--source</span> 'postgres://postgres:pass@34.148.x.y:5432/app?sslmode=verify-ca&amp;sslrootcert=cloudsql-ca.pem' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+
+<h2 id="auth-proxy">The Auth Proxy is a tunnel, not a pooler <a class="hlink" href="#auth-proxy" aria-label="Permalink to this section">#</a></h2>
+<p>The Cloud SQL Auth Proxy is untested with sluice, but it is categorically different from the pgbouncer/Supavisor/RDS-Proxy class that breaks CDC: it's a per-connection encrypted TCP tunnel with IAM auth, not a transaction pooler, so the replication protocol should traverse it. Treat that as unvalidated — the validated path is the direct instance IP with an authorized-network entry, which needs no proxy at all. Two things to know if you route through it anyway: sluice's pooler-host preflight WARN cannot see the hop (the DSN host becomes <code>localhost</code>, so a quiet preflight there is not a verdict), and Cloud SQL's separate <em>Managed Connection Pooling</em> feature <strong>is</strong> a pooler and belongs in the CDC-incompatible class (also untested).</p>
+
+<h2 id="recipe">The validated recipe <a class="hlink" href="#recipe" aria-label="Permalink to this section">#</a></h2>
+<p>Public IP + an authorized-network entry for the migration host is enough — no proxy, no VPC peering. One-shot copy first:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://postgres:pass@34.148.x.y:5432/app?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync, after the flag flip and the role grant:</p>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://postgres:pass@34.148.x.y:5432/app?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> cloudsql-app</code></pre>
+
+<h2 id="decommissioning">Decommissioning: drop the slot <a class="hlink" href="#decommissioning" aria-label="Permalink to this section">#</a></h2>
+<p>A cleanly stopped sluice stream leaves its replication slot in place — that's what makes the stream resumable. When you're done for good, drop it: an abandoned slot retains WAL and will eventually fill the instance disk (a 10&nbsp;GB starter disk has little slack).</p>
+<pre><code><span class="k">sluice</span> slot list <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...'
+<span class="k">sluice</span> slot drop sluice_slot <span class="f">--yes</span> <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://...'</code></pre>
+<p>An empty slot catalog is the Cloud SQL baseline — there are no Neon-style platform-internal slots to leave alone; anything listed is a consumer someone created.</p>
+
+<h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><strong>The <code>wal_level</code> preflight refusal</strong> — CDC against a <code>replica</code>-level instance refuses at startup, before touching any slot, pointing at the provider matrix whose Cloud SQL row (<code>cloudsql.logical_decoding = on</code>, restart included) was validated correct by this run.</li>
+  <li><strong><code>SLUICE-E-CDC-REPLICATION-PERMISSION</code></strong> — a role without the REPLICATION attribute refuses with the exact <code>ALTER ROLE</code> remedy, and on Cloud SQL that remedy genuinely works as the master user (see the caveat above about the refusal's provider examples).</li>
+  <li><strong>Slot-health monitoring</strong> — <code>wal_status</code> transitions and decode-spill counters, the same as any Postgres source; the validation stream ran WARN-free throughout.</li>
+  <li><strong><code>SLUICE-E-CONFIRMATION-REQUIRED</code></strong> — <code>slot drop</code> refuses without <code>--yes</code>, so a decommissioning script can't destroy a resumable position by accident.</li>
+</ul>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/postgres-source-prep/">Prepare a Postgres source</a> — the full slot lifecycle, retention, and failover story (provider matrix included).</li>
+  <li><a href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a> — the AWS sibling: everything Cloud SQL does differently (role membership, parameter-group reboot, force_ssl).</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — confirm the target matches the source after the copy.</li>
+  <li><a href="/field-notes/postgres-slot-leaks/">Field note: replication slots don't die with your process</a> — why the decommissioning step matters.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/migrate-from-rds-postgres/">← Migrating from AWS RDS Postgres</a><a class="next" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/migrate-from-cloudsql-postgres/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
