@@ -258,6 +258,8 @@ const FIELD_NOTES = [
   { slug: "optimization-trimmed-the-column", date: "2026-07-17", engine: "Cross-cutting", label: "The optimization that trimmed away the column a later feature needed", dek: "Filtered CDC (<code>sync --where country IN ('US','CA')</code>) has one hard case: an UPDATE that moves a row <em>out</em> of the filter must become a target <code>DELETE</code>, or the out-of-scope row silently leaks. sluice designed exactly that &mdash; then it leaked anyway, because both CDC readers already narrow the UPDATE before-image down to the primary key, so the filtered column was gone before the predicate saw it. A data-narrowing optimization can silently defeat a feature added later, and only end-to-end testing over the real stream witnesses it." },
   { slug: "predicate-in-two-engines", date: "2026-07-17", engine: "Cross-cutting", label: "The predicate you evaluate twice has to agree, or refuse", dek: "No source delivers a <em>filtered</em> change stream, so filtered CDC evaluates the <code>--where</code> predicate client-side, per event &mdash; the same predicate the migrate leg pushed down to the source. A byte-exact client compare of <code>name = 'ANA'</code> diverges from a case-insensitive collation, silently leaking or dropping rows &mdash; so sluice refuses at sync-start (<code>SLUICE-E-WHERE-CDC-UNSUPPORTED-PREDICATE</code>) anything it can't reproduce faithfully. When the same predicate runs in two engines, prove they agree or refuse; never approximate." },
   { slug: "filter-a-parent-orphans-the-child", date: "2026-07-17", engine: "Cross-cutting", label: "You can't filter a parent table without orphaning its children", dek: "Row-level filtering reads like a per-table setting, but a relational schema couples the filters through its foreign keys. Filter a parent (<code>--where users=country IN ('US','CA')</code>) and copy the children whole, and the deferred <code>ADD CONSTRAINT FOREIGN KEY</code> fails with SQLSTATE 23503 &mdash; the kept child rows point at parents the filter excluded. A tool that quietly dropped the key would hand you a database that looks complete and violates its own schema; sluice refuses loudly (<code>SLUICE-E-WHERE-FK-ORPHAN</code>), names the constraint, and makes you filter consistently or opt into an explicit <code>NOT VALID</code> degrade." },
+  { slug: "vstream-filter-keeps-both-images", date: "2026-07-18", engine: "MySQL & Vitess", label: "The change stream that won't drop your row", dek: "To filter a Vitess VStream server-side you push a <code>where</code> into its rule &mdash; and then fear the move-OUT: a row updated so it no longer matches, that the stream might silently <em>drop</em> instead of delete, leaking a stale row. The Vitess source settles it: for a non-vindex filter, if <em>either</em> the before- or after-image passes, VStream emits the change with <strong>both</strong> images. So a move-OUT arrives as a full UPDATE, never dropped &mdash; but VStream tells you <em>that</em> the row touched the filter, not <em>which</em> image matched, so you must still classify the move direction yourself." },
+  { slug: "reuse-the-source-comparator", date: "2026-07-18", engine: "MySQL & Vitess", label: "You can't reimplement MySQL's =, so link its comparator in", dek: "A filtered change stream evaluates <code>region = 'EU'</code> client-side, and it has to match the source's own <code>=</code> exactly &mdash; but MySQL's default collation is case- and accent-insensitive, and reimplementing that (<code>ToLower</code>? Unicode folding?) is a guess that diverges on &szlig;, the Turkish dotless i, and locale tailoring. The fix isn't a better reimplementation: it's linking the source engine's <em>own</em> comparator (Vitess's <code>collations</code> + <code>evalengine</code>) and calling it under the column's collation, so the two evaluations are the same code by construction. When you must reproduce another system's semantics, use its implementation, not your model of it." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -9075,6 +9077,87 @@ write(
   <li>Operator guide — filtered / subset migration (the full <code>--where</code> walkthrough, including the FK-orphan section and both reconciliation paths).</li>
   <li>Companion field notes — <a href="/field-notes/optimization-trimmed-the-column/">the optimization that trimmed away the column a later feature needed</a> and <a href="/field-notes/predicate-in-two-engines/">the predicate you evaluate twice has to agree, or refuse</a> (the two continuous-sync halves of the same row-level-filtering feature).</li>
 </ul>
+`,
+  })
+);
+
+// nav-label: The change stream that won't drop your row
+write(
+  "field-notes/vstream-filter-keeps-both-images",
+  page({
+    slug: "field-notes/vstream-filter-keeps-both-images",
+    title: "The change stream that won't drop your row",
+    subtitle: "Filtering a continuous change stream has one genuinely hard case: a row updated so it no longer matches the filter has to become a target DELETE, or the now-out-of-scope row leaks forever. When you push that filter server-side into someone else's stream — a Vitess VStream rule — the load-bearing question is what the stream emits for a row that leaves the filter. Assume it drops the event and you leak. The Vitess source settles it: for a non-vindex filter, when either the before- or after-image passes, VStream emits the change with BOTH images — so the move-out arrives as a full UPDATE, never dropped. The catch is that it tells you the row touched the filter, not which side matched, so you still have to decide the move direction yourself.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — building continuous filtered sync on the Vitess / PlanetScale VStream path (<code>sluice sync --where</code>, v0.99.278, ADR-0174 Piece 2). Ground-truthed against the vendored Vitess <code>v0.24.2</code> vstreamer source and proven on a real Vitess-24 cluster.</p>
+
+<h2 id="killer">The move-out is the whole difficulty</h2>
+<p>Filtering a one-shot copy is easy — push the <code>WHERE</code> into the read and only matching rows cross the wire. Filtering a <em>continuous</em> stream is the partial-replication problem, and its hard case is the row that leaves the filter: an <code>UPDATE</code> that changes a row so it no longer matches has to become a target <code>DELETE</code>, or the stale, now-out-of-scope row sits on the target forever. Evaluate each event's new image in isolation and you drop that UPDATE (its after-image doesn't match) — a silent leak. Getting it right needs the row's <em>old</em> image too, so you can see it <em>used</em> to be in scope.</p>
+
+<h2 id="pushdown">Pushing the filter into someone else's stream</h2>
+<p>Vitess VStream can filter server-side: each table's rule takes a query, and <code>select * from t where (&lt;predicate&gt;)</code> makes vtgate evaluate the predicate itself — filtering the copy phase and the streaming phase natively, with the source's own collation, no client-side scan. That's the efficient path. But it raised the fear that gates the whole design: when a row updates <em>out</em> of the filter, does VStream deliver a DELETE, or does it just… stop matching the row and silently drop the event? For a filter that isn't on the sharding key, Vitess VReplication has historically had exactly this stale-row caveat. If VStream dropped the move-out, sluice would never see it — and never delete it. The leak would be invisible.</p>
+
+<h2 id="truth">What the source actually does: both images, if either matches</h2>
+<p>The answer is in <code>vstreamer.processRowEvent</code>. For each row change it computes whether the before-image passes the filter and whether the after-image passes, then:</p>
+${pre(`if !afterOK && !beforeOK {
+    continue                 // neither in scope -> genuinely dropped
+}
+if !hasVindex {              // a plain --where, no sharding-key term
+    afterOK = true           // ...emit BOTH images if EITHER passed
+    beforeOK = true
+}`)}
+<p>So for a non-vindex filter, a row where <em>either</em> image matches is emitted with <strong>both</strong> its before- and after-images. A move-out — before-image in scope, after-image out — is not dropped and not reshaped into something lossy: it arrives as a complete <code>UPDATE</code> carrying the old in-scope row and the new out-of-scope row. sluice's client-side row-move table reads that as "was in scope, now isn't" → a target <code>DELETE</code> by key. Validated end-to-end on a real Vitess-24 cluster: filtered copy excludes out-of-scope rows server-side, a move-in becomes an INSERT, a move-out becomes a DELETE, nothing leaks.</p>
+
+<h2 id="twist">The twist: it tells you *that*, not *which*</h2>
+<p>The sharp part is what VStream does <em>not</em> tell you. Because it forces both flags true whenever either matched, the event carries both images unconditionally — it reports <em>that</em> the row touched the filter's scope, never <em>which</em> side matched. So you cannot read the move direction off the event; you have to re-evaluate the predicate yourself, on both images, to distinguish a move-in (INSERT) from a move-out (DELETE) from an in-scope update. The server-side filter is an <em>efficiency</em> layer — it thins the stream to rows that matter — but the classification is still yours, and it has to agree with what the server filtered on (which is why the client-side evaluation must reproduce the source's collation exactly; see <a href="/field-notes/reuse-the-source-comparator/">linking the source's comparator</a>).</p>
+<p>One more consequence of "server-side, at open": the VStream copy sends its filter rules to vtgate when the stream is <em>constructed</em>, before your code gets the handle back. A filter applied a moment later — after the stream opens — is too late for the first table's copy, which has already started unfiltered. The predicate has to be threaded into the open, not set afterward, or the first table leaks.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When you push a filter (or a projection, or a subscription) into a stream you don't own, the load-bearing question isn't "will it filter" — it's "what does it emit for a row that <em>leaves</em> the filter." Three answers are common and only one is safe: it drops the event (you silently leak the stale row), it emits a synthetic delete (convenient, but now you trust its delete semantics), or it hands you both images and makes you classify (more work, no lost information). Find out which before you rely on it — read the source or test the move-out explicitly on the real system, because the happy-path "rows I want show up" test passes under all three. Vitess picked the third, which is why a filtered VStream is safe to build a delete-on-move-out on; do not assume the stream you're pushing into made the same choice.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Vitess <code>v0.24.2</code> — <code>go/vt/vttablet/tabletserver/vstreamer/vstreamer.go</code> <code>processRowEvent</code> ("if the target is not sharded, pass both images if either after or before passes"). sluice ADR-0174 Piece 2; the <code>vitesscluster</code>-tagged move-out cluster test.</li>
+  <li>Companion field notes — <a href="/field-notes/optimization-trimmed-the-column/">the optimization that trimmed away the column a later feature needed</a> (why the move-out needs the full before-image) and <a href="/field-notes/reuse-the-source-comparator/">you can't reimplement MySQL's <code>=</code></a> (why the client-side re-classification must match the source's own evaluation).</li>
+</ul>
+
+---
+Canonical page: https://sluicesync.com/field-notes/vstream-filter-keeps-both-images/ · Full docs index: https://sluicesync.com/llms.txt
+`,
+  })
+);
+
+// nav-label: You can't reimplement MySQL's =, so link its comparator in
+write(
+  "field-notes/reuse-the-source-comparator",
+  page({
+    slug: "field-notes/reuse-the-source-comparator",
+    title: "You can't reimplement MySQL's =, so link its comparator in",
+    subtitle: "A filtered change stream evaluates the same predicate in two places — pushed down to the source, and client-side per event — and they have to agree exactly or the stream silently leaks or drops rows. String equality is where they diverge, because MySQL's default collation is case- and accent-insensitive: 'EU' equals 'eu' equals 'Eu'. sluice first refused such filters rather than approximate them. The resolution wasn't a better approximation — it was to stop reimplementing the comparison and link in the source engine's own comparator, so the two evaluations are the same code by construction.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — this is the sequel to <a href="/field-notes/predicate-in-two-engines/">the predicate you evaluate twice has to agree, or refuse</a>. That note explained why sluice <em>refused</em> case-insensitive string filters on a continuous stream; v0.99.278 (ADR-0174 Piece 1) makes them <em>work</em> — faithfully. Grounded in <code>internal/rowpredicate/collation.go</code>.</p>
+
+<h2 id="two">The same predicate, evaluated twice</h2>
+<p>A filtered migration runs one <code>--where</code> in two very different evaluators: the source pushes it down as native SQL (the source's engine matches the rows), and the continuous change stream evaluates it client-side, per event, over decoded row values — because no source delivers a filtered stream. The whole design depends on those two producing the identical answer for every row. Where they disagree, a row the source considered in-scope gets dropped by the client (or vice versa): silent, count-invisible scope drift.</p>
+
+<h2 id="collation">String equality is defined by collation, not bytes</h2>
+<p>They agree trivially on numbers and <code>IS NULL</code>. Strings are the trap, because <em>equality itself is a collation operation</em>. MySQL's default <code>utf8mb4_0900_ai_ci</code> is case- <em>and</em> accent-insensitive: <code>region = 'EU'</code> matches the stored values <code>eu</code>, <code>Eu</code>, and <code>Éu</code>. A client-side byte comparison matches none of them — so the source says "in scope," the client says "out," and the stream drops a row it should have kept. The obvious fixes are all wrong in the tail: <code>strings.ToLower</code> ignores accents and the Turkish dotless-i; a hand-rolled Unicode case-fold still isn't MySQL's <em>specific</em> per-collation implementation; <code>&szlig;</code> vs <code>ss</code>, locale tailoring, and version differences all lurk. Any reimplementation is a <em>model</em> of the source's <code>=</code>, and it diverges exactly where you didn't test.</p>
+
+<h2 id="link">The fix: link the source's own comparator</h2>
+<p>So sluice doesn't reimplement the comparison — it reuses the source engine's own. The client-side evaluator imports Vitess's <code>collations</code> and <code>evalengine</code> packages (already in the module graph) and, for a string column under a case/accent-insensitive collation, compares via <code>evalengine.NullsafeCompare</code> under the column's declared collation ID — the identical code path MySQL and Vitess evaluate <code>=</code> with. The client-side classification is then byte-for-byte what the source computes; divergence is not "unlikely," it is <em>structurally impossible</em> for the collations the library carries. A collation the library can't resolve (an unknown or exotic one, or a Postgres non-deterministic ICU collation) still refuses loudly rather than fall back to a guess — the loud-failure floor from the first note is intact. And because the library is pinned to one server version's collation set, an unrecognized collation degrades to a refusal, never to a wrong answer.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When your code must reproduce another system's semantics — a collation's equality, a database's timezone math, a driver's numeric coercion, a hash's canonicalization — reimplementing it is a standing invitation to divergence, and the divergence hides on the inputs your tests didn't imagine. If the real implementation is linkable, link it: call the source system's actual comparator, not your model of it. The reimplementation is a guess; the library is ground truth. And when it genuinely isn't linkable, the honest move is the first note's move — refuse, don't approximate.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice <code>internal/rowpredicate/collation.go</code> — <code>collations.NewEnvironment</code> + <code>evalengine.NullsafeCompare</code>; ADR-0174 Piece 1; CHANGELOG 0.99.278.</li>
+  <li>Prequel — <a href="/field-notes/predicate-in-two-engines/">the predicate you evaluate twice has to agree, or refuse</a> (why sluice refused these filters before this landed).</li>
+  <li>Companion — <a href="/field-notes/vstream-filter-keeps-both-images/">the change stream that won't drop your row</a> (why the client-side re-classification is mandatory even when the filter is pushed server-side).</li>
+</ul>
+
+---
+Canonical page: https://sluicesync.com/field-notes/reuse-the-source-comparator/ · Full docs index: https://sluicesync.com/llms.txt
 `,
   })
 );
