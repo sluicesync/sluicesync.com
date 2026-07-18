@@ -23,7 +23,7 @@ The direct answer to "the EU database should end up with only the EU rows." Give
     # preview
     sluice migrate \
         --source-driver postgres --source "$SLUICE_SOURCE" \
-        --target-driver postgres --target "$SLUICE_TARGET_EU" \
+        --target-driver postgres --target "$EU_TARGET" \
         --where "users=region = 'EU'" \
         --where "orders=region = 'EU'" \
         --where "order_items=region = 'EU'" \
@@ -32,7 +32,7 @@ The direct answer to "the EU database should end up with only the EU rows." Give
     # copy only the EU rows
     sluice migrate \
         --source-driver postgres --source "$SLUICE_SOURCE" \
-        --target-driver postgres --target "$SLUICE_TARGET_EU" \
+        --target-driver postgres --target "$EU_TARGET" \
         --where "users=region = 'EU'" \
         --where "orders=region = 'EU'" \
         --where "order_items=region = 'EU'"
@@ -40,7 +40,7 @@ The direct answer to "the EU database should end up with only the EU rows." Give
     # verify — the SAME --where, so counts compare matching-source vs target
     sluice verify \
         --source-driver postgres --source "$SLUICE_SOURCE" \
-        --target-driver postgres --target "$SLUICE_TARGET_EU" \
+        --target-driver postgres --target "$EU_TARGET" \
         --where "users=region = 'EU'" \
         --where "orders=region = 'EU'" \
         --where "order_items=region = 'EU'"
@@ -55,7 +55,7 @@ On MySQL the flags are identical — only the driver and the predicate dialect c
 
     sluice migrate \
         --source-driver planetscale --source "$SLUICE_SOURCE" \
-        --target-driver planetscale --target "$SLUICE_TARGET_EU" \
+        --target-driver planetscale --target "$EU_TARGET" \
         --where "users=region = 'EU'" \
         --where "orders=region = 'EU'" \
         --where "order_items=region = 'EU'"
@@ -78,7 +78,7 @@ A row never in EU changes · dropped (never in scope) ·
 
     sluice sync start --stream-id eu-split \
         --source-driver postgres --source "$SLUICE_SOURCE" \
-        --target-driver postgres --target "$SLUICE_TARGET_EU" \
+        --target-driver postgres --target "$EU_TARGET" \
         --where "users=region = 'EU'" \
         --where "orders=region = 'EU'" \
         --where "order_items=region = 'EU'"

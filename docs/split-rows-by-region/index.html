@@ -47,7 +47,7 @@
 <pre><code><span class="c"># preview</span>
 <span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SLUICE_SOURCE" \
-    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET_EU" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$EU_TARGET" \
     <span class="f">--where</span> "users=region = 'EU'" \
     <span class="f">--where</span> "orders=region = 'EU'" \
     <span class="f">--where</span> "order_items=region = 'EU'" \
@@ -56,7 +56,7 @@
 <span class="c"># copy only the EU rows</span>
 <span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SLUICE_SOURCE" \
-    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET_EU" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$EU_TARGET" \
     <span class="f">--where</span> "users=region = 'EU'" \
     <span class="f">--where</span> "orders=region = 'EU'" \
     <span class="f">--where</span> "order_items=region = 'EU'"
@@ -64,7 +64,7 @@
 <span class="c"># verify — the SAME --where, so counts compare matching-source vs target</span>
 <span class="k">sluice</span> verify \
     <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SLUICE_SOURCE" \
-    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET_EU" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$EU_TARGET" \
     <span class="f">--where</span> "users=region = 'EU'" \
     <span class="f">--where</span> "orders=region = 'EU'" \
     <span class="f">--where</span> "order_items=region = 'EU'"</code></pre>
@@ -74,7 +74,7 @@
 <p><strong>On MySQL</strong> the flags are identical — only the driver and the predicate dialect change. Use <code>--source-driver mysql</code> / <code>--target-driver mysql</code> for self-hosted MySQL, or <code>--source-driver planetscale</code> / <code>--target-driver planetscale</code> for PlanetScale MySQL (see <a href="/docs/planetscale-region-move/#connect">the region-move guide</a> for the PlanetScale DSN + admin-role setup), and write the predicate in MySQL SQL:</p>
 <pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
-    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$SLUICE_TARGET_EU" \
+    <span class="f">--target-driver</span> planetscale <span class="f">--target</span> "$EU_TARGET" \
     <span class="f">--where</span> "users=region = 'EU'" \
     <span class="f">--where</span> "orders=region = 'EU'" \
     <span class="f">--where</span> "order_items=region = 'EU'"</code></pre>
@@ -90,7 +90,7 @@
 </tbody></table></div>
 <pre><code><span class="k">sluice</span> sync start <span class="f">--stream-id</span> eu-split \
     <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SLUICE_SOURCE" \
-    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET_EU" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$EU_TARGET" \
     <span class="f">--where</span> "users=region = 'EU'" \
     <span class="f">--where</span> "orders=region = 'EU'" \
     <span class="f">--where</span> "order_items=region = 'EU'"</code></pre>

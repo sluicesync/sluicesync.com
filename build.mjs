@@ -4137,7 +4137,7 @@ write(
 ${pre(`# preview
 sluice migrate \\
     --source-driver postgres --source "$SLUICE_SOURCE" \\
-    --target-driver postgres --target "$SLUICE_TARGET_EU" \\
+    --target-driver postgres --target "$EU_TARGET" \\
     --where "users=region = 'EU'" \\
     --where "orders=region = 'EU'" \\
     --where "order_items=region = 'EU'" \\
@@ -4146,7 +4146,7 @@ sluice migrate \\
 # copy only the EU rows
 sluice migrate \\
     --source-driver postgres --source "$SLUICE_SOURCE" \\
-    --target-driver postgres --target "$SLUICE_TARGET_EU" \\
+    --target-driver postgres --target "$EU_TARGET" \\
     --where "users=region = 'EU'" \\
     --where "orders=region = 'EU'" \\
     --where "order_items=region = 'EU'"
@@ -4154,7 +4154,7 @@ sluice migrate \\
 # verify — the SAME --where, so counts compare matching-source vs target
 sluice verify \\
     --source-driver postgres --source "$SLUICE_SOURCE" \\
-    --target-driver postgres --target "$SLUICE_TARGET_EU" \\
+    --target-driver postgres --target "$EU_TARGET" \\
     --where "users=region = 'EU'" \\
     --where "orders=region = 'EU'" \\
     --where "order_items=region = 'EU'"`)}
@@ -4164,7 +4164,7 @@ sluice verify \\
 <p><strong>On MySQL</strong> the flags are identical — only the driver and the predicate dialect change. Use <code>--source-driver mysql</code> / <code>--target-driver mysql</code> for self-hosted MySQL, or <code>--source-driver planetscale</code> / <code>--target-driver planetscale</code> for PlanetScale MySQL (see <a href="/docs/planetscale-region-move/#connect">the region-move guide</a> for the PlanetScale DSN + admin-role setup), and write the predicate in MySQL SQL:</p>
 ${pre(`sluice migrate \\
     --source-driver planetscale --source "$SLUICE_SOURCE" \\
-    --target-driver planetscale --target "$SLUICE_TARGET_EU" \\
+    --target-driver planetscale --target "$EU_TARGET" \\
     --where "users=region = 'EU'" \\
     --where "orders=region = 'EU'" \\
     --where "order_items=region = 'EU'"`)}
@@ -4180,7 +4180,7 @@ ${pre(`sluice migrate \\
 </tbody></table>
 ${pre(`sluice sync start --stream-id eu-split \\
     --source-driver postgres --source "$SLUICE_SOURCE" \\
-    --target-driver postgres --target "$SLUICE_TARGET_EU" \\
+    --target-driver postgres --target "$EU_TARGET" \\
     --where "users=region = 'EU'" \\
     --where "orders=region = 'EU'" \\
     --where "order_items=region = 'EU'"`)}
