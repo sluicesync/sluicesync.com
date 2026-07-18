@@ -1178,6 +1178,12 @@ SLUICE-E-CSV-HEADER-UNDECLARED · refusal · A csv/tsv source was opened without
 
 SLUICE-E-EXPORT-UNREPRESENTABLE · refusal · sluice backup export-as-parquet refused a column type or value that has no faithful Parquet representation: a multi-dimensional array value (the column type declares no dimensionality, so the derived LIST<element> schema cannot hold nested lists), a TIME value outside a calendar day (MySQL TIME durations reach ±838h; PG allows 24:00:00), a PG NUMERIC NaN/Infinity (Parquet DECIMAL has no non-finite form), a decimal with more digits than its declared precision/scale, or a timestamp with sub-microsecond precision. The export never silently narrows, rounds, or wraps a value — the documented string downgrades (unbounded NUMERIC, TIMETZ) carry the exact value text and are WARNs, not this refusal. · Exclude the affected table (--exclude-table) and export the rest, or query that table's JSON-Lines chunks directly (DuckDB reads them natively — see the DuckDB cookbook). ·
 
+SLUICE-E-WHERE-CDC-UNSUPPORTED-PREDICATE · refusal · sluice sync with a --where TABLE=<predicate> filter (ADR-0173 Phase 2) refused at sync-start: unlike migrate (which pushes the predicate down to the source read), a continuous filtered sync must evaluate the predicate CLIENT-SIDE per CDC change — there is no source-side stream filter — so it accepts only a restricted, faithfully-evaluable grammar (a column compared to a literal with = != <> < <= > >=, col IN (…), IS [NOT] NULL, combined with AND/OR/NOT and parentheses). Anything outside it — a function call, a subquery, arithmetic, LIKE, an unknown column, an ORDERING or COLLATION-SENSITIVE string comparison (a case/accent-insensitive collation, where a byte-exact client-side compare would diverge from the source's own evaluation), a timezone-aware temporal comparison, or unrecognized syntax — is refused UP FRONT rather than evaluated in a way that could silently leak out-of-scope rows or drop in-scope ones. migrate --where is unaffected (it never evaluates client-side). · Rewrite the predicate within the supported grammar (equality / IN / IS NULL on a column is the common case — country IN ('US','CA')), or, if you only need the initial subset and not continuous filtering, use sluice migrate --where (source-evaluated, full source-SQL). For a case-insensitive string match, normalize on the source (e.g. a generated lower-cased column) and filter on that. ·
+
+SLUICE-E-WHERE-CDC-BEFORE-IMAGE · refusal · sluice sync with a --where filter (ADR-0173 Phase 2) refused at sync-start because the source is not configured to deliver full row BEFORE-images, which the filter's row-move evaluation requires: an UPDATE that changes a row so it newly matches (move-IN) or no longer matches (move-OUT) the predicate must be translated to a target INSERT or DELETE, and deciding that needs the predicate evaluated on BOTH the before- and after-image. On MySQL this is binlog_row_image=FULL (already required for all sluice CDC — a partial image raises SLUICE-E-CDC-ROW-IMAGE-PARTIAL); on Postgres each filtered table needs REPLICA IDENTITY FULL (the default REPLICA IDENTITY DEFAULT carries only the primary key in the before-image, so a predicate on a non-key column could not be evaluated on the old row). The message names the table and the exact remedy. · Postgres: ALTER TABLE <table> REPLICA IDENTITY FULL on each filtered table, then restart the sync. MySQL: SET GLOBAL binlog_row_image=FULL (see SLUICE-E-CDC-ROW-IMAGE-PARTIAL). ·
+
+SLUICE-E-WHERE-FK-ORPHAN · refusal · sluice migrate with a --where TABLE=<predicate> row filter (ADR-0173) refused at the constraints phase: the filter excluded rows of a PARENT table, orphaning rows on a child table that references it, so the deferred ADD CONSTRAINT FOREIGN KEY failed with SQLSTATE 23503 on the target. The message names the child table, the FK constraint, and the referenced parent (flagging which side carries a --where). This fires only when --allow-degraded-fks is NOT set — with that flag the FK is instead attached NOT VALID (a PG target) and no refusal is raised. · Filter consistently so the referenced parent's rows are also copied (a child --where must not out-scope its parent), or pass --allow-degraded-fks (PG target) to attach the FK as NOT VALID and validate later after reconciling the orphans. Referential-aware auto-inclusion of parent rows is a future enhancement (ADR-0173). ·
+
 
 ===============================================================
 # Type mapping
@@ -5503,6 +5509,10 @@ Field notes are evergreen engine-behavior documentation, not release announcemen
 None of these require sluice to reproduce — they are properties of Postgres, MySQL, Vitess, SQLite, and the wire protocols and drivers around them. If you move data between databases for a living, several of them will eventually be your problem too.
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
+
+- 2026-07-17Cross-cutting The predicate you evaluate twice has to agree, or refuse — No source delivers a filtered change stream, so filtered CDC evaluates the --where predicate client-side, per event &mdash; the same predicate the migrate leg pushed down to the source. A byte-exact client compare of name = 'ANA' diverges from a case-insensitive collation, silently leaking or dropping rows &mdash; so sluice refuses at sync-start (SLUICE-E-WHERE-CDC-UNSUPPORTED-PREDICATE) anything it can't reproduce faithfully. When the same predicate runs in two engines, prove they agree or refuse; never approximate.
+
+- 2026-07-17Cross-cutting The optimization that trimmed away the column a later feature needed — Filtered CDC (sync --where country IN ('US','CA')) has one hard case: an UPDATE that moves a row out of the filter must become a target DELETE, or the out-of-scope row silently leaks. sluice designed exactly that &mdash; then it leaked anyway, because both CDC readers already narrow the UPDATE before-image down to the primary key, so the filtered column was gone before the predicate saw it. A data-narrowing optimization can silently defeat a feature added later, and only end-to-end testing over the real stream witnesses it.
 
 - 2026-07-17MariaDB MariaDB and MySQL 8 disagree on which coordinate comes first — Migrate a POINT in SRID 4326 from MariaDB to MySQL 8 and a naive ST_AsText diff shows longitude and latitude swapped. Nothing is corrupt: sluice copied the WKB faithfully and the point is in the same place &mdash; ST_Latitude/ST_Longitude match exactly. The two engines simply default to opposite axis orders when they display a geographic SRID; compare the coordinates, not the rendered text.
 
@@ -10049,3 +10059,88 @@ A managed provider's status endpoint is a control-plane assertion, not a data-pl
 - sluice managed-services advisory (compute-tier slot runway) and the 2026-07-17 Supabase compute-tier probe — the paired Small-vs-Micro slot-survival differential and the crash-recovery-through-ACTIVE_HEALTHY incident.
 
 - Related field notes — the alert cleared at the exact moment the slot died and replication slots don't die with your process (the same control-plane-vs-data-plane theme, at the slot).
+
+
+===============================================================
+# The optimization that trimmed away the column a later feature needed
+(https://sluicesync.com/field-notes/optimization-trimmed-the-column/)
+
+Continuous filtered sync — replicate only the rows matching --where — has one genuinely hard case: an UPDATE can move a row out of the filter's scope, and that has to become a target DELETE or the now-out-of-scope row silently leaks. sluice designed exactly that, a before×after row-move truth table. Then end-to-end testing over a real change stream caught it leaking anyway, because both CDC readers already narrow the UPDATE before-image down to the primary key — an earlier correctness fix — so by the time the filter evaluated the OLD row, the filtered column was no longer in it. A data-narrowing optimization can silently defeat a feature added later that needs the trimmed-away data, and neither piece's own unit test can see it.
+
+Observed — building continuous filtered sync (sluice sync --where, v0.99.276, ADR-0173 Phase 2). The leak was caught by end-to-end testing over a real change stream during development and fixed before the feature shipped — an in-development near-miss caught by the process, not a released regression. Ground-truthed against ADR-0173 and the MySQL/Postgres CDC readers' before-image narrowing.
+
+## The one genuinely hard case in filtering a change stream
+
+Filtering a one-shot copy is easy: push the WHERE down into the source read and only matching rows ever cross the wire. Filtering a continuous change stream is the classic partial-replication problem, because no source delivers a filtered stream — the binlog, the logical-replication slot, and VStream all hand you every change — so sluice evaluates the predicate itself, per event. And a single UPDATE can change a row so it newly matches the filter, or no longer matches it. Evaluating each event in isolation silently corrupts the target both ways: a row that moves out of scope (its old image matched, its new image doesn't) has to become a target DELETE — drop the event and the stale, now-out-of-scope row is left behind forever; a row that moves in has to become an INSERT, because the target has no base row for the UPDATE to land on.
+
+So sluice pinned the semantics as a truth table — the predicate evaluated on both the before- and after-image, translated to the correct target op:
+
+    before matches?   after matches?   target op
+    -----------------------------------------------------------
+         no                yes          INSERT the after-image   (moved IN)
+         yes               no           DELETE by key            (moved OUT)
+         yes               yes          UPDATE as-is
+         no                no           drop (never in scope)
+
+The move-OUT → DELETE row is the whole point of the table: it is the one guard standing between the operator and a silent leak of a row that no longer belongs in the filtered destination.
+
+## The table was right, and it leaked anyway
+
+End-to-end testing over a real change stream caught a move-OUT leaking despite the table. The reason is the sharp part, and it had nothing to do with the row-move logic — it was a pre-existing optimization from an unrelated fix, sitting one layer down. Both CDC readers already narrow an UPDATE's before-image down to just the primary-key (identity) columns before handing it up. That narrowing is not laziness; it is itself a correctness fix. Building an UPDATE's WHERE over every old column is exactly what silently ate our UPDATEs once a jsonb value failed its equality round-trip — so the readers deliberately reduce the before-image to the key, which is all the applier's WHERE needs.
+
+But the filter's row-move check needs something the applier never did: the value of the filtered column in the OLD row. And by the time the intercept ran, the reader had already trimmed that column away. The predicate evaluated the OLD image, found the country column simply absent, read it as non-matching, and classified a genuine move-OUT as (before = false, after = false) — "never in scope" — and dropped it. The exact silent leak the truth table existed to prevent, produced by an optimization that predated the feature by many releases.
+
+## The fix: full before-image only where it's needed, zero-value-safe
+
+The narrowing is correct and worth keeping everywhere it's still safe — which is every table that isn't filtered. So the fix is a per-table opt-out on the reader (SetFullBeforeImageTables): the filtered tables emit the full before-image so the predicate can read every old column, every other table keeps the key-only narrowing, and the intercept re-narrows the before-image back to the primary key before the applier builds its key-only WHERE. The optimization survives; the feature gets the column it needs; the applier is unchanged.
+
+The shape of the opt-out matters as much as its existence. The reader defaults to narrowing — the safe, common behavior — and full before-images are the opt-in for the handful of filtered tables. That is the zero-value-safe direction: every caller that never sets the field (every unfiltered sync, every test, every future construction path) gets the Go zero value, which is exactly the safe default. A field named for the rare behavior, defaulting on, would have silently inverted for everyone who didn't go through the filtered path. And a filtered stream still requires full before-images to exist at the source — REPLICA IDENTITY FULL on Postgres, binlog_row_image=FULL on MySQL — refused loudly at sync-start (SLUICE-E-WHERE-CDC-BEFORE-IMAGE) rather than allowed to run on a partial image the predicate can't read.
+
+## Why only end-to-end testing could see it
+
+Both halves passed their own unit tests, and both were right. The narrowing test is green: the applier still gets its key, the UPDATE still matches. The filter test is green: hand it a full before-image and it classifies every row-move correctly. The bug lived only in the composition — the narrowed image flowing into the filter's evaluator — and that composition exists only in the real, end-to-end change stream. No unit test of either piece could witness it, because each piece, tested against the input its own author imagined, does exactly what it should. This is the same discipline as sluice's rule that anything round-tripping through a store is a codec that needs the full family matrix, and that a verifier must not ride the same reader it verifies: correctness at each boundary does not compose into correctness across them, and only exercising the real path proves the seam.
+
+## The transferable lesson
+
+An optimization that narrows data — a before-image trimmed to the key, a projection that drops unused columns, a covering-index-only read, a payload slimmed to what today's consumer needs — is never a local change. It silently changes what every future consumer of that data is able to see. Add a feature later that needs one of the trimmed-away columns and it won't fail loudly; it will read the missing column as absent and quietly do the wrong thing, while both the optimization's tests and the feature's tests stay green. Before you narrow data on a shared path, write down what the narrowing assumes about who reads it downstream — and when you add a consumer, check what the path upstream already threw away. The only test that reliably catches the gap is the one that runs the whole path end to end.
+
+## Primary sources
+
+- sluice ADR-0173 (row-level --where filter), §Status implementation note and the Phase-2 row-move table; CHANGELOG 0.99.276. The reader opt-out SetFullBeforeImageTables (MySQL and Postgres CDC readers) and the sync-start refusal SLUICE-E-WHERE-CDC-BEFORE-IMAGE.
+
+- Companion field note — the predicate you evaluate twice has to agree, or refuse (the other half of the same filtered-CDC design: why the client-side evaluator restricts its grammar).
+
+- Related field notes — REPLICA IDENTITY FULL ate our UPDATEs (why the before-image is narrowed to the key in the first place), the row image you can't preflight and the platform default that eats every UPDATE (the row-image family — why REPLICA IDENTITY FULL / binlog_row_image=FULL become required here), and the zero value is a loaded gun (why the opt-out defaults to the safe behavior).
+
+
+===============================================================
+# The predicate you evaluate twice has to agree, or refuse
+(https://sluicesync.com/field-notes/predicate-in-two-engines/)
+
+Continuous filtered sync applies one --where predicate in two places: pushed down to the source for the initial snapshot, and evaluated client-side per event for the change stream, because no source delivers a filtered stream. If the two evaluations can disagree, the stream silently leaks or drops rows — and string equality is the canonical trap, because equality itself is collation-defined, not byte-defined. A byte-exact client-side compare of name = 'ANA' diverges from a case- or accent-insensitive source collation. So sluice restricts the client-side grammar to what it can reproduce faithfully and refuses everything else loudly at sync-start, rather than approximate a comparison the source would answer differently.
+
+Observed — designing the client-side evaluator for continuous filtered sync (sluice sync --where, v0.99.276, ADR-0173 Phase 2). This is the companion to the row-move note: same feature, the other correctness boundary. A deliberate loud-refusal design, not a bug — grounded in ADR-0173 and the rowpredicate grammar.
+
+## One predicate, evaluated in two engines
+
+A filtered migration runs the same --where predicate in two very different places. For the initial bulk copy (and the snapshot leg of a sync), sluice pushes the predicate down to the source as native SQL — SELECT … WHERE (<predicate>) — and the source's own engine evaluates it, indexes and collations and all. But a continuous change stream has no such option: the binlog, the logical-replication slot, and VStream all deliver every change with no server-side filter, so sluice must evaluate the predicate client-side, per event, over the decoded row values. The same filter, computed by two different evaluators — and the whole design depends on them producing the identical answer for every row. If they can diverge, a row the snapshot included can be dropped by the stream (or vice versa): silent, count-invisible scope drift.
+
+## Where they diverge: equality is collation-defined
+
+For most comparisons the two agree trivially — a numeric =, an IN over integers, an IS NULL. The trap is strings, because equality itself is defined by the column's collation, not by the bytes. A source column under a case- or accent-insensitive collation — MySQL's default utf8mb4_0900_ai_ci, a Postgres CITEXT or non-deterministic ICU collation — matches name = 'ANA' against the stored values Ana, ANA, and Àna. A naive client-side comparator does a byte compare and matches none of them. So the source says a row is in scope and the client says it isn't: the row is silently dropped from the stream (or, symmetrically, leaked). The same divergence hides in string ordering under a linguistic collation, in a timezone-aware temporal comparison (the source interprets a bare literal in its session zone; the client holds a UTC instant), and in any function or subquery whose semantics the client can't reproduce.
+
+## What sluice does: refuse, don't approximate
+
+sluice's answer is a hard boundary drawn at sync-start. The client-side evaluator accepts only a restricted grammar it can reproduce faithfully: a column compared to a literal with =, !=/<>, or (on numeric and tz-naive temporal columns) the ordering operators; IN / NOT IN; IS [NOT] NULL; combined with AND / OR / NOT and parentheses — on numeric, boolean, case-sensitive-string, and tz-naive-temporal columns. Anything it cannot evaluate without risking divergence from the source — a function, a subquery, arithmetic, LIKE, string ordering, a string comparison on a collation that isn't provably case- and accent-sensitive, a tz-aware temporal comparison — is refused loudly, up front, with SLUICE-E-WHERE-CDC-UNSUPPORTED-PREDICATE, naming the construct. The motivating case — country IN ('US','CA') — works; a case-insensitive match is refused with a hint to normalize on the source (a generated lower-cased column) and filter on that, or to use migrate --where if only the one-shot subset is needed. The evaluator also uses SQL three-valued logic and treats UNKNOWN as not-matching, so a NULL-involving comparison can never accidentally widen scope.
+
+## The transferable lesson
+
+When the same predicate is evaluated by two engines — here the source's collation-aware SQL and a client-side comparator — correctness requires that they provably agree, not that they usually do. And string equality is the place that intuition fails, because a database's = is a collation operation, not a byte comparison: two engines can legitimately disagree on whether 'ANA' equals 'Àna'. Where you can't guarantee agreement, the safe move is to refuse the predicate at the boundary, loudly, before any data moves — not to ship an approximation that is right on the ASCII rows in your test fixture and silently wrong on the first accented one in production.
+
+## Primary sources
+
+- sluice ADR-0173 (row-level --where filter), §Status grammar-restriction note and Phase-2 decision; CHANGELOG 0.99.276. The rowpredicate grammar and its compile-time fidelity gates; the coded refusal SLUICE-E-WHERE-CDC-UNSUPPORTED-PREDICATE.
+
+- Companion field note — the optimization that trimmed away the column a later feature needed (the row-move half of the same filtered-CDC design).
+
+- Related field notes — MySQL won't match a JSON column by bind parameter and REPLICA IDENTITY FULL ate our UPDATEs (other places a comparison that reads correctly silently stops matching).
