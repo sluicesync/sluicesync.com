@@ -4546,6 +4546,17 @@ Pass verify --where the same predicate, or it will false-report a mismatch. The 
 
 A filter disables the raw-copy fast path for that table. The byte-level copy path would bypass the WHERE, so sluice falls back to the regular filtered read for any table with a --where. Unfiltered tables in the same run still use the fast path.
 
+On MySQL the flags are identical — only the driver and the predicate dialect change. Use --source-driver mysql / --target-driver mysql for self-hosted MySQL, or --source-driver planetscale / --target-driver planetscale for PlanetScale MySQL (see the region-move guide for the PlanetScale DSN + admin-role setup), and write the predicate in MySQL SQL:
+
+    sluice migrate \
+        --source-driver planetscale --source "$SLUICE_SOURCE" \
+        --target-driver planetscale --target "$SLUICE_TARGET_EU" \
+        --where "users=region = 'EU'" \
+        --where "orders=region = 'EU'" \
+        --where "order_items=region = 'EU'"
+
+The predicate is native source SQL either way — a MySQL source takes MySQL syntax, a Postgres source takes Postgres syntax — because it is pushed down to and evaluated by the source. For a MySQL string literal, mind the quoting: single-quote the value and, if your shell needs it, escape as usual.
+
 ## Option B — continuous filtered sync (zero-downtime)
 
 If you can't freeze writes, run a sync with the same predicates. The cold-start snapshot pushes the filter down exactly like migrate, then the CDC leg keeps the EU target current — and it handles the case a one-shot copy can't: a user whose region changes. sluice evaluates the predicate on both the before- and after-image of every change and translates it to the correct target operation:
@@ -4573,6 +4584,8 @@ Filtered sync requires full row before-images, and refuses loudly without them. 
     ALTER TABLE users       REPLICA IDENTITY FULL;
     ALTER TABLE orders      REPLICA IDENTITY FULL;
     ALTER TABLE order_items REPLICA IDENTITY FULL;
+
+PlanetScale MySQL / Vitess: use migrate --where, not sync --where. Continuous filtered sync needs the source's CDC reader to hand back the full old row so the move-in/move-out decision can read the old region value. The Postgres logical-replication reader and the self-hosted-MySQL binlog reader both do; the Vitess VStream reader (the planetscale driver) does not, so sluice refuses sync --where on a PlanetScale MySQL source at start — a clear SLUICE-E-WHERE-CDC-BEFORE-IMAGE, never a silent leak. For a PlanetScale MySQL region split, use the one-shot migrate --where (which works on every source, VStream included). Continuous filtered sync is fully supported on PlanetScale Postgres (it's real Postgres — set REPLICA IDENTITY FULL as above) and on self-hosted MySQL.
 
 The CDC filter accepts a restricted grammar — region = 'EU' is squarely inside it. Because there's no source-side stream filter, sluice evaluates the predicate itself, and it accepts only comparisons it can reproduce byte-for-byte against the source: a column vs a literal (= != <> < <= > >=), IN, IS [NOT] NULL, combined with AND/OR/NOT. A case-insensitive string match, a function call, or a timezone-aware temporal comparison is refused at sync-start (SLUICE-E-WHERE-CDC-UNSUPPORTED-PREDICATE) — a client-side compare could diverge from the source's own and silently leak or drop a row. A plain region/country equality or IN list is exactly the supported shape. See why the grammar is restricted.
 
