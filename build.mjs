@@ -101,6 +101,7 @@ const NAV = [
       { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
       { slug: "planetscale-postgres-analytics-replica", label: "PlanetScale Postgres analytics replica" },
       { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
+      { slug: "split-rows-by-region", label: "Split rows by region" },
     ],
   },
   {
@@ -381,6 +382,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "planetscale-vitess",
     "planetscale-schema-changes",
     "planetscale-region-move",
+    "split-rows-by-region",
     "mysql-to-planetscale",
     "planetscale-postgres",
     "planetscale-postgres-upgrade",
@@ -4107,6 +4109,92 @@ ${pre(`sluice restore \\
 </ul>
 `,
     prev: { href: "/docs/planetscale-postgres-analytics-replica/", label: "PlanetScale Postgres analytics replica" },
+    next: { href: "/docs/split-rows-by-region/", label: "Split rows by region" },
+  })
+);
+
+// nav-label: Split rows by region
+write(
+  "split-rows-by-region",
+  page({
+    slug: "split-rows-by-region",
+    title: "Split a database by region — move just the rows for one region",
+    subtitle: "Data-residency splits with a per-table --where predicate: keep US users in a US-region database and move only the EU users' rows into an EU-region database, in one shot or as a continuous filtered sync.",
+    body: `
+<p>A common data-residency task: one database holds users from every country, and you now want each region's data to live in its own regional database — US users' rows in a US-region database, EU users' rows in an EU-region one. This is the <a href="/docs/planetscale-region-move/">region-move</a> problem with a filter on top: you are not copying the <em>whole</em> database to the new region, only the <strong>rows that belong there</strong>. sluice does this with a per-table <code>--where</code> predicate (<a href="/docs/commands/#migrate">ADR-0173</a>): each filtered table gets a native-SQL boolean scoping it to the target region, and the destination ends up holding <strong>only</strong> those rows.</p>
+<p>This guide walks the concrete case — a <code>region</code> column on each table, splitting <code>EU</code> rows into an EU-region database — as a one-shot <a href="#migrate">filtered migrate</a> (the natural fit: "the EU database should end up with only the EU rows") and as a <a href="#sync">continuous filtered sync</a> (zero-downtime, and it keeps handling users whose region <em>changes</em>). Read <a href="#before">Before you start</a> first — the referential-integrity point is the one that bites.</p>
+
+<h2 id="before">Before you start</h2>
+<ul>
+  <li><strong>You need a column to filter on.</strong> The predicate is native <em>source</em> SQL over the source's own columns — <code>region = 'EU'</code>, <code>country IN ('DE','FR','IE')</code>, <code>tenant_id = 42</code>. If "which region" is derivable but not stored (e.g. only a free-text address), materialize it first — a generated or backfilled <code>region</code> column on each table you'll filter — so both the copy and (for a sync) the client-side evaluator can read it directly.</li>
+  <li><strong>Filter every related table by the <em>same</em> region key — this is the load-bearing rule.</strong> A relational schema couples your filters through its foreign keys. If <code>orders</code> references <code>users</code> and you filter <code>users</code> to <code>region = 'EU'</code> but copy <code>orders</code> whole, the EU target gets orders pointing at users it never received — the deferred <code>ADD CONSTRAINT FOREIGN KEY</code> then fails with <code>SQLSTATE 23503</code> and sluice refuses loudly (<code>SLUICE-E-WHERE-FK-ORPHAN</code>, naming the constraint). The fix is to filter the <em>whole</em> referential closure consistently: put <code>region = 'EU'</code> on <code>users</code>, <code>orders</code>, <code>order_items</code>, and every table that hangs off them, so every kept child's parent is kept too. This requires that an EU order's user is itself EU — i.e. the region assignment is consistent down the FK graph. Where it genuinely isn't (a shared reference table, say), either don't filter that table or accept a degraded constraint with <code>--allow-degraded-fks</code> (Postgres target: the FK is added <code>NOT VALID</code>, still rejecting new orphaning writes; you run <code>VALIDATE CONSTRAINT</code> after reconciling). See <a href="/field-notes/filter-a-parent-orphans-the-child/">the field note on this trap</a>.</li>
+  <li><strong>The predicate is source-dialect and not portable.</strong> It runs on (or is evaluated against) the source, so use the source engine's SQL. That's fine here — both ends are usually the same engine — but a Postgres-source predicate uses Postgres syntax, a MySQL-source one uses MySQL syntax.</li>
+  <li><strong>Provisioning the regional target is exactly the region-move flow.</strong> Create the destination database in the EU region and connect to it just as in <a href="/docs/planetscale-region-move/#connect">Move PlanetScale regions → Provision the target</a> (same global connect host, region chosen by credential; <code>?tls=true</code>; admin role for DDL). Everything there applies; this guide only adds the <code>--where</code> filtering on top.</li>
+</ul>
+
+<h2 id="migrate">Option A — one-shot filtered migrate</h2>
+<p>The direct answer to "the EU database should end up with only the EU rows." Give each table a <code>--where</code> scoping it to <code>EU</code>; the predicate is pushed down into the source read (<code>SELECT … WHERE &lt;chunk_bounds&gt; AND (region = 'EU')</code>) and evaluated <strong>on the source</strong>, so only EU rows ever cross the wire — index-aware, no client-side scan. Preview with <code>--dry-run</code>, run it, then verify with the <em>same</em> predicates:</p>
+${pre(`# preview
+sluice migrate \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET_EU" \\
+    --where "users=region = 'EU'" \\
+    --where "orders=region = 'EU'" \\
+    --where "order_items=region = 'EU'" \\
+    --dry-run
+
+# copy only the EU rows
+sluice migrate \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET_EU" \\
+    --where "users=region = 'EU'" \\
+    --where "orders=region = 'EU'" \\
+    --where "order_items=region = 'EU'"
+
+# verify — the SAME --where, so counts compare matching-source vs target
+sluice verify \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET_EU" \\
+    --where "users=region = 'EU'" \\
+    --where "orders=region = 'EU'" \\
+    --where "order_items=region = 'EU'"`)}
+<p>Tables you don't name are copied in full — so name every table that carries region-scoped data; leave a genuinely global reference table (say <code>currencies</code>) unfiltered and it's copied whole, which is usually what you want. A <code>--where</code> that matches zero rows still creates the (empty) table.</p>
+<div class="note"><strong>Pass <code>verify --where</code> the same predicate, or it will false-report a mismatch.</strong> The target holds only the EU subset, so a plain <code>verify</code> would compare the source's full count against the filtered target and (correctly, but unhelpfully) flag <code>source=100000 target=18000</code>. With the matching <code>--where</code> it compares EU-source against target and passes. A plain <code>verify</code> is still a useful sanity check that the subset really is a strict subset.</div>
+<div class="note warn"><strong>A filter disables the raw-copy fast path for that table.</strong> The byte-level copy path would bypass the <code>WHERE</code>, so sluice falls back to the regular filtered read for any table with a <code>--where</code>. Unfiltered tables in the same run still use the fast path.</div>
+
+<h2 id="sync">Option B — continuous filtered sync (zero-downtime)</h2>
+<p>If you can't freeze writes, run a <a href="/docs/commands/#sync-start">sync</a> with the same predicates. The cold-start snapshot pushes the filter down exactly like migrate, then the CDC leg keeps the EU target current — and it handles the case a one-shot copy can't: a user whose <strong>region changes</strong>. sluice evaluates the predicate on both the before- and after-image of every change and translates it to the correct target operation:</p>
+<table><thead><tr><th>Change on the source</th><th>Effect on the EU target</th></tr></thead><tbody>
+<tr><td class="desc">A row is inserted/updated <strong>in</strong> EU, stays EU</td><td class="desc">applied as-is (INSERT / UPDATE)</td></tr>
+<tr><td class="desc">A user's <code>region</code> flips <code>US</code> → <code>EU</code> (moves <strong>in</strong>)</td><td class="desc"><strong>INSERT</strong> — the after-image, because the EU target never had this row</td></tr>
+<tr><td class="desc">A user's <code>region</code> flips <code>EU</code> → <code>US</code> (moves <strong>out</strong>)</td><td class="desc"><strong>DELETE</strong> by key — else a now-non-EU row would leak into the EU database</td></tr>
+<tr><td class="desc">A row never in EU changes</td><td class="desc">dropped (never in scope)</td></tr>
+</tbody></table>
+${pre(`sluice sync start --stream-id eu-split \\
+    --source-driver postgres --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET_EU" \\
+    --where "users=region = 'EU'" \\
+    --where "orders=region = 'EU'" \\
+    --where "order_items=region = 'EU'"`)}
+<p>Watch it catch up and gate cutover on freshness with <code>sync status</code> / <code>sync health</code>, then <code>cutover</code> / <code>sync stop --wait</code> / <code>verify</code> — the same cutover flow as a <a href="/docs/planetscale-region-move/#zero-downtime">region move</a>.</p>
+<div class="note warn"><strong>Filtered sync requires full row before-images, and refuses loudly without them.</strong> The move-in / move-out decision needs the <em>old</em> value of the region column, so each filtered table needs <strong>Postgres <code>REPLICA IDENTITY FULL</code></strong> (or <strong>MySQL <code>binlog_row_image=FULL</code></strong>). sluice preflights this at sync-start and refuses with <code>SLUICE-E-WHERE-CDC-BEFORE-IMAGE</code>, naming the table and the exact remedy, rather than run on a partial image it can't evaluate. Set it before you start:${pre(`ALTER TABLE users       REPLICA IDENTITY FULL;
+ALTER TABLE orders      REPLICA IDENTITY FULL;
+ALTER TABLE order_items REPLICA IDENTITY FULL;`)}</div>
+<div class="note"><strong>The CDC filter accepts a restricted grammar — <code>region = 'EU'</code> is squarely inside it.</strong> Because there's no source-side stream filter, sluice evaluates the predicate itself, and it accepts only comparisons it can reproduce byte-for-byte against the source: a column vs a literal (<code>= != &lt;&gt; &lt; &lt;= &gt; &gt;=</code>), <code>IN</code>, <code>IS [NOT] NULL</code>, combined with <code>AND</code>/<code>OR</code>/<code>NOT</code>. A <em>case-insensitive</em> string match, a function call, or a timezone-aware temporal comparison is refused at sync-start (<code>SLUICE-E-WHERE-CDC-UNSUPPORTED-PREDICATE</code>) — a client-side compare could diverge from the source's own and silently leak or drop a row. A plain region/country equality or <code>IN</code> list is exactly the supported shape. See <a href="/field-notes/predicate-in-two-engines/">why the grammar is restricted</a>.</div>
+
+<h2 id="us-side">The other side of the split</h2>
+<p>This produces the EU database. To also slim the <em>original</em> down to only US rows, you have two clean options: point a second filtered run at a fresh US-region database (<code>--where "users=region = 'US'"</code>, and so on) and cut both over together; or, if the original database stays in the US region and you only need to <em>remove</em> the migrated EU rows, delete them there once the EU target is verified and live. Keep the EU sync tailing until you've cut EU traffic over, so no EU write is lost in the gap.</p>
+<div class="note"><strong>Same predicate, both directions.</strong> The split is symmetric: the EU run filters <code>region = 'EU'</code>, the US run filters <code>region = 'US'</code> (or <code>region != 'EU'</code> to catch everything else). Run them as two independent migrates/syncs, each with its own <code>--stream-id</code> and target — like <a href="/docs/planetscale-region-move/#case-multi">moving several databases</a>, but scoped by row instead of by keyspace.</div>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/planetscale-region-move/">Move PlanetScale regions</a> — the un-filtered region move; its "Before you start" and "Provision the target" apply here verbatim.</li>
+  <li>Filtered / subset migration (operator guide) — the full <code>--where</code> reference: push-down, the FK-orphan caveat, and the CDC row-move semantics in depth.</li>
+  <li><a href="/field-notes/filter-a-parent-orphans-the-child/">You can't filter a parent without orphaning its children</a>, <a href="/field-notes/optimization-trimmed-the-column/">the row-move before-image trap</a>, and <a href="/field-notes/predicate-in-two-engines/">the predicate you evaluate twice</a> — the three field notes behind this feature.</li>
+  <li><a href="/docs/commands/#migrate">Command reference</a> and <a href="/docs/error-codes/">error codes</a> — <code>--where</code>, <code>--allow-degraded-fks</code>, and the three <code>SLUICE-E-WHERE-*</code> codes.</li>
+</ul>
+`,
+    prev: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
     next: { href: "/docs/commands/", label: "Command reference" },
   })
 );

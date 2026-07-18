@@ -54,6 +54,7 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 - [Upgrade PlanetScale Postgres](https://sluicesync.com/docs/planetscale-postgres-upgrade/): PlanetScale Postgres has no in-place major-version upgrade or CPU-architecture swap — provision a new instance on the target, let sluice sync across, then cut over.
 - [PlanetScale Postgres analytics replica](https://sluicesync.com/docs/planetscale-postgres-analytics-replica/): Analytics queries on a streaming replica get canceled after ~30 seconds of recovery conflict. Stand up a second PlanetScale Postgres database and let sluice keep it continuously synced — its primary never cancels a query for recovery, so analytics can run for minutes or hours.
 - [Move PlanetScale regions](https://sluicesync.com/docs/planetscale-region-move/): PlanetScale has no native region move — create the database in the new region and let sluice copy it across, with zero downtime or in one shot.
+- [Split rows by region](https://sluicesync.com/docs/split-rows-by-region/): Data-residency splits with a per-table --where predicate: keep US users in a US-region database and move only the EU users' rows into an EU-region database, in one shot or as a continuous filtered sync.
 
 ## Reference
 
