@@ -260,6 +260,7 @@ const FIELD_NOTES = [
   { slug: "filter-a-parent-orphans-the-child", date: "2026-07-17", engine: "Cross-cutting", label: "You can't filter a parent table without orphaning its children", dek: "Row-level filtering reads like a per-table setting, but a relational schema couples the filters through its foreign keys. Filter a parent (<code>--where users=country IN ('US','CA')</code>) and copy the children whole, and the deferred <code>ADD CONSTRAINT FOREIGN KEY</code> fails with SQLSTATE 23503 &mdash; the kept child rows point at parents the filter excluded. A tool that quietly dropped the key would hand you a database that looks complete and violates its own schema; sluice refuses loudly (<code>SLUICE-E-WHERE-FK-ORPHAN</code>), names the constraint, and makes you filter consistently or opt into an explicit <code>NOT VALID</code> degrade." },
   { slug: "vstream-filter-keeps-both-images", date: "2026-07-18", engine: "MySQL & Vitess", label: "The change stream that won't drop your row", dek: "To filter a Vitess VStream server-side you push a <code>where</code> into its rule &mdash; and then fear the move-OUT: a row updated so it no longer matches, that the stream might silently <em>drop</em> instead of delete, leaking a stale row. The Vitess source settles it: for a non-vindex filter, if <em>either</em> the before- or after-image passes, VStream emits the change with <strong>both</strong> images. So a move-OUT arrives as a full UPDATE, never dropped &mdash; but VStream tells you <em>that</em> the row touched the filter, not <em>which</em> image matched, so you must still classify the move direction yourself." },
   { slug: "reuse-the-source-comparator", date: "2026-07-18", engine: "MySQL & Vitess", label: "You can't reimplement MySQL's =, so link its comparator in", dek: "A filtered change stream evaluates <code>region = 'EU'</code> client-side, and it has to match the source's own <code>=</code> exactly &mdash; but MySQL's default collation is case- and accent-insensitive, and reimplementing that (<code>ToLower</code>? Unicode folding?) is a guess that diverges on &szlig;, the Turkish dotless i, and locale tailoring. The fix isn't a better reimplementation: it's linking the source engine's <em>own</em> comparator (Vitess's <code>collations</code> + <code>evalengine</code>) and calling it under the column's collation. That closes the case/accent axis &mdash; but linking is necessary, not sufficient (the library folds case and accents but not the collation's PAD attribute or charset), so the reuse still has to be ground-truthed against the real server's own <code>=</code>, not against the library. Use its implementation, not your model of it &mdash; then verify against the real thing." },
+  { slug: "collation-pad-space-trailing-space", date: "2026-07-18", engine: "MySQL & Vitess", label: "The = that ignores your trailing spaces", dek: "On a MySQL <em>legacy</em> collation (<code>utf8mb4_general_ci</code>, <code>_bin</code>, <code>latin1_*</code> — every collation except the 8.0 <code>_0900_</code> ones), <code>WHERE region = 'EU'</code> matches a stored <code>'EU '</code>: those collations are PAD SPACE and ignore trailing spaces in <code>=</code>. The modern <code>_0900_</code> collations are NO PAD and don't. Reuse a comparator that folds case and accents but doesn't check the collation's <code>PAD_ATTRIBUTE</code> and it silently disagrees with the source on the default legacy collation &mdash; a real, shipped silent row-loss. It shipped green because the test compared the comparator to itself; the fix was to compare it to a real server." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -9162,6 +9163,56 @@ write(
 
 ---
 Canonical page: https://sluicesync.com/field-notes/reuse-the-source-comparator/ · Full docs index: https://sluicesync.com/llms.txt
+`,
+  })
+);
+
+// nav-label: The = that ignores your trailing spaces
+write(
+  "field-notes/collation-pad-space-trailing-space",
+  page({
+    slug: "field-notes/collation-pad-space-trailing-space",
+    title: "The = that ignores your trailing spaces",
+    subtitle: "MySQL's WHERE region = 'EU' matches a stored 'EU ' — on a legacy collation. Every collation except the 8.0 utf8mb4_0900_* family is PAD SPACE, which ignores trailing spaces in comparison; the modern default is NO PAD and doesn't. That single per-collation attribute is easy to miss, and a client-side comparator that reproduces a collation's case and accent folding but not its pad attribute silently disagrees with the source on the most common legacy collation. This one shipped as a real silent row-loss — and it shipped green because the test compared the comparator to itself instead of to a real server.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — a post-release audit of continuous filtered sync (<code>sluice sync --where</code>). Ground-truthed against real MySQL 8.0 and Postgres 16; the divergence was a CONFIRMED Critical in a shipped, published build, fixed in the next patch. This is the companion to <a href="/field-notes/reuse-the-source-comparator/">you can't reimplement MySQL's <code>=</code>, so link its comparator in</a> — the specific axis that made "link the comparator" necessary but not sufficient.</p>
+
+<h2 id="pad">Two collations, two answers, one stored value</h2>
+<p>Create the same column under two collations and store the same four values:</p>
+${pre(`CREATE TABLE g (region VARCHAR(16) COLLATE utf8mb4_general_ci);   -- legacy
+CREATE TABLE n (region VARCHAR(16) COLLATE utf8mb4_0900_ai_ci);   -- MySQL 8 default
+INSERT INTO g VALUES ('EU'),('EU '),('EU  '),('eu');
+INSERT INTO n VALUES ('EU'),('EU '),('EU  '),('eu');
+
+SELECT region FROM g WHERE region = 'EU';   -- EU, EU_, EU__, eu   (all four)
+SELECT region FROM n WHERE region = 'EU';   -- EU, eu               (no trailing-space rows)`)}
+<p>Same query, same data, different result — because the two collations have a different <strong>PAD_ATTRIBUTE</strong>. <code>utf8mb4_general_ci</code> is <em>PAD SPACE</em>: it ignores trailing spaces in a comparison, so <code>'EU'</code> equals <code>'EU '</code> equals <code>'EU  '</code>. <code>utf8mb4_0900_ai_ci</code> — the MySQL-8 default — is <em>NO PAD</em>: trailing spaces are significant, so <code>'EU '</code> is a different value. You can read the attribute straight from the catalog:</p>
+${pre(`SELECT collation_name, pad_attribute FROM information_schema.collations
+WHERE collation_name IN ('utf8mb4_general_ci','utf8mb4_0900_ai_ci','utf8mb4_bin');
+-- utf8mb4_general_ci  PAD SPACE
+-- utf8mb4_bin         PAD SPACE   (case-sensitive, but STILL pad-space)
+-- utf8mb4_0900_ai_ci  NO PAD`)}
+<p>The trap is that <em>every</em> collation is PAD SPACE <strong>except</strong> the UCA-9.0.0 <code>_0900_</code> family introduced in MySQL 8. So the pre-8.0 default, the MariaDB default, <code>utf8mb4_bin</code>, <code>latin1_swedish_ci</code> — the collations most legacy data actually lives under — all ignore trailing spaces, and the one collation a modern developer tests against is the one that doesn't. It is precisely the kind of per-object attribute you forget exists until it bites.</p>
+
+<h2 id="reuse">Where it bites: a comparator that folds case but not pad</h2>
+<p>Continuous filtered replication has to evaluate <code>region = 'EU'</code> client-side, per change event, and get the same answer the source's <code>WHERE</code> would (the <a href="/field-notes/predicate-in-two-engines/">evaluate-in-two-engines</a> problem). The right move is not to reimplement collation — it's to <a href="/field-notes/reuse-the-source-comparator/">link the engine's own comparator</a> and call it under the column's collation. That reproduces the collation's <em>weights</em> — case-insensitivity, accent-insensitivity, <code>ß</code>→<code>ss</code> expansion — exactly.</p>
+<p>But the comparator reproduces the weights, not the whole of <code>=</code>. The library's compare is <strong>NO-PAD regardless of the collation's real pad attribute</strong>. So on a PAD SPACE column, the source keeps a stored <code>'EU '</code> in scope (its <code>=</code> ignores the trailing space) while the client-side reuse reads <code>'EU ' ≠ 'EU'</code> and calls it out of scope. In a filtered change stream that means an <code>INSERT</code> of <code>'EU '</code> is silently dropped and a row updated to <code>'EU '</code> is silently deleted from the target — exit 0, no warning, on the default legacy collation, gated only on a trailing space (common from CSV, fixed-width, form, and legacy sources). Reusing the real comparator was necessary; it was not sufficient, because it faithfully reproduces one axis of the operation and silently not another.</p>
+<p>The fix, once the axis is named, is small: right-trim trailing spaces before comparing on a PAD SPACE collation (reproducing exactly what PAD SPACE <code>=</code> does), skip the trim on NO PAD, and refuse the axes that genuinely can't be reproduced — a non-UTF-8 charset the comparator would mis-decode, a Postgres non-deterministic ICU collation.</p>
+
+<h2 id="green">Why it shipped green: the test compared the comparator to itself</h2>
+<p>The sharpest part isn't the pad attribute — it's that a full test suite passed over this the whole time. The tests asserted the client-side comparator's output against hand-written expected booleans that were themselves reasoned from the same library. Library verifying library: the test and the code shared the exact blind spot, so a comparator that disagreed with a <em>real MySQL</em> on trailing spaces was green on every run, and stayed green through the release. The only thing that surfaced it was an audit that wrote a different kind of test — a family matrix that, for each collation × each shape (trailing space, leading space, case, accent, expansion), runs the literal <code>SELECT … WHERE col = 'lit'</code> on a real server and asserts the client-side classification equals <em>that</em>. It fails loudly on the shipped code and passes only on the fix, and it now stands as the gate.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Two lessons braid here. The narrow one: a collation is not just its case/accent rules — <code>PAD_ATTRIBUTE</code> (and charset, and determinism) are part of what <code>=</code> means, and the split is per-collation and counterintuitive (legacy = PAD SPACE, modern default = NO PAD). The broad one is the reusable discipline: when you stand in for another system's operation — even by linking its own library — you must prove the reproduction against the <em>real system</em>, on the shapes that distinguish the axes, not against a test that shares your model. A green suite that only ever asked the library what the library thinks is not evidence; it's the same guess, twice. Verify a codec, a comparator, a canonicalizer against the ground truth it's imitating — a real server, a real reader — because the divergence you didn't reproduce is exactly the one your look-alike test can't see.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li><code>information_schema.collations.PAD_ATTRIBUTE</code>; MySQL's PAD SPACE vs NO PAD comparison semantics (the <code>_0900_</code> UCA-9.0.0 collations are the NO-PAD exception). sluice ADR-0174; the collation family-matrix gate (real MySQL + real Postgres).</li>
+  <li>Companion field notes — <a href="/field-notes/reuse-the-source-comparator/">you can't reimplement MySQL's <code>=</code>, so link its comparator in</a> (the technique this is the caveat to) and <a href="/field-notes/predicate-in-two-engines/">the predicate you evaluate twice has to agree, or refuse</a> (why the client-side evaluation must match the source at all).</li>
+</ul>
+
+---
+Canonical page: https://sluicesync.com/field-notes/collation-pad-space-trailing-space/ · Full docs index: https://sluicesync.com/llms.txt
 `,
   })
 );
