@@ -261,6 +261,7 @@ const FIELD_NOTES = [
   { slug: "vstream-filter-keeps-both-images", date: "2026-07-18", engine: "MySQL & Vitess", label: "The change stream that won't drop your row", dek: "To filter a Vitess VStream server-side you push a <code>where</code> into its rule &mdash; and then fear the move-OUT: a row updated so it no longer matches, that the stream might silently <em>drop</em> instead of delete, leaking a stale row. The Vitess source settles it: for a non-vindex filter, if <em>either</em> the before- or after-image passes, VStream emits the change with <strong>both</strong> images. So a move-OUT arrives as a full UPDATE, never dropped &mdash; but VStream tells you <em>that</em> the row touched the filter, not <em>which</em> image matched, so you must still classify the move direction yourself." },
   { slug: "reuse-the-source-comparator", date: "2026-07-18", engine: "MySQL & Vitess", label: "You can't reimplement MySQL's =, so link its comparator in", dek: "A filtered change stream evaluates <code>region = 'EU'</code> client-side, and it has to match the source's own <code>=</code> exactly &mdash; but MySQL's default collation is case- and accent-insensitive, and reimplementing that (<code>ToLower</code>? Unicode folding?) is a guess that diverges on &szlig;, the Turkish dotless i, and locale tailoring. The fix isn't a better reimplementation: it's linking the source engine's <em>own</em> comparator (Vitess's <code>collations</code> + <code>evalengine</code>) and calling it under the column's collation. That closes the case/accent axis &mdash; but linking is necessary, not sufficient (the library folds case and accents but not the collation's PAD attribute or charset), so the reuse still has to be ground-truthed against the real server's own <code>=</code>, not against the library. Use its implementation, not your model of it &mdash; then verify against the real thing." },
   { slug: "collation-pad-space-trailing-space", date: "2026-07-18", engine: "MySQL & Vitess", label: "The = that ignores your trailing spaces", dek: "On a MySQL <em>legacy</em> collation (<code>utf8mb4_general_ci</code>, <code>_bin</code>, <code>latin1_*</code> — every collation except the 8.0 <code>_0900_</code> ones), <code>WHERE region = 'EU'</code> matches a stored <code>'EU '</code>: those collations are PAD SPACE and ignore trailing spaces in <code>=</code>. The modern <code>_0900_</code> collations are NO PAD and don't. Reuse a comparator that folds case and accents but doesn't check the collation's <code>PAD_ATTRIBUTE</code> and it silently disagrees with the source on the default legacy collation &mdash; a real, shipped silent row-loss. It shipped green because the test compared the comparator to itself; the fix was to compare it to a real server." },
+  { slug: "mariadb-no-pad-attribute-column", date: "2026-07-20", engine: "MariaDB", label: "The catalog column that says PAD SPACE isn't in MariaDB", dek: "MySQL 8 has a first-class <code>information_schema.COLLATIONS.PAD_ATTRIBUTE</code> column telling you whether a collation compares <code>PAD SPACE</code> (trailing spaces ignored in <code>=</code>) or <code>NO PAD</code>. MariaDB forked before that column existed and never added it &mdash; so the attribute that decides whether <code>'EU'</code> matches a stored <code>'EU '</code> is an authoritative catalog fact in one engine and only the <code>_nopad_</code> token in a collation name in its sibling. A comparator that keys off <code>PAD_ATTRIBUTE</code> reads a hole on MariaDB; the only fallback &mdash; parsing the name &mdash; has to be pinned by a real-server parity test, or a NO-PAD collation whose name escapes the rule silently mis-pads a filtered row-move." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -9215,6 +9216,51 @@ WHERE collation_name IN ('utf8mb4_general_ci','utf8mb4_0900_ai_ci','utf8mb4_bin'
 
 ---
 Canonical page: https://sluicesync.com/field-notes/collation-pad-space-trailing-space/ · Full docs index: https://sluicesync.com/llms.txt
+`,
+  })
+);
+
+// nav-label: The catalog column that says PAD SPACE isn't in MariaDB
+write(
+  "field-notes/mariadb-no-pad-attribute-column",
+  page({
+    slug: "field-notes/mariadb-no-pad-attribute-column",
+    title: "The catalog column that says PAD SPACE isn't in MariaDB",
+    subtitle: "MySQL 8 added a first-class information_schema.COLLATIONS.PAD_ATTRIBUTE column that says whether a collation is PAD SPACE (trailing spaces ignored in =) or NO PAD. MariaDB forked before that column existed and never added it, so the one attribute that decides whether 'EU' matches a stored 'EU ' is a queryable catalog fact on MySQL and only a _nopad_ token in the collation name on MariaDB. A comparator that keys off PAD_ATTRIBUTE is reading a hole on MariaDB; the fallback of parsing the name has to be anchored to a real-server oracle, or a NO-PAD collation whose name escapes the rule silently mis-pads a filtered row-move.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> — scoping sluice's filtered-<code>sync --where</code> collation comparator, which has to decide a column's PAD attribute to reproduce the source's own <code>=</code> for a filtered replica (2026-07-20). Ground-truthed side by side on <code>mysql:8.0</code> and <code>mariadb:11.4</code>; the parity gate that keeps it honest ships on <code>main</code> (after v0.99.283).</p>
+
+<h2 id="the-column">The catalog column MySQL added and MariaDB never had</h2>
+<p>MySQL 8 tells you authoritatively whether a collation compares <code>PAD SPACE</code> (trailing spaces ignored in <code>=</code>) or <code>NO PAD</code> (they are significant) with a first-class column in <code>information_schema.COLLATIONS</code>. MariaDB forked before 8.0 introduced that column, and never added it:</p>
+${pre(`-- MySQL 8
+SELECT COLLATION_NAME, PAD_ATTRIBUTE FROM information_schema.COLLATIONS
+ WHERE COLLATION_NAME = 'utf8mb4_general_ci';
+--  utf8mb4_general_ci    PAD SPACE
+
+-- MariaDB 11.4
+SELECT PAD_ATTRIBUTE FROM information_schema.COLLATIONS ... ;
+--  ERROR 1054 (42S22): Unknown column 'PAD_ATTRIBUTE' in 'field list'`)}
+<p>So the one attribute that decides whether a stored <code>'EU '</code> matches <code>WHERE region = 'EU'</code> is a queryable catalog fact in one engine and simply absent in the other.</p>
+
+<h2 id="naming-convention">In MariaDB, NO-PAD is a naming convention, not a catalog fact</h2>
+<p>MariaDB still <em>has</em> NO-PAD collations — it just shipped them under a <code>_nopad_</code> naming convention (<code>utf8mb4_nopad_bin</code>, <code>utf8mb4_general_nopad_ci</code>, <code>utf8mb4_unicode_nopad_ci</code>) instead of exposing the attribute in the catalog. On MariaDB the only signal for NO-PAD-ness is the substring <code>nopad</code> in the collation <em>name</em>: there is nothing to <code>SELECT</code>, so you parse the name or you probe the behavior. (MySQL's NO-PAD set is the modern <code>utf8mb4_0900_*</code> family plus <code>binary</code> — and there the catalog and the name agree.)</p>
+
+<h2 id="silent">Guess wrong and it is silent</h2>
+<p>A tool reproducing a source's <code>=</code> for a filtered replica has to know the PAD attribute: on a PAD SPACE column it must right-trim trailing spaces before comparing, on a NO-PAD column it must not. Treat MariaDB's <code>utf8mb4_nopad_bin</code> as PAD SPACE — the default outcome if you only special-case MySQL's <code>_0900_</code> / <code>binary</code> — and you right-trim a column whose <code>=</code> is trailing-space-<em>significant</em>. A stored <code>'EU '</code> then wrongly compares equal to <code>'EU'</code>, and a row that moved out of a <code>region = 'EU'</code> filter (its trailing space meaning it no longer matches) is mis-classified as still in scope: a silent, trailing-space-only row-move error, exit 0. That is exactly the shape an internal audit (SL-COLL-1) caught before it shipped.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>sluice's <code>collationNoPad</code> classifier recognizes all three NO-PAD signals: MySQL's <code>_0900_</code> family, <code>binary</code>, and MariaDB's <code>nopad</code> name token. Because that MariaDB branch rests on a naming convention rather than a catalog column, it is pinned by a <strong>dual-oracle real-server parity test</strong> that runs every CI cycle. On MySQL it asserts <code>collationNoPad(name)</code> equals the server's own <code>PAD_ATTRIBUTE</code> for <em>every</em> collation the catalog knows (286 of them), so a future MySQL NO-PAD collation whose name escapes the heuristic fails CI. On MariaDB — where there is no <code>PAD_ATTRIBUTE</code> to ask — it ground-truths <em>behaviorally</em>: it stores <code>'EU '</code> and checks whether <code>WHERE v = 'EU'</code> matches it (match ⇒ PAD SPACE, no match ⇒ NO PAD), then asserts the classifier agrees with what the real server actually does. The name heuristic is never trusted on its own — it is only ever a proxy for a real-server oracle.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p><code>information_schema</code> is not a portable contract across a fork. A column one engine adds after the split is simply missing in the other, and a reader that keys off it is silently reading a hole — not an error, just an absent field that defaults to whatever your code assumes. When the authoritative signal is gone, the fallback (here, parsing the collation name) is a heuristic — and a heuristic guarding a silent-loss decision has to be anchored to a real-server oracle: a catalog query where the catalog exists, a behavioral probe where it doesn't. That way the day the naming convention gains an exception, a test fails instead of a row quietly changing scope.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice <code>internal/engines/mysql/collation.go</code> (<code>collationNoPad</code>) and the dual-oracle parity gate <code>collation_pad_attribute_integration_test.go</code> (MySQL catalog assertion over all 286 collations + the MariaDB behavioral probe), ADR-0174; ground-truthed on <code>mysql:8.0</code> / <code>mariadb:11.4</code> (2026-07-20).</li>
+  <li>MySQL 8.0 Reference Manual — <code>information_schema.COLLATIONS</code> (<code>PAD_ATTRIBUTE</code>, values <code>PAD SPACE</code> / <code>NO PAD</code>, added in 8.0).</li>
+  <li>MariaDB Knowledge Base — <code>information_schema.COLLATIONS</code> (no <code>PAD_ATTRIBUTE</code> column) and the <code>*_nopad_*</code> NO-PAD collations.</li>
+  <li>Related field notes — <a href="/field-notes/collation-pad-space-trailing-space/">the <code>=</code> that ignores your trailing spaces</a> (the PAD-SPACE row-loss this prevents on MySQL), <a href="/field-notes/mariadb-catalog-default-dialect/">MariaDB reports its defaults in a different dialect</a>, and <a href="/field-notes/reuse-the-source-comparator/">you can't reimplement MySQL's <code>=</code></a>.</li>
+</ul>
 `,
   })
 );
