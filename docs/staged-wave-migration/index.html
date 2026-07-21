@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Staged (wave) migration — a few tables at a time — sluice docs</title>
+<meta name="description" content="Move your biggest or most self-contained tables first, cut them over, then bring the rest across in later waves.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/staged-wave-migration/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="active" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview & validate before you migrate</a><a class="lnk" href="/docs/verify-reconcile/">Verify & reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk active" href="/docs/staged-wave-migration/">Staged (wave) migration</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-supabase-read-replica/">Migrating from a Supabase read replica</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-postgres/">Migrating from Google Cloud SQL Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a><a class="lnk" href="/docs/migrate-from-azure-mysql/">Migrating from Azure Database for MySQL</a><a class="lnk" href="/docs/migrate-from-azure-postgres/">Migrating from Azure Database for PostgreSQL</a><a class="lnk" href="/docs/migrate-from-vultr-mysql/">Migrating from Vultr Managed MySQL</a><a class="lnk" href="/docs/migrate-from-vultr-postgres/">Migrating from Vultr Managed PostgreSQL</a><a class="lnk" href="/docs/migrate-from-mariadb/">Migrating from MariaDB</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale & Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><a class="lnk" href="/docs/split-rows-by-region/">Split rows by region</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error & exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Staged (wave) migration — a few tables at a time</h1>
+    <p class="subtitle">Move your biggest or most self-contained tables first, cut them over, then bring the rest across in later waves.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#two-mechanisms">Two mechanisms</a></li><li><a href="#growing-stream">Mechanism A — one growing stream</a></li><li><a href="#independent-streams">Mechanism B — several independent streams</a></li><li><a href="#foreign-keys">Foreign keys decide your wave ordering</a></li><li><a href="#cutover">Cutting a wave over</a></li><li><a href="#split-brain">Split-brain is yours to prevent</a></li><li><a href="#write-back">What sluice does not do: write-back to the source</a></li><li><a href="#checklist">Choosing waves: a checklist</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    
+<p>Not every migration wants to be one event. On a large database it is often safer to move the biggest or most self-contained tables first, cut the application over for <em>just those</em>, let them bake in production for a while, then bring the rest across in later waves. Each wave is small enough to reason about, and a problem in wave 3 doesn't implicate the tables that have been running fine since wave 1.</p>
+<p>sluice supports this today. This guide covers the two mechanisms, which one to use on which source engine (they are <strong>not</strong> interchangeable), how foreign keys constrain your wave ordering, and the one thing sluice deliberately does not do: replicate writes back from the target to the source.</p>
+
+<h2 id="two-mechanisms">Two mechanisms <a class="hlink" href="#two-mechanisms" aria-label="Permalink to this section">#</a></h2>
+<div class="table-scroll"><table><thead><tr><th></th><th>One growing stream</th><th>Several independent streams</th></tr></thead><tbody>
+<tr><td>Shape</td><td class="desc">a single <code>--stream-id</code> whose table scope expands</td><td class="desc">one <code>--stream-id</code> per wave, running side by side</td></tr>
+<tr><td>Add a wave with</td><td class="desc"><code>sluice schema add-table</code></td><td class="desc">another <code>sluice sync start</code></td></tr>
+<tr><td>Cut over</td><td class="desc">all tables together, at the end</td><td class="desc"><strong>per wave</strong>, independently</td></tr>
+<tr><td>Postgres source</td><td class="desc">supported</td><td class="desc"><strong>unsafe today</strong> — see the caveat below</td></tr>
+<tr><td>MySQL / PlanetScale / Vitess source</td><td class="desc">supported</td><td class="desc">supported</td></tr>
+</tbody></table></div>
+<p>The distinction that matters is <strong>whether you need to cut waves over independently</strong>. If the point of staging is to de-risk the <em>copy</em> — everything lands eventually, in one cutover, but you'd rather not snapshot 4 TB in a single run — use one growing stream. If the point is to de-risk the <em>cutover</em> — wave 1 serving production traffic from the target while wave 2 is still copying — you need independent streams, and today that means a MySQL-family source.</p>
+
+<h2 id="growing-stream">Mechanism A — one growing stream <a class="hlink" href="#growing-stream" aria-label="Permalink to this section">#</a></h2>
+<p>Start a stream scoped to your first wave, then extend its scope as you go. The stream keeps one CDC position, one slot, one control-state row.</p>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SRC" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
+    <span class="f">--include-table</span> 'orders,order_items' \
+    <span class="f">--stream-id</span> appdb</code></pre>
+<p>Later, bring <code>users</code> into the same stream. On a Postgres source this works <strong>without draining</strong> the running stream:</p>
+<pre><code><span class="k">sluice</span> schema add-table users \
+    <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SRC" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
+    <span class="f">--stream-id</span> appdb <span class="f">--no-drain</span></code></pre>
+<p><a href="/docs/commands/#schema-add-table">schema add-table</a> creates the table on the target, bulk-copies its rows from a consistent snapshot, extends the source publication, and hands the table to the running CDC stream — the same gapless snapshot to CDC boundary a cold start gets. It prompts for typed confirmation (the table name) unless you pass <code>--yes</code>.</p>
+<div class="note"><code>--no-drain</code> is Postgres-only in this release. On a <strong>MySQL-family source</strong>, use the drained workflow: <code>sync stop --wait</code>, then <code>schema add-table</code>, then <code>sync start</code> again. Re-running <code>sync start</code> with the same <code>--stream-id</code> warm-resumes from the persisted position — it does not re-snapshot.</div>
+<p>One table per invocation; repeat it per table or script the loop. On a Postgres source this is the mechanism that grows scope <em>safely</em> — it extends the publication additively, so it can't disturb tables already in scope.</p>
+
+<h2 id="independent-streams">Mechanism B — several independent streams <a class="hlink" href="#independent-streams" aria-label="Permalink to this section">#</a></h2>
+<p>Each wave gets its own <code>--stream-id</code>, its own CDC position, and — on engines with a replication-slot concept — its own <code>--slot-name</code>. The waves are fully independent: you cut wave 1 over and stop its stream while wave 2 is still snapshotting.</p>
+<pre><code><span class="c"># Wave 1 — cut over first, weeks before the rest.</span>
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SRC" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
+    <span class="f">--include-table</span> 'orders,order_items' \
+    <span class="f">--stream-id</span> wave1
+
+<span class="c"># Wave 2 — started later, runs alongside wave 1.</span>
+<span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SRC" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
+    <span class="f">--include-table</span> 'users,sessions' \
+    <span class="f">--stream-id</span> wave2</code></pre>
+<p><code>--include-table</code> is comma-separated, repeatable, and glob-aware (<code>audit_*</code>), and it scopes <strong>both</strong> legs — the cold-start snapshot and the live CDC apply. CDC state is keyed per stream, so waves never contend for position. On a MySQL-family source each stream opens its own binlog / VStream reader and there is no shared server-side object to collide over.</p>
+<p><strong>On Postgres, give each stream its own <code>--slot-name</code></strong> — without it every stream lands on the default <code>sluice_slot</code> and they collide. sluice prepends <code>sluice_</code> if your name doesn't already start with it, so every slot stays findable:</p>
+<pre><code><span class="k">sluice</span> sync start ... <span class="f">--stream-id</span> wave1 <span class="f">--slot-name</span> wave1   # creates slot "sluice_wave1"</code></pre>
+<div class="note warn"><strong>Postgres sources: don't run concurrent streams with different table scopes.</strong> The replication <em>slot</em> is per-stream, but the <em>publication</em> is not — every Postgres-source stream shares a single publication (<code>sluice_pub</code>) and scopes it to its own table list at cold start, replacing the whole set. Cold-starting a second wave against the same source therefore drops the first wave's tables out of the publication: its slot stays healthy and keeps advancing, but it <strong>silently replicates nothing</strong> from that moment on. Until this is addressed, on a Postgres source use <strong>Mechanism A</strong>, or run waves <strong>strictly sequentially</strong> — fully stopping one wave's stream before cold-starting the next. MySQL, PlanetScale, and Vitess sources are unaffected (they have no publication). The fix is designed in <a href="https://github.com/sluicesync/sluice/blob/main/docs/adr/adr-0175-postgres-publication-scope-isolation.md">ADR-0175</a>.</div>
+
+<h2 id="foreign-keys">Foreign keys decide your wave ordering <a class="hlink" href="#foreign-keys" aria-label="Permalink to this section">#</a></h2>
+<p>This constrains wave composition more than table size does. A wave-1 table with a foreign key pointing at a wave-2 table cannot have that constraint created — the referenced table isn't on the target yet. Two ways through:</p>
+<ul>
+  <li><strong>Order waves along the FK dependency edges.</strong> Parents before children. This is the clean answer when the graph allows it, and it is worth drawing the graph before you pick waves.</li>
+  <li><strong>Use <code>--skip-foreign-keys</code> when it doesn't.</strong> Cyclic dependencies, or a wave you can't reorder, need the escape hatch. It creates no FK constraints on the target and — importantly — <strong>synthesizes a backing index on each skipped FK's referencing columns</strong>, so the join performance the FK's index was providing doesn't quietly regress while you wait for the later wave. Every skipped constraint is named in the run's output; add them back after the final wave lands.</li>
+</ul>
+<p>This is a different situation from row-level filtering, which orphans children of <em>rows</em> that were filtered out and refuses loudly. See <a href="/docs/copy-table-subset/">Copy a subset of tables</a> if you're staging by rows rather than by tables.</p>
+
+<h2 id="cutover">Cutting a wave over <a class="hlink" href="#cutover" aria-label="Permalink to this section">#</a></h2>
+<p>Per wave, the sequence is the standard cutover scoped to that wave's tables:</p>
+<pre><code><span class="c"># 1. Prime the target's identity columns past the source's high-water mark.</span>
+<span class="k">sluice</span> cutover \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SRC" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
+    <span class="f">--include-table</span> 'orders,order_items' \
+    <span class="f">--sequence-margin</span>=1000
+
+<span class="c"># 2. Flip application traffic for these tables. (Your step, not sluice's.)</span>
+
+<span class="c"># 3. Drain and stop this wave's stream.</span>
+<span class="k">sluice</span> sync stop \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
+    <span class="f">--stream-id</span> wave1 <span class="f">--wait</span>
+
+<span class="c"># 4. Prove it landed.</span>
+<span class="k">sluice</span> verify \
+    <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SRC" \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
+    <span class="f">--include-table</span> 'orders,order_items' <span class="f">--depth</span>=sample</code></pre>
+<p><a href="/docs/commands/#cutover">cutover</a> takes <code>--include-table</code> too, so a wave's sequences get primed without touching tables that are still source-authoritative. Skipping it is the classic staged-migration failure: application writes to the target start allocating IDs that collide with rows CDC is about to deliver.</p>
+<div class="note">Use <code>--wait</code> on <code>sync stop</code>. Without it the stop is asynchronous and late in-flight changes may not have landed.</div>
+
+<h2 id="split-brain">Split-brain is yours to prevent <a class="hlink" href="#split-brain" aria-label="Permalink to this section">#</a></h2>
+<p>sluice doesn't own the traffic switch — the cutover moment is application-specific. The consequence is that sluice <strong>cannot tell</strong> whether a wave's tables are still being written on the source.</p>
+<p>If writes keep landing on the source after you've cut a wave over, CDC faithfully replicates them on top of the application's writes to the target. Per row, last writer wins, and nothing surfaces as an error — this is the one place in a staged migration where you can lose data quietly. The stream is doing exactly what you asked; the problem is upstream of it.</p>
+<p>The only real protection is on the source side, at the moment of cutover: revoke <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> on the wave's tables from the application role, install a rejecting trigger, or take the source write path out of the application entirely for those tables. "We updated the config and believe nothing writes there any more" is not protection — make the source refuse.</p>
+
+<h2 id="write-back">What sluice does not do: write-back to the source <a class="hlink" href="#write-back" aria-label="Permalink to this section">#</a></h2>
+<p>Some managed-import products keep a reverse stream running after cutover, so writes landing on the new database replicate <em>back</em> to the old one and you can fail back if the new database can't take the load. sluice has no equivalent today, and it isn't a small gap.</p>
+<p>The blocker is that sluice's CDC apply path carries no origin marker — nothing says "this change is one I applied, don't re-emit it." A reverse <code>sync start</code> running alongside a forward one is therefore a replication loop.</p>
+<p>There is a narrower version the wave design makes tractable, worth understanding even though it is <strong>not a supported feature</strong>: once a wave is cut over and its forward stream is <em>stopped</em>, nothing is streaming those tables source to target any more, so a reverse stream scoped to exactly that wave's tables is table-disjoint from every live forward stream and isn't a loop. What still stands in the way: the source's identity columns would need priming past the target's; a cross-engine reverse needs a reverse-direction schema that round-trips, which the forward migration doesn't guarantee; and it has never been tested. It is a plausible composition of shipped primitives, not a validated path.</p>
+<div class="note"><strong>If you need genuine fail-back today,</strong> keep the source authoritative until you're confident: cut a wave's <em>reads</em> over first, leave writes on the source, and move writes only once the target has proven itself under real read load. That captures most of the risk reduction without a reverse stream.</div>
+
+<h2 id="checklist">Choosing waves: a checklist <a class="hlink" href="#checklist" aria-label="Permalink to this section">#</a></h2>
+<ol>
+  <li><strong>Draw the FK graph.</strong> It constrains ordering more than size does. Parents before children; note the cycles that will need <code>--skip-foreign-keys</code>.</li>
+  <li><strong>Prefer self-contained clusters.</strong> A wave whose tables reference only each other cuts over cleanly and can be verified in isolation.</li>
+  <li><strong>Put the scariest table in wave 1, not last.</strong> The point of staging is to learn early, on the table most likely to surprise you, while the blast radius is smallest and rollback is still just "keep using the source."</li>
+  <li><strong>Confirm your source engine supports the mechanism you want.</strong> Independent per-wave cutover needs Mechanism B, which needs a MySQL-family source today.</li>
+  <li><strong>Decide the write fence per wave before you start</strong>, not at the cutover window.</li>
+  <li><strong>Budget the stream count.</strong> Each concurrent wave is a full CDC reader (and on Postgres, a slot). A handful is fine; dozens is not a design, it's a load test.</li>
+</ol>
+
+<h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
+<ul>
+  <li><a href="/docs/zero-downtime-cutover/">Zero-downtime migration</a> — the single-wave cutover flow this guide generalizes.</li>
+  <li><a href="/docs/copy-table-subset/">Copy a subset of tables</a> — scoping with <code>--include-table</code> in depth, including cross-engine namespace mapping.</li>
+  <li><a href="/docs/schema-changes/">Schema changes during a sync</a> — <code>schema add-table</code> in the broader schema-evolution context.</li>
+  <li><a href="/docs/multi-database/">Migrate many databases or schemas</a> — staging by namespace instead of by table.</li>
+  <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — proving each wave landed before you start the next.</li>
+</ul>
+
+    <div class="pager"><a class="prev" href="/docs/zero-downtime-cutover/">← Zero-downtime migration (continuous sync)</a><a class="next" href="/docs/schema-changes/">Schema changes during a sync →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/staged-wave-migration/index.md">View this page as Markdown</a></footer>
+</body>
+</html>

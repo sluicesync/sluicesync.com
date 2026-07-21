@@ -16,6 +16,7 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 - [Preview & validate before you migrate](https://sluicesync.com/docs/preview-and-validate/): See the exact target DDL, steer the type translation, and confirm the copy — without guessing.
 - [Verify & reconcile](https://sluicesync.com/docs/verify-reconcile/): Confirm every row landed and no structural drift crept in — then know exactly what to do when it didn't.
 - [Zero-downtime migration (continuous sync)](https://sluicesync.com/docs/zero-downtime-cutover/): Cold-start the data, let CDC catch up while the app keeps writing, then cut over in a brief, controlled window.
+- [Staged (wave) migration](https://sluicesync.com/docs/staged-wave-migration/): Move your biggest or most self-contained tables first, cut them over, then bring the rest across in later waves.
 - [Schema changes during a sync](https://sluicesync.com/docs/schema-changes/): How sluice keeps a running sync online while the source schema evolves — what forwards automatically, what refuses loudly, and how to recover.
 - [Redact PII](https://sluicesync.com/docs/redact-pii/): Seed staging, dev, analytics, and vendor handoffs from production without letting personal data leave with the rows.
 - [Import SQLite or Cloudflare D1](https://sluicesync.com/docs/import-sqlite-d1/): Move a SQLite file, a wrangler D1 export, or a live Cloudflare D1 into Postgres or MySQL — losslessly.
