@@ -170,6 +170,8 @@ Flag · Purpose ·
 
 --slot-name · Postgres replication-slot suffix (default sluice_slot); set per-instance to run several streams off one source. ·
 
+--publication-name · Postgres publication suffix (default sluice_pub); the sibling of --slot-name and required alongside it to run several streams with different --include-table scopes off one source — sharing a publication would silently de-scope the other stream, so sluice refuses that rescope loudly. See staged (wave) migration. ·
+
 --apply-batch-size · CDC changes per target tx, or auto. Default auto (v0.99.44, ADR-0089): the AIMD latency controller adapts the batch size within [1, ceiling] to a p95 target for >10× throughput over single-row apply. Ceilings: 1000 mysql/postgres, 100 planetscale. Pass =1 for the conservative one-change-per-tx behavior. Tables with no usable identity key (no PK, no unique index) are never batched — each such change commits alone. ·
 
 --no-auto-tune · Disable the AIMD controller. --apply-batch-size=N then becomes a strictly static row cap (floor stays 1) instead of an adaptive ceiling. For workloads where you've hand-tuned the batch size and want no auto-adaptation. ·
