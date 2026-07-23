@@ -267,6 +267,8 @@ const FIELD_NOTES = [
   { slug: "pgoutput-carries-no-defaults", date: "2026-07-23", engine: "Postgres", label: "pgoutput won't tell you a column's DEFAULT — and the obvious fix drops every default", dek: "pgoutput's <code>Relation</code> message carries each column's name, type OID, typmod, and key flag &mdash; no DEFAULT, and no <code>NOT NULL</code> either. So the obvious fix for &ldquo;a source <code>SET DEFAULT</code> is silently skipped&rdquo; &mdash; add DEFAULT to the schema-diff classifier &mdash; is simultaneously dangerous and ineffective: comparing a real catalog read against a nil-default wire projection classifies <em>every</em> table as a default change and emits <code>DROP DEFAULT</code> across the whole target, while a real <code>SET DEFAULT</code> mid-stream still goes undetected. A shape classifier can only classify what the change stream actually carries." },
   { slug: "retry-loops-reconnect-blind-spot", date: "2026-07-23", engine: "Cross-cutting", label: "Your retry loop's blind spot is its own reconnect", dek: "Three multi-day soaks against real managed infrastructure each died on an error the retry machinery was built for but couldn't <em>recognize</em>. The machinery existed and worked; the gap was classification coverage &mdash; a gRPC transport drop reported under the one status code a careful policy refuses to blanket-retry, and a reconnect failure inside the retry loop itself, where go-sql-driver flattens &ldquo;the peer dropped your pooled connection&rdquo; into the bare text <code>invalid connection</code> with the structured cause gone. A retry loop is only as good as its classifier's coverage, and the reconnect is a failure site most classifiers don't cover." },
   { slug: "one-cancel-three-errors", date: "2026-07-23", engine: "Cross-cutting", label: "One cancel, three different errors from database/sql", dek: "Cancel a context mid-way through a <code>database/sql</code> loop and the error you get back depends on which DB call the cancel lands on: <code>sql: statement is closed</code> when the pool reaps the prepared statement, <code>context canceled</code> when the exec sees it directly, or a driver-specific message on a <code>Commit</code>/<code>BeginTx</code>/<code>Prepare</code>. All three mean &ldquo;we were cancelled,&rdquo; but an <code>errors.Is(err, context.Canceled)</code> assertion &mdash; or a retry classifier &mdash; sees three identities, chosen by scheduling. Normalize at the single return boundary, not per call site." },
+  { slug: "slot-is-the-registry", date: "2026-07-23", engine: "Postgres", label: "The slot is the registry you already have", dek: "When you need &ldquo;is another stream still claiming a scope on this Postgres source?&rdquo;, the airtight-looking answer is a purpose-built coordination table &mdash; and it fails for a reason that generalizes: a source-side registry table is <code>CREATE TABLE</code>-permission-gated on exactly the restricted managed services where the guard matters most, so the guarantee silently weakens where it is most needed. The replication slot is the registry you already have: durable, source-side, per-stream, unconditionally present, and held for precisely as long as a stream intends to resume. Keying the guard on slot <em>existence</em> instead of <em>activity</em> closed the &ldquo;momentarily inactive&rdquo; window &mdash; at an honest, designed-in cost." },
+  { slug: "disconnect-is-not-release", date: "2026-07-23", engine: "Postgres", label: "Disconnect is not release — and 55006 means two opposite things", dek: "When a logical-replication client disconnects, Postgres does not synchronously mark the slot inactive &mdash; the walsender releases it asynchronously: near-instant usually, whole seconds under a contended CI scheduler, bounded in the worst case only by <code>wal_sender_timeout</code> (default 60s). Anything that runs at &ldquo;the client is gone&rdquo; races that window and hits SQLSTATE 55006 &mdash; on <em>both</em> lifecycle sides, <code>START_REPLICATION</code> and <code>pg_drop_replication_slot</code>. The sharp edge: 55006 means either &ldquo;prior owner not yet reaped&rdquo; (must retry) or &ldquo;genuinely concurrent second writer&rdquo; (must fail loudly), and the error gives you nothing to tell them apart. The clean separator is a bounded retry." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -9552,6 +9554,76 @@ Commit / BeginTx / Prepare    driver-specific message`)}
   <li>sluice v0.99.288 CHANGELOG (the D1 cancelled-stage fix) and the 50/50 stress verification; the flake record from the v0.99.287 tag CI.</li>
   <li>Go <code>database/sql</code> &mdash; statement lifecycle under context cancellation; <code>driver.ErrBadConn</code> semantics.</li>
   <li>Related field notes &mdash; <a href="/field-notes/json-cursor-teleport/">the JSON cursor that teleported</a> and <a href="/field-notes/int64-json-boundary/">int64 at the JSON boundary</a> (the same family: Go-boundary behaviors that only bite under specific runtime conditions).</li>
+</ul>
+`,
+  })
+);
+
+// nav-label: The slot is the registry you already have
+write(
+  "field-notes/slot-is-the-registry",
+  page({
+    slug: "field-notes/slot-is-the-registry",
+    title: "The slot is the registry you already have",
+    subtitle: "sluice needed to answer 'is another stream still claiming a table scope on this Postgres source?'. The airtight-looking answer — a purpose-built stream→scope binding table — was rejected for a reason that generalizes: a source-side registry table is CREATE TABLE-permission-gated on exactly the restricted managed services where the guard matters most. The replication slot turned out to be the registry that was wanted all along: durable, source-side, per-stream, unconditionally present, and held for precisely as long as a stream intends to resume.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; closing the documented residual window of sluice's publication scope-conflict guard (the <a href="/field-notes/two-syncs-one-publication/">two-syncs-one-publication</a> starvation). Shipped in sluice v0.99.289; this note is that story's ending.</p>
+
+<h2 id="the-window">The proxy and its window</h2>
+<p>As first shipped, the guard's conflict signal was slot <em>activity</em>: refuse a narrowing publication rescope while another <code>sluice\\_%</code> slot is actively being read. Activity is a proxy, and its blind spot was precisely the operationally common state &mdash; a stream <em>stopped mid-migration</em> holds an INACTIVE slot and a resumable position that still expects its scope. A cold start timed inside that window could silently de-scope the stopped stream: it resumes later, advances normally, and receives nothing for its tables.</p>
+
+<h2 id="the-rejected-fix">Why the "airtight" registry table loses</h2>
+<p>The obvious closure is an explicit registry: persist a stream&rarr;scope binding in a control table and check that. It has to live on the <em>source</em> (concurrent streams may target entirely different databases, so no single target's control table is authoritative) &mdash; and a source-side table is where the design collapses. It needs <code>CREATE TABLE</code> privilege, which restricted managed services often withhold &mdash; so the guard would be strongest on permissive self-hosted sources and silently weakest exactly where operators most need it. It adds a persisted codec surface. And it needs lease/staleness semantics so a crashed stream's stale binding doesn't wedge every future cold start. Three costs, all avoidable.</p>
+
+<h2 id="the-registry">The registry you already have</h2>
+<p>A replication slot IS a stream&rarr;claim binding, maintained by Postgres itself: created per stream, durable across restarts, visible to every client of the source in <code>pg_replication_slots</code>, requiring no privilege beyond what CDC already needs, and dropped exactly when a stream is truly finished. So the guard's signal changed from activity to <strong>existence</strong>: any other <code>sluice\\_%</code> slot &mdash; active or not &mdash; is a claim, because a slot's owner intends to resume. A stream with <em>no</em> slot must cold-start, and cold start re-asserts scope under this same guard; the window is closed for every stream that can still be starved.</p>
+
+<h2 id="the-cost">The honest cost, designed in</h2>
+<p>Postgres cannot tell &ldquo;finished forever&rdquo; from &ldquo;stopped and about to resume&rdquo; &mdash; so <em>sequential</em> different-scope runs against one source now refuse until the finished stream's slot is dropped, or each run names its own publication. That trade is deliberate, and sluice's own test suite paid it first (a pre-existing integration test ran two sequential legs with disjoint scopes and became the first &ldquo;operator&rdquo; the refusal stopped). A leftover slot pins WAL on the source anyway; a refusal that points at it, labels it inactive, and names the three escapes is a feature wearing the costume of friction.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Before building a coordination registry, inventory the durable per-participant objects the system already maintains &mdash; and check your candidate registry's <em>privilege profile against the environments where the guarantee matters most</em>. A guard that silently degrades on restricted platforms is worse than a cruder signal that works unconditionally; and existence of a resource the participant must hold anyway is often the most honest liveness-independent claim available.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice ADR-0175 &mdash; the Alternatives entry recording the registry-table rejection (permission-gating decisive) and the "Residual risk &mdash; CLOSED (existence semantics)" section; the inactive-slot refusal pin asserting refuse-before-mutate on <code>pg_publication_rel</code>.</li>
+  <li>PostgreSQL documentation &mdash; <code>pg_replication_slots</code>, slot durability and WAL retention.</li>
+  <li>Related field note &mdash; <a href="/field-notes/two-syncs-one-publication/">two syncs, one publication</a> (the starvation this guard exists to prevent).</li>
+</ul>
+`,
+  })
+);
+
+// nav-label: Disconnect is not release (55006)
+write(
+  "field-notes/disconnect-is-not-release",
+  page({
+    slug: "field-notes/disconnect-is-not-release",
+    title: "Disconnect is not release — Postgres lets go of a replication slot asynchronously, and 55006 means two opposite things",
+    subtitle: "When a logical-replication client disconnects, Postgres does not synchronously mark the slot inactive — the walsender releases it on its own schedule: near-instant in practice, whole seconds under a contended CI scheduler, bounded in the worst case only by wal_sender_timeout (default 60s). Anything that runs at 'the client is gone' races that window and hits SQLSTATE 55006 — on both sides of the slot lifecycle — and the error text gives you nothing to distinguish 'prior owner not yet reaped' from 'genuinely concurrent second writer'.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; a sluice release-tag CI flake: an integration test stopped its streamer, waited for <code>Run</code> to return, then called <code>pg_drop_replication_slot</code> &mdash; and lost the race to the walsender, which had not yet let go. The drop-side retry landed in sluice v0.99.289; the <code>START_REPLICATION</code>-side bounded retry has guarded the product path for much longer.</p>
+
+<h2 id="the-race">The asynchronous release</h2>
+<p>&ldquo;My connection closed&rdquo; and &ldquo;the slot is free&rdquo; are different events, ordered by nothing you control. The client-side socket closes; the server-side walsender process notices, tears down, and only then clears <code>pg_replication_slots.active</code>. Under load that gap stretches to whole seconds, and its worst-case bound is not your teardown code &mdash; it is <code>wal_sender_timeout</code>, default 60 seconds. Both lifecycle operations race it:</p>
+${pre(`START_REPLICATION ...      -> ERROR: replication slot "sluice_x" is active for PID 4711 (SQLSTATE 55006)
+SELECT pg_drop_replication_slot('sluice_x');
+                           -> ERROR: replication slot "sluice_x" is active for PID 4711 (SQLSTATE 55006)`)}
+
+<h2 id="two-meanings">One SQLSTATE, two opposite meanings</h2>
+<p>The sharp edge is semantic: 55006 means either <em>&ldquo;the prior owner's walsender hasn't been reaped yet&rdquo;</em> &mdash; transient, self-heals in seconds, must be retried &mdash; or <em>&ldquo;a second writer is genuinely consuming this slot right now&rdquo;</em> &mdash; the load-bearing guard against two streamers sharing one slot, which must fail loudly and immediately. Same code, same message shape, opposite correct responses; the error carries nothing to tell them apart (the PID names the holder, not its liveness).</p>
+
+<h2 id="the-separator">The clean separator is a bounded retry</h2>
+<p>Time is the only discriminator the server gives you. A dead owner's walsender is reaped well inside a small bounded budget; a live owner holds the slot past any reasonable budget. So both of sluice's lifecycle sides retry 55006 on a short backoff and let the FINAL attempt's original loud refusal propagate unchanged &mdash; the transient case self-heals invisibly, and the genuine-second-writer case fails exactly as loudly as before, just a bounded number of seconds later. No liveness oracle, no heuristics on the message text, no weakening of the guard.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Audit every code path that runs at &ldquo;the client is gone&rdquo; &mdash; restarts, teardowns, failover tooling, test cleanup &mdash; for the assumption that disconnect implies release. Where a shared resource is freed asynchronously and the contention error is ambiguous between &ldquo;stale hold&rdquo; and &ldquo;real conflict&rdquo;, a bounded retry that preserves the final loud failure is the honest resolution: it distinguishes the two cases by the one signal the server actually provides &mdash; how long the hold lasts.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice &mdash; the <code>START_REPLICATION</code> bounded retry and its dual-cause analysis (incl. the <code>wal_sender_timeout</code> worst-case bound) in the Postgres CDC reader; the v0.99.289 drop-side retry in the slot-loss integration test.</li>
+  <li>PostgreSQL documentation &mdash; <code>wal_sender_timeout</code>; SQLSTATE class 55 (object not in prerequisite state).</li>
+  <li>Related field notes &mdash; <a href="/field-notes/active-healthy-not-liveness/">&ldquo;active&rdquo; is not liveness</a> and <a href="/field-notes/slot-is-the-registry/">the slot is the registry you already have</a> (the same catalog surface, opposite direction: there existence is the signal; here activity is the ambiguity).</li>
 </ul>
 `,
   })
