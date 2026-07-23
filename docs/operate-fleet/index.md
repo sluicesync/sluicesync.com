@@ -119,7 +119,9 @@ Threshold · Fires when… ·
 
 --notify-storage-growth-per-min · Storage is climbing at or above N fraction-of-capacity per minute — a pre-grow early warning. Requires telemetry. ·
 
-All the util / control-plane-lag / growth rules need a PlanetScale telemetry provider (--planetscale-org plus the metrics-token flags); only --notify-sync-lag-seconds works without it. The same alerter set is also available on the standalone metrics-watch probe.
+notify-dead-tuple-ratio / notify-xid-age · Postgres-target autovacuum advisories (v0.99.288): the worst user table's dead-tuple ratio, and the database's age(datfrozenxid) wraparound headroom. Ungated — probed from the target's own catalog; Postgres targets only. ·
+
+All the util / control-plane-lag / growth rules need a PlanetScale telemetry provider (--planetscale-org plus the metrics-token flags); --notify-sync-lag-seconds and the two vacuum advisories work without it, needing only a sink. The telemetry-gated alerter set is also available on the standalone metrics-watch probe.
 
 ## Next steps
 

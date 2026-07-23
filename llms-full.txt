@@ -432,6 +432,8 @@ Flag · Purpose ·
 
 --notify-sync-lag-seconds · Alert when sluice's own apply lag (sluice_sync_lag_seconds) is at or above N seconds. Ungated — works on MySQL and Postgres alike, needing only a sink; no PlanetScale telemetry. 0 disables. ·
 
+--notify-dead-tuple-ratio / --notify-xid-age · Postgres-target autovacuum advisories (v0.99.288). The first fires (warning) when the worst user table's dead-tuple ratio (n_dead_tup/(n_dead_tup+n_live_tup), a fraction 0–1) is at or above the threshold — the alert names the table, the dead/live counts, and when autovacuum last completed there; tables under a 1000-dead-tuple floor are ignored. The second fires (critical) when the database's age(datfrozenxid) wraparound headroom reaches N XIDs (Postgres force-stops near ~2.1B; healthy is ~200M). Ungated — probed from the target's own catalog, needing only a sink. Postgres targets only (elsewhere sluice warns once and the rules stay inert); 0 disables. Also accepted as fleet-YAML keys notify-dead-tuple-ratio / notify-xid-age. ·
+
 --notify-storage-util / --notify-cpu-util / --notify-mem-util · Alert when the target's storage / CPU / memory utilisation (a fraction 0–1, used/capacity) is at or above the threshold. Edge-triggered + cooldown'd. 0 disables a rule. Requires --planetscale-org telemetry. ·
 
 --notify-lag-seconds / --notify-storage-growth-per-min · Alert when the target's control-plane replica lag (seconds) is at or above the value, or when storage utilisation is climbing at or above this fraction-of-capacity per minute (a pre-grow early warning, e.g. 0.02 = +2%/min). 0 disables. Requires --planetscale-org telemetry. ·
@@ -444,7 +446,7 @@ Flag · Purpose ·
 
 --source-tls-ca / --target-tls-ca · CA-pinned verify-ca TLS to a MySQL source / target (ADR-0158) — PEM CA path; covers the data connection and the binlog/CDC stream on the source. See the migrate row for the full semantics. ·
 
---apply-retry-attempts · Max consecutive retriable apply failures absorbed before exiting (ADR-0038, default 8 — tuned for managed-Vitess tx-killer transients). 1 = no retry. The counter resets whenever the persisted CDC position advances. ·
+--apply-retry-attempts · Max consecutive retriable failures absorbed before exiting (ADR-0038, default 8 — tuned for managed-Vitess tx-killer transients). 1 = no retry. The counter resets whenever the persisted CDC position advances. Since v0.99.288 the same budget also covers transient network failures while a retry attempt re-establishes its connections (a dead pool connection, reset/refused, timeouts) — previously those exited the stream. ·
 
 --apply-retry-backoff-base / --apply-retry-backoff-cap · Exponential backoff between retriable apply failures: base 100ms (doubling), capped at 30s. Only consulted when --apply-retry-attempts > 1. ·
 
@@ -1042,7 +1044,7 @@ Flag · Purpose ·
 
 --metrics-listen · Also serve a Prometheus /metrics endpoint re-exporting the watched database's CPU/mem/storage/lag as the sluice_target_* gauge family — turning the daemon into a standalone PlanetScale-metrics exporter. Ignored with --once. ·
 
---notify-* · The full alerter set — --notify-webhook / --notify-slack sinks (env SLUICE_NOTIFY_WEBHOOK / SLUICE_NOTIFY_SLACK) and the --notify-storage-util / --notify-cpu-util / --notify-mem-util / --notify-lag-seconds / --notify-storage-growth-per-min thresholds + --notify-cooldown — identical semantics to sync start. ·
+--notify-* · The telemetry-backed alerter set — --notify-webhook / --notify-slack sinks (env SLUICE_NOTIFY_WEBHOOK / SLUICE_NOTIFY_SLACK) and the --notify-storage-util / --notify-cpu-util / --notify-mem-util / --notify-lag-seconds / --notify-storage-growth-per-min thresholds + --notify-cooldown — identical semantics to sync start. (The target-probe rules — sync lag and the v0.99.288 vacuum advisories — live on sync start only; the daemon holds no database connection.) ·
 
   Run as an alert-only daemon (tokens via env; fire on 85% storage):
 
@@ -5605,7 +5607,9 @@ Threshold · Fires when… ·
 
 --notify-storage-growth-per-min · Storage is climbing at or above N fraction-of-capacity per minute — a pre-grow early warning. Requires telemetry. ·
 
-All the util / control-plane-lag / growth rules need a PlanetScale telemetry provider (--planetscale-org plus the metrics-token flags); only --notify-sync-lag-seconds works without it. The same alerter set is also available on the standalone metrics-watch probe.
+notify-dead-tuple-ratio / notify-xid-age · Postgres-target autovacuum advisories (v0.99.288): the worst user table's dead-tuple ratio, and the database's age(datfrozenxid) wraparound headroom. Ungated — probed from the target's own catalog; Postgres targets only. ·
+
+All the util / control-plane-lag / growth rules need a PlanetScale telemetry provider (--planetscale-org plus the metrics-token flags); --notify-sync-lag-seconds and the two vacuum advisories work without it, needing only a sink. The telemetry-gated alerter set is also available on the standalone metrics-watch probe.
 
 ## Next steps
 

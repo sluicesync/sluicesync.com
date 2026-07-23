@@ -116,8 +116,9 @@ restart:
 <tr><td><code>--notify-lag-seconds</code></td><td class="desc">The target's control-plane replica lag is at or above N. Requires PlanetScale telemetry.</td></tr>
 <tr><td><code>--notify-storage-util</code> / <code>--notify-cpu-util</code> / <code>--notify-mem-util</code></td><td class="desc">Target utilisation (0–1 fraction) is at or above the given level. Requires PlanetScale telemetry.</td></tr>
 <tr><td><code>--notify-storage-growth-per-min</code></td><td class="desc">Storage is climbing at or above N fraction-of-capacity per minute — a pre-grow early warning. Requires telemetry.</td></tr>
+<tr><td><code>notify-dead-tuple-ratio</code> / <code>notify-xid-age</code></td><td class="desc">Postgres-target autovacuum advisories (v0.99.288): the worst user table's dead-tuple ratio, and the database's <code>age(datfrozenxid)</code> wraparound headroom. <strong>Ungated</strong> — probed from the target's own catalog; Postgres targets only.</td></tr>
 </tbody></table></div>
-<p>All the util / control-plane-lag / growth rules need a <a href="/docs/planetscale-vitess/">PlanetScale telemetry</a> provider (<code>--planetscale-org</code> plus the metrics-token flags); only <code>--notify-sync-lag-seconds</code> works without it. The same alerter set is also available on the standalone <a href="/docs/commands/#metrics-watch">metrics-watch</a> probe.</p>
+<p>All the util / control-plane-lag / growth rules need a <a href="/docs/planetscale-vitess/">PlanetScale telemetry</a> provider (<code>--planetscale-org</code> plus the metrics-token flags); <code>--notify-sync-lag-seconds</code> and the two vacuum advisories work without it, needing only a sink. The telemetry-gated alerter set is also available on the standalone <a href="/docs/commands/#metrics-watch">metrics-watch</a> probe.</p>
 
 <h2 id="next-steps">Next steps <a class="hlink" href="#next-steps" aria-label="Permalink to this section">#</a></h2>
 <ul>
