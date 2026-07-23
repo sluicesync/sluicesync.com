@@ -263,6 +263,10 @@ const FIELD_NOTES = [
   { slug: "reuse-the-source-comparator", date: "2026-07-18", engine: "MySQL & Vitess", label: "You can't reimplement MySQL's =, so link its comparator in", dek: "A filtered change stream evaluates <code>region = 'EU'</code> client-side, and it has to match the source's own <code>=</code> exactly &mdash; but MySQL's default collation is case- and accent-insensitive, and reimplementing that (<code>ToLower</code>? Unicode folding?) is a guess that diverges on &szlig;, the Turkish dotless i, and locale tailoring. The fix isn't a better reimplementation: it's linking the source engine's <em>own</em> comparator (Vitess's <code>collations</code> + <code>evalengine</code>) and calling it under the column's collation. That closes the case/accent axis &mdash; but linking is necessary, not sufficient (the library folds case and accents but not the collation's PAD attribute or charset), so the reuse still has to be ground-truthed against the real server's own <code>=</code>, not against the library. Use its implementation, not your model of it &mdash; then verify against the real thing." },
   { slug: "collation-pad-space-trailing-space", date: "2026-07-18", engine: "MySQL & Vitess", label: "The = that ignores your trailing spaces", dek: "On a MySQL <em>legacy</em> collation (<code>utf8mb4_general_ci</code>, <code>_bin</code>, <code>latin1_*</code> — every collation except the 8.0 <code>_0900_</code> ones), <code>WHERE region = 'EU'</code> matches a stored <code>'EU '</code>: those collations are PAD SPACE and ignore trailing spaces in <code>=</code>. The modern <code>_0900_</code> collations are NO PAD and don't. Reuse a comparator that folds case and accents but doesn't check the collation's <code>PAD_ATTRIBUTE</code> and it silently disagrees with the source on the default legacy collation &mdash; a real, shipped silent row-loss. It shipped green because the test compared the comparator to itself; the fix was to compare it to a real server." },
   { slug: "mariadb-no-pad-attribute-column", date: "2026-07-20", engine: "MariaDB", label: "MySQL 8 has this collation column; MariaDB added it in 12.1", dek: "MySQL 8 has a first-class <code>information_schema.COLLATIONS.PAD_ATTRIBUTE</code> column telling you whether a collation compares <code>PAD SPACE</code> (trailing spaces ignored in <code>=</code>) or <code>NO PAD</code>. MariaDB shipped without it for years &mdash; it's absent through the entire 11.x LTS line and 12.0, and only appears in <strong>12.1+</strong>. So on the MariaDB most people run, the attribute that decides whether <code>'EU'</code> matches a stored <code>'EU '</code> isn't in the catalog at all, and you're left reading the <code>_nopad_</code> token in the collation name. A cross-version reader can't assume the column is present <em>or</em> absent; the only version-robust signals are the name and the server's own behavior &mdash; which is why sluice's parity gate probes both." },
+  { slug: "two-syncs-one-publication", date: "2026-07-23", engine: "Postgres", label: "Two syncs, one publication: the slot advances while pgoutput emits nothing", dek: "Postgres logical replication splits the cursor from the filter: the <em>slot</em> records your position and pins WAL; the <em>publication</em> tells <code>pgoutput</code> which tables to emit &mdash; and nothing binds one to the other. Start a second sync with a different table scope against a shared publication and its <code>ALTER PUBLICATION &hellip; SET TABLE</code> <strong>atomically replaces</strong> the member set, silently de-scoping the first stream. Its slot stays healthy and keeps advancing; every health surface stays green; zero rows arrive. From Postgres's side, &ldquo;no in-scope changes&rdquo; and &ldquo;your tables were yanked from the publication&rdquo; are indistinguishable." },
+  { slug: "pgoutput-carries-no-defaults", date: "2026-07-23", engine: "Postgres", label: "pgoutput won't tell you a column's DEFAULT — and the obvious fix drops every default", dek: "pgoutput's <code>Relation</code> message carries each column's name, type OID, typmod, and key flag &mdash; no DEFAULT, and no <code>NOT NULL</code> either. So the obvious fix for &ldquo;a source <code>SET DEFAULT</code> is silently skipped&rdquo; &mdash; add DEFAULT to the schema-diff classifier &mdash; is simultaneously dangerous and ineffective: comparing a real catalog read against a nil-default wire projection classifies <em>every</em> table as a default change and emits <code>DROP DEFAULT</code> across the whole target, while a real <code>SET DEFAULT</code> mid-stream still goes undetected. A shape classifier can only classify what the change stream actually carries." },
+  { slug: "retry-loops-reconnect-blind-spot", date: "2026-07-23", engine: "Cross-cutting", label: "Your retry loop's blind spot is its own reconnect", dek: "Three multi-day soaks against real managed infrastructure each died on an error the retry machinery was built for but couldn't <em>recognize</em>. The machinery existed and worked; the gap was classification coverage &mdash; a gRPC transport drop reported under the one status code a careful policy refuses to blanket-retry, and a reconnect failure inside the retry loop itself, where go-sql-driver flattens &ldquo;the peer dropped your pooled connection&rdquo; into the bare text <code>invalid connection</code> with the structured cause gone. A retry loop is only as good as its classifier's coverage, and the reconnect is a failure site most classifiers don't cover." },
+  { slug: "one-cancel-three-errors", date: "2026-07-23", engine: "Cross-cutting", label: "One cancel, three different errors from database/sql", dek: "Cancel a context mid-way through a <code>database/sql</code> loop and the error you get back depends on which DB call the cancel lands on: <code>sql: statement is closed</code> when the pool reaps the prepared statement, <code>context canceled</code> when the exec sees it directly, or a driver-specific message on a <code>Commit</code>/<code>BeginTx</code>/<code>Prepare</code>. All three mean &ldquo;we were cancelled,&rdquo; but an <code>errors.Is(err, context.Canceled)</code> assertion &mdash; or a retry classifier &mdash; sees three identities, chosen by scheduling. Normalize at the single return boundary, not per call site." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -9404,6 +9408,150 @@ ${pre(`information_schema.COLLATIONS.PAD_ATTRIBUTE present?
   <li>MySQL 8.0 Reference Manual — <code>information_schema.COLLATIONS</code> (<code>PAD_ATTRIBUTE</code>, values <code>PAD SPACE</code> / <code>NO PAD</code>, present since 8.0).</li>
   <li>MariaDB Knowledge Base — <code>information_schema.COLLATIONS</code> (the <code>PAD_ATTRIBUTE</code> column, added in the 12.1 series) and the <code>*_nopad_*</code> NO-PAD collations.</li>
   <li>Related field notes — <a href="/field-notes/collation-pad-space-trailing-space/">the <code>=</code> that ignores your trailing spaces</a> (the PAD-SPACE row-loss this prevents on MySQL), <a href="/field-notes/mariadb-catalog-default-dialect/">MariaDB reports its defaults in a different dialect</a>, and <a href="/field-notes/reuse-the-source-comparator/">you can't reimplement MySQL's <code>=</code></a>.</li>
+</ul>
+`,
+  })
+);
+
+// nav-label: Two syncs, one publication
+write(
+  "field-notes/two-syncs-one-publication",
+  page({
+    slug: "field-notes/two-syncs-one-publication",
+    title: "The healthiest-looking way to lose rows on Postgres: two syncs, one publication",
+    subtitle: "Postgres logical replication splits the cursor from the filter: the slot records your position and pins WAL; the publication tells pgoutput which tables to emit — and nothing binds one to the other. Cold-start a second sync with a different table scope against a shared publication and its ALTER PUBLICATION … SET TABLE atomically replaces the member set, silently de-scoping the first stream: its slot stays healthy and keeps advancing while zero rows arrive, and every health surface stays green.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; designing sluice's staged-&ldquo;wave&rdquo; migration support (move a database a few tables at a time, each wave its own sync). The failure was empirically reproduced against real Postgres before fixing: an integration gate run against deliberately-disabled fix code fails at exactly &ldquo;wave A stopped receiving changes after wave B cold-started.&rdquo; Fixed in sluice v0.99.287 (ADR-0175).</p>
+
+<h2 id="the-split">The cursor and the filter are different objects</h2>
+<p>Postgres logical replication is built from two catalog objects that look like one system but share no binding. The <strong>replication slot</strong> is the cursor: it records how far a consumer has read and pins WAL until that point is confirmed. The <strong>publication</strong> is the filter: the object <code>pgoutput</code> consults &mdash; per <code>START_REPLICATION</code>, by name &mdash; to decide which tables' changes to emit. Nothing in the catalog ties a slot to a publication; slots reference WAL by LSN, not by publication membership. Two consumers can read two slots through one publication, and the publication can only ever express one filter.</p>
+
+<h2 id="the-clobber">SET TABLE is an atomic replace</h2>
+<p>sluice's slot was always per-stream and operator-nameable. Its publication was a hardcoded <code>sluice_pub</code> &mdash; and every cold start ran:</p>
+${pre(`ALTER PUBLICATION sluice_pub SET TABLE sales.orders, sales.customers;
+-- SET TABLE does not add to the member set. It REPLACES it, atomically.`)}
+<p>So cold-starting wave B (<code>billing.*</code>) against the same source as running wave A (<code>sales.*</code>) rewrote the shared filter to billing-only. From that instant, wave A's slot kept advancing &mdash; WAL still consumed, <code>confirmed_flush_lsn</code> still moving, because <code>pgoutput</code> reads and discards out-of-scope changes &mdash; while emitting nothing for wave A's tables. From Postgres's side, &ldquo;no in-scope changes happened&rdquo; and &ldquo;your tables were yanked from the publication&rdquo; are <em>indistinguishable</em>: same slot state, same advancing LSNs, same green health. And restarting the starved stream repaired nothing, because a warm resume never re-asserts scope &mdash; the publication is only written at cold start.</p>
+<p>That is what makes this the healthiest-looking way to lose rows: every monitoring surface pointed at the cursor reports a current, advancing, active stream. The filter died, and health checks are structurally blind to filter clobbers.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Two changes (v0.99.287). The load-bearing one: a cold start that would <em>remove</em> tables from a publication another <strong>active</strong> <code>sluice\\_%</code> slot is reading refuses with <code>SLUICE-E-CDC-PUBLICATION-SCOPE-CONFLICT</code> &mdash; naming the at-risk tables and the conflicting slot &mdash; <em>before</em> mutating anything, so a refused attempt leaves every running stream untouched. Widening and equal-scope rescopes remove nothing and never trip it. Second, <code>sync start</code> gained <code>--publication-name</code>, the sibling of <code>--slot-name</code>, which is how you legitimately run several differently-scoped streams off one source: one publication per wave, nothing shared, nothing to clobber. One honest caveat: the guard's conflict signal is slot <em>activity</em>, a proxy &mdash; a conflicting stream whose slot is momentarily inactive (stopped mid-migration) is not detected; per-stream publications are the airtight shape.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Any <em>shared, mutable, source-side filter object</em> is a multi-writer hazard, and health checks pointed at the cursor cannot see it break. Either guard the filter object itself &mdash; refuse scope-narrowing writes while another reader exists &mdash; or stop sharing it. And the ceiling on sharing is lower than it looks: PG 15+ hangs row filters and column lists off publication <em>membership</em>, so two streams with an <em>identical</em> table set can still clobber each other's per-table attributes. A shared publication can only ever express one stream's intent per table.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice ADR-0175 (publication scope isolation) and the two-concurrent-streamers integration gate <code>publication_scope_conflict_pg_integration_test.go</code> &mdash; verified non-vacuous by failing at the starvation assertion against disabled fix code; shipped v0.99.287.</li>
+  <li>PostgreSQL documentation &mdash; <code>ALTER PUBLICATION &hellip; SET TABLE</code> (member-set replace), <code>pg_publication_rel</code>, and logical replication slots (position by LSN, no publication binding).</li>
+  <li>Related field notes &mdash; <a href="/field-notes/alert-cleared-when-slot-died/">the alert that cleared when the slot died</a> and <a href="/field-notes/active-healthy-not-liveness/">&ldquo;active&rdquo; is not liveness</a> (the opposite failures: the slot itself is the problem &mdash; here the slot is fine and the filter died).</li>
+</ul>
+`,
+  })
+);
+
+// nav-label: pgoutput carries no DEFAULTs
+write(
+  "field-notes/pgoutput-carries-no-defaults",
+  page({
+    slug: "field-notes/pgoutput-carries-no-defaults",
+    title: "pgoutput won't tell you a column's DEFAULT — and the obvious fix drops every default on your target",
+    subtitle: "pgoutput's Relation message carries each column's name, type OID, typmod, and key flag. No DEFAULT. No NOT NULL. So the obvious fix for 'a source SET DEFAULT is silently skipped' — add DEFAULT to the schema-diff classifier — was implemented, found to be simultaneously dangerous and ineffective, and reverted: it would emit DROP DEFAULT across the whole target at the first seed→CDC boundary of every sync, while a real mid-stream SET DEFAULT still went undetected. A shape classifier can only classify what the change stream actually carries.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; closing sluice's DDL-forwarding gap audit against the Supabase <code>etl</code> announcement's change list. The classifier extension was implemented, ground-truthed, and <em>reverted the same day</em>; the design of record is ADR-0179. To be plain about the current state: sluice does <strong>not</strong> forward a source <code>ALTER COLUMN &hellip; SET DEFAULT</code> mid-sync &mdash; <code>sluice schema diff</code> detects the drift, and the divergence materialises at cutover, when the application's DEFAULT-omitting INSERTs start landing on the target.</p>
+
+<h2 id="the-message">What the Relation message actually carries</h2>
+<p>Logical replication doesn't send your schema; it sends <code>pgoutput</code>'s projection of it. Per column, a <code>Relation</code> message carries exactly: name, type OID, type modifier, and whether the column is part of the replica identity key. That is the whole list. No default expression, no <code>NOT NULL</code> flag, no identity/generated markers. sluice's CDC-side schema for a Postgres source is built from this projection, so every column's default is &mdash; structurally, always &mdash; empty on the wire side.</p>
+
+<h2 id="the-trap">Why the obvious fix is both dangerous and ineffective</h2>
+<p>The gap looks like a one-line classifier fix: the schema-shape differ compared only type and nullability, so teach it to compare <code>Default</code> too. Implemented, it fails in both directions at once:</p>
+${pre(`seed -> CDC boundary:   pre  = real catalog read   (defaults POPULATED)
+                        post = pgoutput projection  (defaults nil)
+  => EVERY column-bearing table classifies as a "default change"
+  => the applier emits DROP DEFAULT across the whole target
+     on the first boundary of every sync.
+
+CDC -> CDC boundary:    pre = nil, post = nil
+  => a real SET DEFAULT still classifies as "no change".`)}
+<p>Dangerous on the boundary every sync crosses once, ineffective on the boundary the feature exists for. The corroborating evidence was already in-tree: sluice's schema-forward path keeps a <em>source catalog prober</em> for defaults precisely because the CDC-side schema never has them, and the Postgres writer force-sets <code>Nullable=true</code> on forwarded ADD COLUMN for the sibling omission (<code>attnotnull</code> isn't on the wire either). MySQL is the same story from the other side: the binlog table map carries types, not defaults.</p>
+
+<h2 id="the-design">The design that actually works pushes the catalog into the WAL</h2>
+<p>Supabase's <code>etl</code> hit the same wall, and their machinery is the correct shape: a <code>ddl_command_end</code> event trigger reads <code>pg_attribute &#8904; pg_attrdef</code>, builds a JSONB catalog snapshot, and emits it via <code>pg_logical_emit_message(true, &hellip;)</code> &mdash; the leading <code>true</code> (transactional) being the load-bearing bit, because it makes the schema fact arrive in the stream <em>exactly where the DDL happened</em>, ordered against the Relation and DML messages around it. Their code even avoids PL/pgSQL exception handlers in that function specifically to preserve that ordering. The tempting cheap alternative &mdash; probe the catalog from the client when a schema change is suspected &mdash; is rejected on ordering grounds: a probe result has no <em>position</em> in the change stream; by the time it returns, the source may have moved on, and you cannot say which changes it applies to. The reason sluice records this design rather than shipping it: <code>CREATE EVENT TRIGGER</code> requires superuser, which a wide managed-provider matrix doesn't grant &mdash; so it can only ever be an opt-in capability, never the default path.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A shape classifier can only classify what the change stream actually carries. Before extending a DDL-forwarding catalog with a new column attribute, confirm the attribute survives into the stream-projected schema on <em>every</em> source that would use it &mdash; and if it doesn't, know that the fix is not client-side cleverness but getting the fact into the stream, in order, where it happened.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice ADR-0179 (PG DDL catalog capture via transactional logical messages) &mdash; includes the reverted-implementation record and the rejected client-probe analysis.</li>
+  <li>PostgreSQL documentation &mdash; logical streaming replication protocol (<code>Relation</code> message fields), <code>pg_logical_emit_message</code>, <code>CREATE EVENT TRIGGER</code> (superuser).</li>
+  <li>supabase/etl (read at commit <code>6d21f3f</code>) &mdash; the <code>ddl_command_end</code> trigger migration emitting transactional catalog snapshots, credited as the known-correct design.</li>
+</ul>
+`,
+  })
+);
+
+// nav-label: The retry loop's reconnect blind spot
+write(
+  "field-notes/retry-loops-reconnect-blind-spot",
+  page({
+    slug: "field-notes/retry-loops-reconnect-blind-spot",
+    title: "Your retry loop's blind spot is its own reconnect — and the errors there arrive with their causes stripped",
+    subtitle: "Three multi-day soaks against real managed infrastructure each died on an error the retry machinery was built for but couldn't recognize. The machinery existed and worked; the gap was classification coverage, twice over: a gRPC transport drop reported under the one status code a careful policy refuses to blanket-retry, and a reconnect failure inside the retry loop itself, where the driver flattens 'the peer dropped your pooled connection' into bare text with the structured cause gone.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; sluice's multi-day soak fleet (PlanetScale MySQL, PlanetScale Postgres, Cloudflare D1), 2026-07. Every death was LOUD &mdash; clean exit, named error, durable resume position, zero data loss; each restart warm-resumed and drained its backlog in minutes. Fixed across sluice v0.99.286 and v0.99.288.</p>
+
+<h2 id="the-deaths">Three deaths, one class</h2>
+<p>The soaks died hours apart on routine transients: a VStream read returning <code>rpc error: code = Internal desc = server closed the stream without sending trailers</code> after ~17 healthy hours; a D1 poll hitting <code>net/http: TLS handshake timeout</code> and, separately, a plain HTTP 500; and &mdash; the sharpest one &mdash; a ~30-second network blip where the stream error <em>was</em> correctly classified, the retry engaged&hellip; and the reopen died terminal at <code>open target change applier: mysql: ping: invalid connection</code>. In every case the bounded-retry machinery already existed. It just couldn't <em>see</em> these errors: the classifier is interface-driven, and these shapes arrived without the wrapper.</p>
+
+<h2 id="two-gaps">The two coverage gaps</h2>
+<p><strong>From the stream:</strong> grpc-go reports a routine long-lived stream drop under <code>codes.Internal</code> &mdash; exactly the status a careful retry policy refuses to blanket-retry, because a genuine server-authored <code>Internal</code> is a fault that must stay loud. The fix has to discriminate the <em>transport-authored</em> wordings (server-closed-without-trailers, unexpected EOF, RST_STREAM) from a server-authored <code>Internal</code> by message text, because the code alone cannot tell you.</p>
+<p><strong>From the reconnect:</strong> every retry attempt first re-establishes its connections &mdash; and a failure <em>there</em> is a site most classifiers never covered, in a wire format that has lost its cause. go-sql-driver reduces &ldquo;the peer dropped your pooled connection&rdquo; to the bare text <code>invalid connection</code>; pgx v5 flattens multi-host connect errors so even <code>errors.Is(err, syscall.ECONNREFUSED)</code> misses a refused dial. At the driver boundary you often have nothing but text. And the class keeps paying out: the very next post-release regression cycle caught two more sibling wordings (the Windows <code>connectex: &hellip; actively refused</code> dial text, and pgx's <code>conn closed</code> from a severed pool connection), fixed on main within hours.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>Classify positively and narrowly, at the site that still holds the signal. Structured checks first (sentinels, <code>net.Error</code> timeouts, syscall errnos, pgconn's <code>SafeToRetry</code> contract), then a pinned text-fallback list for the shapes that reach you as prose &mdash; and the list is a change-detector test, so widening the retry surface fails a pin instead of slipping in. Everything unmatched stays terminal: wrong DSN, bad credentials, unknown host, and every unknown shape. The bounded budget is the loud-failure floor either way &mdash; a target that never comes back exhausts it and fails with the cause named.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A retry loop is only as good as its classifier's coverage, and the coverage has more sites than the happy read path: the reconnect inside the retry loop is itself a failure site. Audit where errors can <em>arrive</em>, not just where they usually do &mdash; and expect the driver boundary to hand you text with the structure stripped, so classify by positive match with a pinned shape set and let the budget, not the classifier, be your guarantee against looping forever.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice v0.99.286 and v0.99.288 CHANGELOG entries + the shared trigger-CDC transient classifier and the connect-phase marker/shape-matcher (<code>internal/engines/internal/triggercdc/transient.go</code>, <code>internal/pipeline/streamer_connect_retry.go</code>), each with both-ways shape pins.</li>
+  <li>grpc-go transport error wordings under <code>codes.Internal</code>; go-sql-driver's <code>ErrInvalidConn</code>; pgx v5 <code>pgconn.SafeToRetry</code>.</li>
+  <li>Related field note &mdash; <a href="/field-notes/heartbeat-aged-seven-hours/">the heartbeat that aged seven hours</a> (what the soak fleet is for).</li>
+</ul>
+`,
+  })
+);
+
+// nav-label: One cancel, three different errors
+write(
+  "field-notes/one-cancel-three-errors",
+  page({
+    slug: "field-notes/one-cancel-three-errors",
+    title: "One cancel, three different errors — database/sql's abort identity depends on where the cancel lands",
+    subtitle: "Cancel a context mid-way through a database/sql loop and the error you get back is chosen by scheduling: 'sql: statement is closed' when the pool reaps the prepared statement out from under you, 'context canceled' when the exec observes it directly, or a driver-specific message on a Commit/BeginTx/Prepare. All three mean 'we were cancelled' — but errors.Is(err, context.Canceled), or a retry classifier, sees three different identities. Normalize at the single return boundary, not per call site.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; sluice's Cloudflare D1 <code>--stage-local</code> staging path, surfacing the way these always do: a release-tag CI run went red on a build byte-identical to one that had passed the same <code>-race</code> job two hours earlier. Fixed in sluice v0.99.288 (present, latent, since the staging path landed in v0.99.167); never a safety issue &mdash; the stage always aborted correctly, only the error's <em>identity</em> was nondeterministic.</p>
+
+<h2 id="the-lottery">The error-identity lottery</h2>
+<p>The staging loop makes five kinds of DB calls &mdash; <code>BeginTx</code>, <code>Prepare</code>, exec, <code>Commit</code>, and the pool's own statement management &mdash; and a context cancel can land on any of them. Each surfaces the abort differently:</p>
+${pre(`cancel lands on...            error you get back
+the exec itself               context canceled
+the pool reaping the stmt     sql: statement is closed
+Commit / BeginTx / Prepare    driver-specific message`)}
+<p>All three mean the same thing. But the test asserted <code>errors.Is(err, context.Canceled)</code> &mdash; and a production retry classifier makes exactly the same kind of judgment &mdash; so which identity came back was decided by the scheduler. Under the CI <code>-race</code> scheduler it flaked; on a developer machine it &ldquo;always&rdquo; passed.</p>
+
+<h2 id="the-fix">Placement, not cleverness</h2>
+<p>The first instinct &mdash; wrap the cancel at the failing call site &mdash; covers one of five sites and leaves the class open. The fix is a named-return <code>defer</code> at the function's <em>single return boundary</em>: if the context is done and the outgoing error chain doesn't already carry it, wrap the error with <code>ctx.Err()</code> &mdash; preserving the driver detail underneath. Done there, a sixth DB call added to the loop next year cannot reintroduce the nondeterminism; done per-site, it can. Stress-verified 50/50 on the previously flaky test.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p><code>database/sql</code> under cancellation is an error-identity lottery across its call sites, and any <code>errors.Is</code> on a cancellation identity &mdash; in a test or in a retry classifier &mdash; is a flake until someone guarantees that identity. Guarantee it where the guarantee can't rot: normalize the outgoing error at the return boundary, wrapping rather than replacing so the underlying cause survives for the log line.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice v0.99.288 CHANGELOG (the D1 cancelled-stage fix) and the 50/50 stress verification; the flake record from the v0.99.287 tag CI.</li>
+  <li>Go <code>database/sql</code> &mdash; statement lifecycle under context cancellation; <code>driver.ErrBadConn</code> semantics.</li>
+  <li>Related field notes &mdash; <a href="/field-notes/json-cursor-teleport/">the JSON cursor that teleported</a> and <a href="/field-notes/int64-json-boundary/">int64 at the JSON boundary</a> (the same family: Go-boundary behaviors that only bite under specific runtime conditions).</li>
 </ul>
 `,
   })
