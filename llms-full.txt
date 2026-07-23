@@ -5833,6 +5833,22 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
+- 2026-07-23Postgres Quoted CREATE PUBLICATION preserves case; START_REPLICATION downcases it — Quoted DDL preserves case &mdash; but the name you pass to START_REPLICATION's publication_names option is parsed as an unquoted identifier list and folded to lowercase, so pgoutput looks up sluice_mypub, which doesn't exist. Nothing checks at stream start: the slot creates, the whole bulk copy runs green, the stream stays healthy while the source is idle &mdash; and the 42704 fires only inside the first change callback, arbitrarily delayed, or never on a quiet source. Validate replication-object names to ^[a-z0-9_]+$ (&le;63 bytes) before creating them.
+
+- 2026-07-23Cross-cutting found=false is two different facts — A sync retry loop chose &ldquo;force a clean re-establishment&rdquo; vs &ldquo;warm resume&rdquo; through a (found bool, err error) read whose error it discarded &mdash; and both engines return found=false when the read fails, so &ldquo;the target is down and I could not read the anchor row&rdquo; was indistinguishable from &ldquo;no anchor row exists,&rdquo; and the destructive branch latched. The kicker: a pure reliability improvement made it reachable, by keeping the process alive through the outage window a terminal exit had always masked.
+
+- 2026-07-23Postgres The first durable flag — Pushing a sync predicate into a Postgres publication row filter quietly changes the flag's lifetime: --where stops being per-process configuration and becomes durable source-side catalog state that outlives every restart. Warm resume deliberately never re-ensures the publication, so a widened, changed, or removed --where would leave the server filtering on the stale predicate &mdash; unobservable client-side by construction, since no client belt can see rows the server never sends. The honest options for a durable filter: re-assert idempotently, or record-and-compare.
+
+- 2026-07-23Postgres Postgres NUMERIC stores NaN — and NaN sorts above Infinity — SQL comparison is three-valued, so mapping a NaN operand to UNKNOWN feels principled &mdash; but for sorting and range comparisons Postgres defines a total order in which NaN is greater than every other value. The surprise stacks: NUMERIC, the exact type, also stores NaN (plus &plusmn;Infinity in unconstrained columns since PG 14) &mdash; and NaN sorts above Infinity. A client evaluator that mapped non-finite values to UNKNOWN→drop destroyed changes the server had faithfully delivered, under a benign-looking DEBUG log.
+
+- 2026-07-23Postgres Postgres rounds your fractional seconds through a C double — PostgreSQL parses a timestamp's fractional seconds as rint(strtod(fraction) * 1000000) &mdash; the digit string goes through an IEEE-754 double before rounding, so the result is not exact decimal round-half-even: .0001255 becomes 125.4999&hellip; &micro;s in the double and rounds to .000125, where exact half-even on the digits gives .000126. A textbook half-even reimplementation agreed on every hand-picked boundary value and silently diverged on ~0.1% of 7-digit fractions &mdash; hand-picked boundaries cannot gate a rounding mode.
+
+- 2026-07-23Cross-cutting Error text is data, error codes are contract — A retry classifier that text-scans the whole error string for transient wording can be flipped by the data: server error messages routinely echo row values, key values, and table names. The worst observed chain: a duplicate-key failure on a table named reparent_history matched reparent → retried → the tolerate-on-retry path swallowed the second 1062 as &ldquo;the rows already landed&rdquo; &mdash; the whole batch silently absent while the migration reported success. When a structured driver error is present, the code must decide alone.
+
+- 2026-07-23Cross-cutting One literal, three verdicts — Hand three engines WHERE d = '2024-01-01 08:30' where d is a DATE column and you get three comparison semantics: Postgres casts the literal down to the column's type (time-of-day silently discarded &mdash; the row matches), MySQL promotes the column up to datetime and compares the full instant (no match), and MariaDB promotes like MySQL but truncates extra fractional digits where MySQL rounds half-up. One of the three-way splits is between MySQL and its own fork &mdash; and any system that evaluates one predicate in two places disagrees with itself exactly on the boundary.
+
+- 2026-07-23Postgres REPLICA IDENTITY FULL completes the before-image, not the after-image — REPLICA IDENTITY FULL is sold as &ldquo;the whole row in every change&rdquo; &mdash; and it delivers that for the OLD tuple only. When an UPDATE changes a different column of a row whose large column is TOASTed out-of-line, pgoutput sends that column in the NEW tuple as unchanged-toast-datum, so the decoded after-image simply omits it while the before-image arrives complete. A --where router evaluating the partial after-image classified an in-scope UPDATE as a move-OUT and DELETEd a row the source still holds &mdash; exit 0, sync status green.
+
 - 2026-07-23Postgres Disconnect is not release — and 55006 means two opposite things — When a logical-replication client disconnects, Postgres does not synchronously mark the slot inactive &mdash; the walsender releases it asynchronously: near-instant usually, whole seconds under a contended CI scheduler, bounded in the worst case only by wal_sender_timeout (default 60s). Anything that runs at &ldquo;the client is gone&rdquo; races that window and hits SQLSTATE 55006 &mdash; on both lifecycle sides, START_REPLICATION and pg_drop_replication_slot. The sharp edge: 55006 means either &ldquo;prior owner not yet reaped&rdquo; (must retry) or &ldquo;genuinely concurrent second writer&rdquo; (must fail loudly), and the error gives you nothing to tell them apart. The clean separator is a bounded retry.
 
 - 2026-07-23Postgres The slot is the registry you already have — When you need &ldquo;is another stream still claiming a scope on this Postgres source?&rdquo;, the airtight-looking answer is a purpose-built coordination table &mdash; and it fails for a reason that generalizes: a source-side registry table is CREATE TABLE-permission-gated on exactly the restricted managed services where the guard matters most, so the guarantee silently weakens where it is most needed. The replication slot is the registry you already have: durable, source-side, per-stream, unconditionally present, and held for precisely as long as a stream intends to resume. Keying the guard on slot existence instead of activity closed the &ldquo;momentarily inactive&rdquo; window &mdash; at an honest, designed-in cost.
@@ -10764,6 +10780,8 @@ That is what makes this the healthiest-looking way to lose rows: every monitorin
 
 Two changes (v0.99.287). The load-bearing one: a cold start that would remove tables from a publication another active sluice\_% slot is reading refuses with SLUICE-E-CDC-PUBLICATION-SCOPE-CONFLICT &mdash; naming the at-risk tables and the conflicting slot &mdash; before mutating anything, so a refused attempt leaves every running stream untouched. Widening and equal-scope rescopes remove nothing and never trip it. Second, sync start gained --publication-name, the sibling of --slot-name, which is how you legitimately run several differently-scoped streams off one source: one publication per wave, nothing shared, nothing to clobber. (Update, v0.99.289: as first shipped the guard's conflict signal was slot activity &mdash; a proxy that missed a conflicting stream whose slot was momentarily inactive, e.g. stopped mid-migration. The guard now keys on slot existence: a slot, active or not, is the durable claim that a stream holds a scope and intends to resume, so that window is closed. The deliberate cost: sequential different-scope runs against one source now refuse until the finished stream's slot is dropped &mdash; or each run uses its own publication, which remains the airtight shape.)
 
+Update, v0.99.291 &mdash; the guard arc is complete. One window remained after the existence guard: cold start ensures the publication before the stream's own replication slot exists, so two streams cold-starting simultaneously under one publication name could swap definitions right past it &mdash; neither had a slot yet for the guard to refuse against, and the loser silently streamed through the peer's row filter or member set forever. v0.99.291 closes it by re-verifying the publication after the snapshot open creates the slot, against the exact definition this stream ensured &mdash; a read-only transactional probe using PG's own pg_get_expr normalization as the judge &mdash; refusing with the same scope-conflict code before any data moves; the racer whose definition the catalog holds verifies clean, so at least one stream always proceeds. Three windows, three releases: the clobber itself (v0.99.287) → the inactive-slot window (v0.99.289, existence semantics &mdash; the slot is the registry you already have) → the concurrent-first-boot window (v0.99.291). The arc's moral: a guard on shared mutable state isn't done until the window where neither party is registered yet is closed too.
+
 ## The transferable lesson
 
 Any shared, mutable, source-side filter object is a multi-writer hazard, and health checks pointed at the cursor cannot see it break. Either guard the filter object itself &mdash; refuse scope-narrowing writes while another reader exists &mdash; or stop sharing it. And the ceiling on sharing is lower than it looks: PG 15+ hangs row filters and column lists off publication membership, so two streams with an identical table set can still clobber each other's per-table attributes. A shared publication can only ever express one stream's intent per table.
@@ -10838,6 +10856,8 @@ The soaks died hours apart on routine transients: a VStream read returning rpc e
 From the stream: grpc-go reports a routine long-lived stream drop under codes.Internal &mdash; exactly the status a careful retry policy refuses to blanket-retry, because a genuine server-authored Internal is a fault that must stay loud. The fix has to discriminate the transport-authored wordings (server-closed-without-trailers, unexpected EOF, RST_STREAM) from a server-authored Internal by message text, because the code alone cannot tell you.
 
 From the reconnect: every retry attempt first re-establishes its connections &mdash; and a failure there is a site most classifiers never covered, in a wire format that has lost its cause. go-sql-driver reduces &ldquo;the peer dropped your pooled connection&rdquo; to the bare text invalid connection; pgx v5 flattens multi-host connect errors so even errors.Is(err, syscall.ECONNREFUSED) misses a refused dial. At the driver boundary you often have nothing but text. And the class keeps paying out: the very next post-release regression cycle caught two more sibling wordings (the Windows connectex: &hellip; actively refused dial text, and pgx's conn closed from a severed pool connection &mdash; the latter now honoured via pgconn's own SafeToRetry contract, whose definition is exactly the property a retry classifier wants: the error is guaranteed to predate any byte reaching the server), shipped a release later in v0.99.289 along with the SQLSTATE-level transients (57P01&ndash;57P03, class 08) the trigger-CDC poll's transport classifier had deferred.
+
+Update &mdash; the ladder kept extending, twice. A third instance arrived within a day of the second (Bug 200, fixed v0.99.290): the retry stack's own APPLY path dials too. When a target restart severs the pool, the next apply's pool acquire (Postgres) or begin tx (MySQL) dials fresh into the refused window &mdash; and neither applier classifier had a dial-shape leg, so a mid-outage CDC apply exited terminally with zero retries, making the whole v0.99.288/289 connect-retry stack unreachable whenever writes were pending during the outage (the realistic case; the focus checks had passed only because they stopped the target with no writes in flight). Three instances on a ladder &mdash; the stream reopen, the connect phase, the apply path's own dial &mdash; give the thesis its short form: every seam that can dial is a classification site. Then a fourth instance (v0.99.291) proved the corollary. The mechanism this time was not a missing site but maintenance drift: the transient-shape vocabulary lived in four hand-mirrored lists (trigger-CDC poll, pipeline connect phase, both engine appliers' text legs), and within ONE release of Bug 199 they had already diverged &mdash; the Windows dial wordings never reached the trigger-CDC list, so a postgres-trigger-source sync on Windows still exited terminally on a routine managed-PG restart, the exact class fixed twice one file over. The fix collapsed all four sites onto one single-homed matcher (internal/nettransient) with per-site corpus-parity change-detectors, so a one-sided addition or a site that stops delegating fails CI. Corollary: if the sites can't share one classifier they WILL drift &mdash; single-home the list, and parity-gate every consumer against it.
 
 ## What sluice does about it
 
@@ -10964,3 +10984,379 @@ Audit every code path that runs at &ldquo;the client is gone&rdquo; &mdash; rest
 - PostgreSQL documentation &mdash; wal_sender_timeout; SQLSTATE class 55 (object not in prerequisite state).
 
 - Related field notes &mdash; &ldquo;active&rdquo; is not liveness and the slot is the registry you already have (the same catalog surface, opposite direction: there existence is the signal; here activity is the ambiguity).
+
+
+===============================================================
+# REPLICA IDENTITY FULL completes the before-image, not the after-image
+(https://sluicesync.com/field-notes/replica-identity-full-toast-after-image/)
+
+REPLICA IDENTITY FULL is sold as 'the whole row in every change' — and it delivers that for the OLD tuple only. Whenever an UPDATE changes a different column of a row whose large column is TOASTed out-of-line, pgoutput sends that column in the NEW tuple as unchanged-toast-datum, so the decoded after-image simply omits it while the before-image arrives complete. sluice's --where router evaluated the predicate over that partial after-image, classified an in-scope UPDATE as a move-OUT, and DELETEd a row the source still holds — exit 0, sync status green.
+
+Observed &mdash; the 2026-07-23 blind audit of sluice's filtered PG sync, reproduced live on PG 16.14 with a 9.6KB STORAGE EXTERNAL column before fixing. Affected sluice v0.99.276&ndash;v0.99.289 (every release with filtered PG sync); fixed in v0.99.290. Operator guidance at the end of this note.
+
+## The asymmetric promise
+
+REPLICA IDENTITY FULL reads like a completeness guarantee: log the whole row, not just the key. And for the old tuple it is exactly that &mdash; every UPDATE and DELETE arrives with a complete before-image, which is why filtered replication turns it on in the first place (the row-move decision needs the predicate column's OLD value). The trap is that the guarantee is one-sided. Postgres's TOAST machinery stores any column value that stays large after compression (≳2KB) out-of-line, and pgoutput carries a deliberate optimization for it: when an UPDATE does not change a TOASTed column, the NEW tuple does not carry its value &mdash; the column arrives as the one-byte marker 'u', unchanged-toast-datum. REPLICA IDENTITY FULL does not disable this. The before-image is complete; the after-image is complete except for the columns that didn't change and happened to be big.
+
+    UPDATE profiles SET last_login = now() WHERE id = 42;
+    -- profiles.bio is 9.6KB, TOASTed out-of-line, UNCHANGED by this statement
+
+    pgoutput UPDATE message (REPLICA IDENTITY FULL):
+      OLD tuple:  id=42 | last_login=... | bio=<the complete 9.6KB value>
+      NEW tuple:  id=42 | last_login=... | bio='u'   <- unchanged-toast-datum
+
+A decoder that skips 'u' datums &mdash; the natural reading, and what sluice's did &mdash; produces an after-image with the column simply absent.
+
+## How an UPDATE became a DELETE
+
+sluice's filtered sync (sync --where "bio LIKE '%…%'", or any predicate referencing the TOASTed column) classifies every UPDATE by evaluating the predicate over both images: old-in/new-in is an in-scope UPDATE, old-in/new-out is a move-OUT that must become a target DELETE. SQL's three-valued logic did the rest: the predicate read the absent column as NULL, evaluated UNKNOWN, and UNKNOWN routes as false &mdash; so an UPDATE to a sibling column of an in-scope row classified as old-in/new-out. sluice emitted a DELETE for a row the source still holds. Silently: the stream stays green, sync status stays current, exit 0. The trigger is as ordinary as it gets &mdash; touching any other column of a row whose filtered column is big. And the failure is bitter under the row-filter push-down specifically: the server was delivering the UPDATE correctly, and the client's own equivalence belt destroyed it.
+
+## The backfill is exact, not approximate
+
+What makes this one satisfying to fix is that the marker's semantics close the hole completely. 'u' is emitted only when the column is unchanged &mdash; that is PG's contract &mdash; so for every omitted column, old == new is guaranteed, and under REPLICA IDENTITY FULL the old value is right there in the same message. sluice's reader now backfills each omitted after-image column from the complete before-image on filtered tables: zero approximation, no extra round-trip, no heuristic. The applier SETs the backfilled value to itself, which is value-neutral. And because the reader is not the only thing that will ever produce a partial after-image, the router gained a belt: a filtered UPDATE whose after-image is still missing a predicate column stops the stream loudly with SLUICE-E-WHERE-CDC-AFTER-IMAGE (the sibling of the existing before-image completeness refusal) instead of guessing.
+
+## Every after-image consumer has this bug until it proves otherwise
+
+Nothing in this mechanism is specific to filtered replication. Any consumer that acts on the NEW tuple &mdash; an audit or outbox pipeline recording &ldquo;the row is now X,&rdquo; cache invalidation that rebuilds an entry from the after-image, a CDC-fed search index re-indexing the document, a downstream materialized view &mdash; receives an after-image that silently omits large unchanged columns, on every UPDATE that touches their siblings. The mature consumers all carry a scar from it: Debezium, for one, documents an explicit unavailable-value placeholder it stamps into the after-image for exactly these columns, pushing the problem to the reader rather than pretending the column is NULL. Whether you backfill (possible only when the before-image is complete), placeholder, or refuse, the invariant is the same: the after-image is not complete unless you make it complete.
+
+## If you ran filtered PG sync on an affected release
+
+v0.99.276&ndash;v0.99.289, with a --where predicate referencing a large text/varchar/JSON column (values big enough to TOAST out-of-line, roughly ≳2KB after compression): upgrade, then re-verify the filtered tables (sluice verify) &mdash; any UPDATE to a different column of such a row may have deleted that row from the target. If verification finds missing rows, --restart-from-scratch or a targeted backfill restores them. Predicates on small always-inline columns (ints, short strings, dates) were not exposed.
+
+## The transferable lesson
+
+Read a completeness guarantee to its exact scope: REPLICA IDENTITY FULL completes the before-image, and no setting completes the after-image &mdash; that is a property of the wire format, not of your configuration. If your logic evaluates anything over a NEW tuple, enumerate what the stream can omit from it and make the omission either impossible (backfill from a source that carries the truth) or loud (a completeness refusal). Three-valued logic will otherwise convert &ldquo;I don't know this column&rdquo; into whichever branch your router treats as false &mdash; and in a filtered pipeline, that branch deletes data.
+
+## Primary sources
+
+- sluice v0.99.290 (the CRITICAL fix + the operator re-verify guidance): the reader-side backfill (backfillUnchangedToast in the Postgres CDC reader &mdash; exact by the unchanged &rArr; old == new contract), the SLUICE-E-WHERE-CDC-AFTER-IMAGE router belt, and the end-to-end pin where_cdc_toast_pg_integration_test.go (row survives, sibling update applies, TOAST value byte-identical); reproduced live pre-fix on PG 16.14.
+
+- PostgreSQL documentation &mdash; logical streaming replication protocol (TupleData, the 'u' unchanged-toast-datum byte), TOAST storage, ALTER TABLE &hellip; REPLICA IDENTITY FULL.
+
+- Debezium documentation &mdash; the unavailable-value placeholder for unchanged TOASTed columns (the same class, handled by sentinel).
+
+- Related field notes &mdash; the optimization that trimmed away the column a later feature needed (the before-image sibling of this failure) and the platform default that eats every UPDATE / the row image you can't preflight (MySQL's spellings of &ldquo;the image is thinner than you assumed&rdquo;).
+
+
+===============================================================
+# One literal, three verdicts
+(https://sluicesync.com/field-notes/one-literal-three-verdicts/)
+
+Hand Postgres, MySQL, and MariaDB the same WHERE d = '2024-01-01 08:30' on a DATE column and you get three different comparison semantics: PG casts the literal down to the column's type (time-of-day discarded — the row matches), MySQL promotes the column up to datetime (no match), and MariaDB promotes like MySQL but truncates extra fractional digits where MySQL rounds half-up. Any system that evaluates one predicate in two places disagrees with itself exactly on these boundaries — so normalize each literal under the source engine's own lens, and refuse when you don't have one.
+
+Observed &mdash; ground-truthed on real servers (PostgreSQL 16.14, MySQL 8.0.46, MariaDB 11.8.8) on 2026-07-23, building the temporal leg of sluice's filtered-sync predicate evaluator. The two-evaluator defect it explains affected sluice v0.99.276&ndash;v0.99.290 (every filtered-sync release); fixed in v0.99.291.
+
+## Three engines, three rules
+
+The question sounds too basic to have three answers: a temporal literal is finer-grained than the column it's compared against &mdash; a time-of-day against a DATE, or more fractional-second digits than the engine's microsecond resolution. Every engine has to reconcile the mismatch somehow, and the three of them picked three different reconciliations:
+
+    WHERE d = '2024-01-01 08:30'      -- d is a DATE column; the row holds 2024-01-01
+
+    Postgres 16.14   casts the LITERAL down to the column's type:
+                     d = '2024-01-01'::date            -> row MATCHES
+    MySQL 8.0.46     promotes the COLUMN up to datetime, compares the full instant
+                                                       -> NO match
+    MariaDB 11.8.8   promotes like MySQL -- but splits from it one level down:
+
+      extra fractional digits (beyond the engine's 6):
+      MySQL    '.1234565' -> .123457    round HALF-UP on the exact digits, with carry
+      MariaDB  '.1234565' -> .123456    TRUNCATE, no carry
+      Postgres '.1234565' -> .123456    its own third rule -- rounding through a C double
+
+Note where the splits fall. Postgres vs the MySQL family is a direction disagreement &mdash; coerce the literal down vs promote the column up &mdash; visible on any date-vs-datetime comparison. But MySQL vs MariaDB is a fork disagreeing with itself, one level down, on rounding: half-up with carry against truncation without. And Postgres's rounding isn't exact decimal either &mdash; the fraction goes through an IEEE-754 double before rint, a rule subtle enough that it gets its own note. A bonus fact the real-server matrix pinned: comparison precision is the type's microsecond resolution, not the declared column precision &mdash; a timestamp(0) column still compares literals at full &micro;s (the typmod rounds what gets stored, not what gets compared), verified with rows read back from the servers themselves.
+
+## Postgres coerces at DDL time too &mdash; and stores the result
+
+The Postgres half goes one step further than query evaluation. Put the same finer-than-column literal into a publication row filter and PG doesn't refuse it &mdash; it coerces the literal at CREATE PUBLICATION time and stores the truncated predicate in the catalog:
+
+    CREATE PUBLICATION p FOR TABLE t WHERE (d < '2026-01-15 12:00');
+    -- accepted, no warning. Now read the definition back:
+    SELECT pg_get_expr(prqual, prrelid) FROM pg_publication_rel;
+    --   (d < '2026-01-15'::date)          <- the time-of-day is gone, durably
+
+From that point the stored prqual &mdash; not your input text &mdash; is the contract: it's what the server evaluates for every streamed change, forever. The subtlety, and the reason this isn't simply &ldquo;PG loses data&rdquo;: the snapshot SELECT coerces the same literal identically, so a system whose filtering is entirely server-side gets a perfectly self-consistent PG-semantics replica. The defect isn't in the engine. It appears the moment a second evaluator &mdash; an equivalence belt, a verify leg, a client-side CDC filter &mdash; runs the same predicate at a different precision than the server it's mirroring. Read the definition back after DDL; the catalog's rendering is the truth.
+
+## Two evaluators, one predicate, silent disagreement
+
+That's exactly the position filtered CDC is in: no source delivers a filtered change stream for free, so the --where predicate the snapshot leg pushed into the source's SQL gets re-evaluated client-side, per change event (the predicate you evaluate twice has to agree, or refuse). sluice's client evaluator compared temporal literals at full parsed precision &mdash; a fourth semantics no engine implements. On a PG source, --where "d = '2024-01-01 08:30'" snapshot-copied the row (PG truncated the literal; the row matches) and the client evaluator then judged every one of its subsequent changes out-of-scope and dropped them: a stale target row at exit 0, the same one-row-two-verdicts shape as the collation and PAD-SPACE splits before it, now on the temporal axis.
+
+## Normalize under the source's lens &mdash; and refuse without one
+
+The fix shape generalizes past temporals: the source engine names its coercion rule as a small declared semantics (ir.TemporalLiteralSemantics &mdash; cast-to-column for PG, promote-and-round-half-up for MySQL, promote-and-truncate for MariaDB, flavor-parameterized because a fork can split from its parent), and the engine-neutral evaluator normalizes each literal under that lens at compile time, carrying no per-engine reasoning of its own. The load-bearing discipline is the default: when no lens is available, sluice refuses the predicate outright rather than comparing at full precision &mdash; because full precision is not a neutral fallback, it's a fourth rule that provably disagrees with all three engines on the boundary. One honest residual: on Vitess sources the pushed filter runs on vtgate's evalengine, whose coercion of these shapes is unverified &mdash; so predicates that engage it route through the client-side fallback rather than the server push until a real cluster ground-truths it.
+
+## The transferable lesson
+
+&ldquo;Compare a date column to a datetime literal&rdquo; has no portable meaning: one engine changes the literal, two change the column, and the two that agree on direction disagree on rounding. If your system evaluates a user's predicate anywhere other than the source engine itself &mdash; a client-side filter, a verifier, a mirror of a server-stored predicate &mdash; the only correct implementations are the source's own rule, reproduced exactly and proven against the real server, or a loud refusal. There is no engine-neutral temporal comparison to fall back on, and hand-picked boundary values won't tell you when you've drifted &mdash; use the engine's implementation, not your model of it, and let a server-as-oracle matrix keep it honest.
+
+## Primary sources
+
+- sluice v0.99.291 (the source-faithful normalization + the no-lens refusal), ir.TemporalLiteralSemantics (internal/ir/temporal_literal.go &mdash; the three observed rules, documented with the per-engine boundary values), and the three-engine real-server matrix in internal/rowpredicate (server-as-oracle, RED-before-GREEN on live PG, incl. the typmod/fsp read-back pins).
+
+- The publication-DDL half: observed on PG 16.14 (CREATE PUBLICATION &hellip; WHERE (d < '2024-01-01 12:00') accepted, stored prqual (d < '2024-01-01'::date)); v0.99.290 first excluded these shapes from sluice's push-down envelope, v0.99.291's normalization re-admitted them.
+
+- PostgreSQL documentation &mdash; date/time input interpretation and CREATE PUBLICATION &hellip; WHERE; MySQL 8.0 and MariaDB documentation &mdash; date/datetime comparison and fractional-second handling.
+
+- Related field notes &mdash; Postgres rounds your fractional seconds through a C double (this arc's sharpest sub-plot), the predicate you evaluate twice, and you can't reimplement MySQL's =.
+
+
+===============================================================
+# Error text is data, error codes are contract
+(https://sluicesync.com/field-notes/error-text-is-data/)
+
+A retry classifier that text-scans the whole error string for transient wording (reparent, not serving, connection refused, disk full…) can be flipped by the data: server error messages routinely echo row values, key values, and table names. The worst observed chain: a duplicate-key failure on a table named reparent_history classified RETRIABLE, the byte-identical retry hit 1062 again, and a tolerate-on-retry path whose safety proof assumed a first-attempt 1062 stays terminal swallowed the whole batch — silently absent while the migration reported success.
+
+Observed &mdash; the 2026-07-23 blind audit of sluice's apply-path error classifiers, over-match confirmed by throwaway tests on both engines. The MySQL silent-skip chain affected sluice v0.99.92&ndash;v0.99.289; the text-fallback legs date to the v0.42.0 classifier. Fixed in v0.99.290. The servers behave correctly throughout &mdash; this defect class is entirely client-side classification.
+
+## The chain: a table name flips a rollback into a success
+
+Retry classifiers accumulate text patterns for good reasons. A Vitess reparent surfaces as prose; a managed-MySQL failover says &ldquo;not serving&rdquo;; drivers flatten dial failures into bare strings (the reconnect blind spot). So the classifier ends with a fallback leg that scans the error text for transient wording. The problem: a database error message is partly composed of your data. MySQL's duplicate-key error quotes the colliding key value and, through any wrapping layer that names its context, the table. Now walk the observed worst case:
+
+    INSERT batch -> Error 1062 (duplicate key) on table reparent_history
+       text scan finds "reparent"            -> classified RETRIABLE
+    retry the byte-identical batch -> 1062 again
+       tolerate-1062-on-retry: "the prior attempt committed but lost its
+       ack -- the rows already landed"       -> batch treated as done
+    reality: BOTH attempts rolled back      -> entire batch absent, exit 0
+
+Each link is individually reasonable. The text fallback exists for real reparents. The tolerate-on-retry wart is a genuinely sound idempotence argument &mdash; if a first-attempt 1062 always stays terminal, then a 1062 on the retry of a byte-identical batch proves the rows are durable. The mis-classification broke that premise from underneath: the first 1062 became a &ldquo;retry,&rdquo; the second became &ldquo;proof of durability,&rdquo; and a whole batch vanished behind a green migration. A table named reparent_history, a value like planned-reparent-2026-07, a key echoing connection refused from a log-line column &mdash; user-controlled data, choosing your retry semantics.
+
+## The Postgres sibling, bounded by accident
+
+Postgres contained the blast radius &mdash; not by design of anyone's classifier, but because PgError messages don't echo row data. What remained: a RAISEd trigger error (SQLSTATE P0001) quoting stored text like &ldquo;connection timed out&rdquo; classified retriable, burning the full bounded retry budget on a deterministic failure before failing loudly late. Annoying rather than lossy &mdash; but the same class, and &ldquo;the message can't carry data&rdquo; is a property you got, not one you chose. Any RAISE, any proc that interpolates a value, re-opens it.
+
+## The shield: a structured error means the code decides alone
+
+The fix is not better patterns &mdash; it's a precedence rule. When the error chain carries a structured driver error (*mysql.MySQLError, *pgconn.PgError &mdash; an errno or SQLSTATE the server authored), the server responded, and the code classifies alone: the text legs never run. Free-text scanning is reserved for errors that genuinely have no structure &mdash; transport failures the driver flattened to prose. The few legitimate code+message conjunctions survive as explicit AND-gates (Vitess tunnels reparent states through errno 1105, so 1105 plus vttablet framing stays retriable; similarly 1290 + read-only wording, and PG XX000 + read-only), which is the opposite shape of the bug: a gate narrows a code's verdict with its message; the defect was letting a message widen one. The pin is a cross-product matrix &mdash; every structurally-terminal code &times; every transient substring in the text legs must classify non-retriable, and every previously-pinned transient shape must stay retriable &mdash; so the next pattern added for a real transient can't silently re-open the class.
+
+And that last clause is the quiet irony: every wording added over the releases for a legitimate transient &mdash; reparent for real Vitess failovers, then the Bug 199/200 dial vocabulary (connectex, &ldquo;actively refused&rdquo;) &mdash; had been silently widening the surface a data value could match. Each individually correct fix made the over-match more likely, because the patterns and the shield weren't separated by layer.
+
+## The transferable lesson
+
+Applies to any retry layer over any database, and more broadly to anything that branches on rendered error strings: error text is data &mdash; partially user-controlled, echoing values and identifiers &mdash; and only error codes are contract. Structure the classifier in layers: structured code present &rArr; code decides alone; text heuristics only for unstructured transport errors; explicit, documented AND-gates for the rare code-plus-framing cases. Then pin the cross-product, because the failure mode isn't the classifier you write today &mdash; it's the eleventh pattern someone adds three releases from now. gocloud classifying &ldquo;301&rdquo; by substring is this same class one layer down: a status code fished out of a string that also carries random hex request IDs.
+
+## Primary sources
+
+- sluice v0.99.290 (the terminal-code shield in both engines' applier classifiers, internal/engines/mysql/applier_errors.go / internal/engines/postgres/applier_errors.go, with the cross-product pin matrix and the preserved AND-gates); the ADR-0108 tolerate-1062-on-retry wart and its restored safety premise (row_writer.go).
+
+- The 2026-07-23 audit's observed cells: 1062 + a reparent-bearing value → retriable, 1062 on key reparent_history.PRIMARY → retriable, 1062 + &ldquo;connection refused&rdquo; in the echoed value → retriable; PG P0001 quoting &ldquo;connection timed out&rdquo; → retriable &mdash; all pre-fix, all now pinned terminal.
+
+- MySQL error 1062 message format (echoes the colliding key value); PostgreSQL RAISE / SQLSTATE P0001.
+
+- Related field notes &mdash; gocloud classifies &ldquo;301&rdquo; by substring and your retry loop's blind spot is its own reconnect (why the text legs exist at all).
+
+
+===============================================================
+# Postgres rounds your fractional seconds through a C double
+(https://sluicesync.com/field-notes/postgres-fractional-seconds-double/)
+
+PostgreSQL parses a timestamp's fractional seconds as rint(strtod(fraction) * 1000000) — the digit string goes through an IEEE-754 double before rounding, so the result is not exact decimal round-half-even: .0001255 becomes 125.4999…µs in the double and rounds to .000125, where exact half-even on the digits gives .000126. A textbook half-even reimplementation agreed with PG on every hand-picked boundary value and silently diverged on ~0.1% of 7-digit fractions.
+
+Observed &mdash; building the Postgres arm of sluice's engine-faithful temporal-literal normalization (the parent arc), caught by a value-fidelity review before the tag: the wrong rounding never reached a published binary. The engine behavior itself is by design and decades-stable (datetime.c, unchanged through PG 16/17); observed live on PG 16.14, 2026-07-23.
+
+## One line of datetime.c
+
+When Postgres parses '2026-01-15 10:00:00.0001255', the fractional-second digits don't go through decimal arithmetic. The line is:
+
+    fsec = rint(strtod(fraction) * 1000000);     /* datetime.c */
+
+    '.0001255'  strtod -> the double nearest 0.0001255, which is a hair BELOW it
+                * 1e6  -> 125.4999...          rint -> 125    (exact half-even: 126)
+    '.0001265'  lands a hair ABOVE             rint -> 127    (exact half-even: 126)
+
+The rule is nominally round-half-even &mdash; rint under the default rounding mode &mdash; but the digit string becomes an IEEE-754 double first, and most decimal fractions aren't exactly representable in binary. An input that sits exactly on a decimal .5&micro;s boundary lands slightly above or slightly below it as a double, and then rint isn't rounding a half at all &mdash; it's rounding whichever side the binary landed on. Exact decimal half-even on the digits gives a different microsecond on roughly 0.1% of 7-digit fractions.
+
+## The bit-for-bit Go reproduction is two standard-library calls
+
+Reproducing this faithfully sounds like it needs C interop. It doesn't &mdash; it needs the same two semantics, which Go's standard library provides exactly:
+
+    f, _ := strconv.ParseFloat("0."+digits, 64)  // correctly-rounded parse == strtod
+    micros := int64(math.RoundToEven(f * 1e6))    // rint under the default mode
+
+strconv.ParseFloat is a correctly-rounded IEEE-754 parse &mdash; the same double strtod produces &mdash; and math.RoundToEven is rint's default behavior. Byte-equivalent, no cgo. The trap was the plausible alternative: sluice's first cut implemented textbook exact-decimal half-even on the digit string &mdash; the rule the documentation-level description of PG's behavior suggests &mdash; and it agreed with the server on every hand-picked boundary value in the test set before diverging in the wild of the full input space.
+
+## Hand-picked boundaries cannot gate a rounding mode
+
+That's the durable lesson, and it's about testing, not floating point. Boundary values you pick by hand are the ones your mental model says are hard &mdash; and both implementations shared the mental model, so they agreed exactly there. The divergence lives where the binary representation disagrees with the decimal one, which no human shortlists. The shipped gate is a randomized server-as-oracle sweep: several hundred random fractions per run, half of them forced onto exact-half decimal boundaries (the population where the two rules can split), each one's parse compared against a live Postgres, seed logged for replay. That pins the class &mdash; any future re-derivation of the rounding that isn't double-mediated fails within a run or two, instead of shipping green.
+
+## The transferable lesson
+
+When you reimplement an engine's parsing or rounding, reproduce its computation, not its documented rule &mdash; the two differ exactly at the boundaries you care about, and the computation is often easier to copy than the rule is to get right (here: two stdlib calls). And when the property under test is a rounding mode, a comparison function, or any dense mapping, hand-picked cases are structurally incapable of gating it: randomize the input, use the real system as the oracle, and log the seed.
+
+## Primary sources
+
+- sluice v0.99.291: pgFractionMicros (internal/rowpredicate/predicate.go &mdash; the datetime.c citation and the observed divergence pair) and the randomized real-PG fraction sweep in the temporal ground-truth matrix (half the samples forced onto exact-half boundaries, seed logged); the exact-decimal first cut was RED against this oracle on live PG 16.14 before the correction &mdash; both cuts landed inside the same release.
+
+- PostgreSQL source &mdash; src/backend/utils/adt/datetime.c, the rint(strtod &hellip; * 1000000) fractional-second parse.
+
+- Go standard library &mdash; strconv.ParseFloat (correctly-rounded), math.RoundToEven.
+
+- Related field note &mdash; one literal, three verdicts (the cross-engine arc this rule is the Postgres arm of).
+
+
+===============================================================
+# Postgres NUMERIC stores NaN — and NaN sorts above Infinity
+(https://sluicesync.com/field-notes/numeric-nan-sorts-above-infinity/)
+
+SQL comparison is three-valued, so mapping a NaN operand to UNKNOWN feels principled — but Postgres doesn't do that: for sorting and range comparisons it defines a total order in which NaN is greater than every other value. The surprise stacks twice more: NUMERIC, the exact type, also stores NaN (plus ±Infinity in unconstrained columns since PG 14), and NaN sorts above Infinity. A client evaluator that mapped non-finite values to UNKNOWN→drop destroyed changes the server had faithfully delivered.
+
+Observed &mdash; the 2026-07-23 blind audit of sluice's client-side --where evaluator (PG 16.14: 'NaN'::float8 > 0.1 is true), plus a value-fidelity review finding the worse sibling. Float leg affected sluice v0.99.282&ndash;v0.99.290, numeric leg v0.99.276&ndash;v0.99.290; both fixed in v0.99.291. The engine behavior is documented and by design.
+
+## The total order you didn't expect from an exact type
+
+Three stacked surprises. First: while ordinary comparisons involving SQL NULL are three-valued, Postgres's non-null NaN is not UNKNOWN-like at all &mdash; for sorting, indexing, and range comparisons PG defines a total order in which NaN is greater than every other value. Second: this isn't quarantined in the float types &mdash; NUMERIC, the type you reach for precisely because it's exact, stores NaN too, and since PG 14 stores &plusmn;Infinity in unconstrained columns. Third, the detail that makes the order memorable: NaN sorts above Infinity.
+
+    SELECT 'NaN'::float8 > 0.1;                     -- true   (observed, PG 16.14)
+    SELECT 'NaN'::numeric > 'Infinity'::numeric;    -- true   (NaN sorts above Infinity)
+    SELECT '-Infinity'::numeric < -1e300;           -- true
+
+So a predicate like --where "score > 0.1" has a server-defined verdict on a NaN row: it matches. Any second evaluator of the same predicate that treats NaN as &ldquo;unknowable&rdquo; has just disagreed with the server on a row the server will happily deliver.
+
+## UNKNOWN→drop, and the two legs of one sync disagree
+
+sluice's client evaluator did the principled-looking thing: non-finite operand → UNKNOWN → the change doesn't match the filter → drop. The snapshot leg, evaluated by the server, had already copied the NaN row. The CDC leg then dropped its every UPDATE (a stale target row) and swallowed its DELETE (a permanent orphan) &mdash; at exit 0, the same one-predicate-two-verdicts shape as the temporal split, on the value axis. The numeric sibling was the worse half, with a genuinely ironic geometry: numeric sits inside sluice's publication push-down envelope, so the server was evaluating the pushed filter correctly and faithfully delivering the NaN row's changes &mdash; and the client-side equivalence belt, kept on as a safety net, was the thing destroying them, under a DEBUG log whose wording assumed the drop direction was benign.
+
+## Special values belong in the family matrix
+
+The meta-finding is the audit's own flag: this was the third time in one comparator family that a fix pinned the representative and missed a sibling cell &mdash; the float-ordering fix pinned finite coercion and missed NaN; the float-NaN fix missed the NUMERIC type that can also carry one. Non-finite specials are a column of the test matrix (every family that can transport them &times; NaN/&plusmn;Inf), not a footnote on the float row. And in decimal transports they are string spellings: sluice's ir.Decimal travels as text, so the client had to recognize the literals "NaN", "Infinity", "-Infinity" &mdash; the same lesson as the trigger-CDC Infinity string, arriving through a different door. The shipped pins stream real NaN/&plusmn;Inf rows through actual logical decoding and assert server-verdict == client-verdict per operator, rather than trusting any layer's model of what the wire carries.
+
+## The transferable lesson
+
+Before you map a special value to UNKNOWN, check whether the engine already gave it a defined order &mdash; Postgres did, and it's total: NaN above everything, Infinity included, and the exact NUMERIC type participates fully. A client-side re-evaluation that is more &ldquo;principled&rdquo; than the server is just wrong in a quieter voice; and if your safety belt can override a correct server delivery, its disagreement direction is not benign and must not log at DEBUG.
+
+## Primary sources
+
+- sluice v0.99.291: the total-order arms in compareFloat / compareNumeric (internal/rowpredicate/predicate.go, incl. the &ldquo;NaN sorts last, above Infinity&rdquo; numeric arm and the string-spelling recognition), pinned by real-PG integration gates streaming NaN/&plusmn;Inf through live logical decoding, RED pre-fix.
+
+- PostgreSQL documentation &mdash; floating-point and NUMERIC NaN ordering (&ldquo;NaN is treated as greater than all non-NaN values&rdquo;), &plusmn;Infinity in NUMERIC since PG 14.
+
+- Related field notes &mdash; the crash was the good outcome (non-finite specials as strings, trigger-CDC door) and the predicate you evaluate twice (the general two-evaluator contract).
+
+
+===============================================================
+# The first durable flag
+(https://sluicesync.com/field-notes/first-durable-flag/)
+
+Pushing a sync predicate into a Postgres publication row filter quietly changes the flag's lifetime: --where stops being per-process configuration and becomes durable source-side catalog state that outlives every restart. Warm resume deliberately never re-ensures the publication — so restarting with a widened, changed, or removed --where would leave the SERVER filtering on the stale predicate, unobservable client-side by construction. The honest options for a durable filter: re-assert idempotently, or record-and-compare.
+
+Observed &mdash; designing sluice's PG 15+ publication row-filter push-down (ADR-0176). The gap was the arc's release blocker, flagged by a blind audit with the pass's strongest convergence signal (four independent reviewers) and closed before the feature shipped in v0.99.290 &mdash; never released broken.
+
+## A flag that outlives its process
+
+Every flag a long-running tool takes is implicitly scoped to the process: restart with different flags, get different behavior. Pushing --where into a publication row filter breaks that contract without changing a single visible surface &mdash; the predicate now lives in the source's catalog, applied by the server to every change it decodes, and it stays there when the process exits. sluice's warm resume deliberately never touches the publication (re-asserting scope on resume is exactly the multi-writer hazard the scope guard exists for). So restarting a sync with a widened, changed, or entirely removed --where would have quietly kept the SERVER filtering on the old predicate &mdash; and the suppression is unobservable from the client by construction: no belt, no verifier, no log can see rows the server never decodes or sends. The removed-flag variant is the purest form &mdash; no filter in the config, no filter mentioned anywhere, rows silently withheld, green forever.
+
+## Record-and-compare
+
+The shipped pattern:
+
+    cold start:   push the filter -> record row_filter_hash (a canonical fnv64a
+                  over the sorted table -> predicate pairs) in the stream's
+                  control row, beside slot_name and publication_name
+    warm resume:  recompute the hash from the CURRENT --where flags
+                  compare to the record
+                  mismatch -> refuse loudly: SLUICE-E-WHERE-PUSHDOWN-DRIFT
+
+The refusal names the two escapes: re-pass the original predicate (you didn't mean to change it), or --restart-from-scratch (you did &mdash; and a widened filter needs the re-snapshot for correctness anyway, since rows newly in scope were never bulk-copied). Both escapes are exempt from the comparison, so the refusal can never block its own remedies. Pinned end to end on real PG: widened and removed --where both refuse &mdash; both silently resumed before the fix.
+
+## Why not just re-push? The VStream contrast
+
+sluice's Vitess sibling never needed any of this: the VStream filter rides the session &mdash; it's re-pushed from the current flags on every resume, so the server state and the process flags cannot drift; stateless reconciliation is free. A publication is the opposite kind of object: durable, shared, catalog-resident. For durable server-side state there are exactly two honest shapes &mdash; re-assert idempotently on every resume (ruled out here by the multi-writer guard), or record what you pushed and compare on every resume, refusing drift. What is not honest is the accidental third shape the gap embodied: write once, never look again, and let the process's flags and the server's behavior diverge unobservably.
+
+## The transferable lesson
+
+Audit your flags for the ones that materialize as server-side state &mdash; publication row filters, MySQL replication filters, Debezium snapshot predicates, anything a &ldquo;setup&rdquo; step writes into the source. Each such flag has silently changed its lifetime from per-process to durable, and your resume path inherits a consistency obligation nobody wrote down: either the server state is reconciled from current config on every start, or the pushed state is recorded and drift refuses loudly. If neither, the flag's documentation is lying about what a restart does.
+
+## Primary sources
+
+- sluice ADR-0176 and v0.99.290: the row_filter_hash ratchet (internal/pipeline/streamer_publication_ratchet.go; the column is publication_name's sibling on both engines' control stores), SLUICE-E-WHERE-PUSHDOWN-DRIFT, and the end-to-end drift pin publication_pushdown_drift_pg_integration_test.go.
+
+- The 2026-07-23 audit's D0-2 finding (confirmed independently by four reviewers, incl. the zero-signal removed-flag variant and the VStream contrast).
+
+- Related field notes &mdash; two syncs, one publication (why warm resume must not re-assert scope) and the change stream that won't drop your row (the session-scoped sibling).
+
+
+===============================================================
+# found=false is two different facts
+(https://sluicesync.com/field-notes/found-false-is-two-facts/)
+
+A sync retry loop read the persisted CDC position between attempts to choose 'force a clean re-establishment' vs 'warm resume' — through a (found bool, err error) API whose error it discarded, and both engines report found=false when the read FAILS. So 'the target is down and I could not read the anchor row' was indistinguishable from 'no anchor row exists', and the destructive branch latched. The kicker: a pure reliability improvement made it reachable, by keeping the process alive through the outage window a terminal exit had always masked.
+
+Observed &mdash; the 2026-07-23 blind audit of sluice's sync retry seam, every link code-verified. The destructive latch was reachable in v0.99.288&ndash;v0.99.289 only (it predates them, but a terminal connect exit had always masked it); fixed in v0.99.290.
+
+## The idiom with no channel for &ldquo;I don't know&rdquo;
+
+Go's (T, bool) comma-ok idiom is great for maps, where a lookup cannot fail &mdash; only miss. Put the same shape on a network read and it acquires a third state the signature can't express:
+
+    found, err := readPersistedPosition(ctx)   // err discarded with _
+    if !found {
+        latch = RestartFromScratch             // "no anchor row" ... or was it
+    }                                          // "the read FAILED"?
+
+Both of sluice's engines returned found=false when the read errored, and the caller discarded the error &mdash; so &ldquo;I looked and there is no row&rdquo; (a fact about the data) collapsed into &ldquo;I could not look&rdquo; (a fact about the network). The discriminator used !found to mean the first fact and latched the destructive branch: force a clean re-establishment instead of a warm resume. Mid-outage &mdash; the exact moment reads fail &mdash; is precisely when it ran.
+
+## What the latched branch destroys
+
+On the first successful reconnect after a routine target restart, the forced fresh cold start ignored a perfectly valid persisted position. On native MySQL targets: in-scope tables dropped and re-copied. On idempotent paths the damage is quieter and worse: a re-snapshot whose replication slot is recreated at NOW never replays source DELETEs committed before the new snapshot &mdash; deleted rows persist on the target as silent divergence, exactly where a warm resume would have replayed them from retained WAL. The fix is a rule worth naming: a destructive branch in a resumption state machine requires positive proof of absence &mdash; a successful read observing no row &mdash; never absence of proof. A failed read now leaves the latch at its prior value, defaulting to warm resume whenever any successful read observed the anchor this run.
+
+## The reliability fix opened the window
+
+The latch was old code. What made it reachable was the previous two releases' connect-phase retry hardening &mdash; a pure availability improvement, the kind nobody writes new tests for downstream of. Before it, a mid-outage process died with a terminal connect error, and the fresh process always warm-resumed correctly; after it, the process survived the outage window &mdash; long enough to execute the destruction the latch had been silently arming all along. Every reliability fix extends downstream state machines into failure windows they were never tested in; keeping a process alive through conditions that used to kill it means every latch, cache, and discriminator now runs during those conditions for the first time.
+
+## The transferable lesson
+
+Three, stacked. Never discard the error beside a found flag &mdash; (T, bool) has no channel for &ldquo;I don't know,&rdquo; so the moment a lookup can fail rather than merely miss, the idiom is lying to its caller. Destructive branches demand positive proof of absence, never absence of proof. And when you ship a resilience improvement, re-audit what now executes inside the failure window it created &mdash; the bug it exposes will be older than the fix.
+
+## Primary sources
+
+- sluice v0.99.290: the successful-read-only discriminator (internal/pipeline/streamer_retry.go; both engines' ReadPosition found-on-error semantics), pinned at the retry seam &mdash; transient apply error + failing position read must warm-resume; a genuine successful-read-no-row must still force the clean re-copy.
+
+- The 2026-07-23 audit's D0-4 chain (latch site, the discarded error, the dispatch ranking, and the re-snapshot-at-NOW divergence argument), every link code-verified.
+
+- Related field notes &mdash; your retry loop's blind spot is its own reconnect (the reliability arc that opened the window) and the alert that cleared when the slot died (the same class in a monitor: a failed observation misread as a benign fact).
+
+
+===============================================================
+# Quoted CREATE PUBLICATION preserves case; START_REPLICATION downcases it
+(https://sluicesync.com/field-notes/publication-names-downcase/)
+
+SQL's quoting rules stop at the replication protocol: a quoted CREATE PUBLICATION name like sluice_MyPub preserves case because it's quoted DDL, but the name passed to START_REPLICATION's publication_names option is parsed as an unquoted identifier and folded to lowercase — so pgoutput looks up sluice_mypub, which doesn't exist. Nothing checks at stream start: the slot creates, the whole bulk copy runs green, and the 42704 fires only inside the first change callback — arbitrarily delayed, or never on a quiet source.
+
+Observed &mdash; the 2026-07-23 blind audit, reproduced on a throwaway postgres:16 with pg_recvlogical. sluice's client-side guard shipped in v0.99.291 (--publication-name existed unvalidated v0.99.287&ndash;v0.99.290).
+
+## Two parsers for one name
+
+Postgres's identifier rules are consistent inside SQL: quote a name and its case is preserved; leave it unquoted and it folds to lowercase. The trap is that a publication name crosses OUT of SQL &mdash; into the replication protocol &mdash; and the parser on the other side is different:
+
+    CREATE PUBLICATION "sluice_MyPub" FOR TABLE t;     -- quoted DDL: case preserved
+
+    START_REPLICATION SLOT s LOGICAL 0/0
+        (proto_version '1', publication_names 'sluice_MyPub');
+    -- pgoutput parses the option value as an UNQUOTED identifier list
+    -- -> folds to sluice_mypub -> which does not exist
+
+The catalog holds sluice_MyPub; pgoutput looks up sluice_mypub. Two objects, one spelling, no error yet.
+
+## The failure geometry: green through the whole bulk copy
+
+&ldquo;No error yet&rdquo; is the nasty part. Nothing validates the publication at stream start &mdash; the slot creates, streaming begins, and the lookup happens lazily, inside the decoding of the first change. So the entire bulk copy runs green, the stream reports healthy for as long as the source is idle, and the SQLSTATE 42704 (publication "sluice_mypub" does not exist) fires minutes, hours, or days later &mdash; naming a lowercase object the operator never created, while their \dRp shows sluice_MyPub sitting right there. On a quiet source it never fires at all: a permanently idle stream, indistinguishable from &ldquo;no changes happened.&rdquo; Loud eventually, but arbitrarily delayed and misleading &mdash; and before the guard, sluice's control-state ratchet even recorded the broken name, so every resume faithfully repeated the mistake.
+
+## The 63-byte sibling, same class
+
+The length limit has the same two-parsers shape: CREATE PUBLICATION silently truncates a >63-byte name to 63 bytes with only a NOTICE &mdash; while publication_names matching at stream time is verbatim, so the over-length spelling you pass never matches the truncated object the DDL actually created. Two spellings of one lesson: the DDL layer and the replication protocol parse the same name differently, and every divergence is a delayed or silent failure.
+
+## Validate client-side, exactly as PG does for slots
+
+The asymmetry that makes this preventable: Postgres already enforces a safe charset server-side for replication slot names &mdash; but publications are ordinary quoted-identifier catalog objects, so they escape that enforcement. The fix is to apply the slot rule yourself before creating anything: validate replication-object names to ^[a-z0-9_]+$, at most 63 bytes. sluice's --publication-name now refuses at resolve time with SLUICE-E-CDC-PUBLICATION-NAME-INVALID &mdash; before the slot, before the copy, before the ratchet can record anything &mdash; turning a green-for-days geometry into an immediate one-line refusal.
+
+## The transferable lesson
+
+When a name you create in one layer is consumed by another layer with its own parser &mdash; SQL to replication protocol, DDL to config file, catalog to wire option &mdash; the safe subset is the intersection of the layers' rules, and you should enforce it at creation time, client-side, even when every individual layer would accept more. A name that only some layers fold, quote, or truncate is a latent lookup miss whose loudness depends on traffic &mdash; the worst kind of delayed failure.
+
+## Primary sources
+
+- The audit's repro: CREATE PUBLICATION "sluice_MyPub" + pg_recvlogical -o publication_names=sluice_MyPub on postgres:16 &mdash; slot creates, streaming starts, zero bytes, healthy while idle; 42704 only in the first change callback.
+
+- sluice v0.99.291: the resolve-time refusal (SLUICE-E-CDC-PUBLICATION-NAME-INVALID, internal/pipeline/streamer_slot_policy.go), pinned through the CLI resolve phase; incl. the recorded-broken-name and 63-byte-NOTICE details.
+
+- PostgreSQL documentation &mdash; identifier folding and quoting; START_REPLICATION / pgoutput plugin options; replication-slot naming rules (the server-side charset enforcement publications escape); NAMEDATALEN truncation.
+
+- Related field notes &mdash; two syncs, one publication (why per-stream publication names exist at all) and the first durable flag (the ratchet that faithfully recorded the broken name).
