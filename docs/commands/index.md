@@ -271,10 +271,10 @@ Flag · Purpose ·
         --planetscale-org acme --planetscale-metrics-db app \
         --notify-storage-util 0.85 --notify-slack "$SLUICE_NOTIFY_SLACK"
 
-## sync status / stop / health
+## sync status / stop / health / decommission
 
-### sluice sync status · stop · health
-Inspect, gracefully stop, and health-check a running stream. All take --stream-id plus the target connection.
+### sluice sync status · stop · health · decommission
+Inspect, gracefully stop, health-check, and retire a stream. All take --stream-id plus the target connection (decommission takes the source too).
 
 - sync status — show the stream's persisted position and phase.
 
@@ -282,9 +282,13 @@ Inspect, gracefully stop, and health-check a running stream. All take --stream-i
 
 - sync health — probe freshness against thresholds and return a cron-friendly exit code (non-zero when stale).
 
+- sync decommission — retire a finished stream's durable footprint in one gated command (v0.99.291): drops its replication slot on the source (a leftover slot pins WAL and, on Postgres, blocks later differently-scoped cold starts under the scope guard), drops its recorded per-stream publication (never the shared sluice_pub), then clears its control row last — so a partially-failed run keeps the record and an idempotent re-run finishes the job. Takes the cross-DSN sync start shape (--source-driver/--source --target-driver/--target --stream-id); refuses on a live stream (SLUICE-E-DECOMMISSION-STREAM-ACTIVE — run sync stop --wait first) and without --yes; --dry-run previews without touching anything. MySQL-family sources have no source-side objects (the binlog is the stream), so decommission clears the control row and says so; trigger-CDC change-log tables belong to trigger prune/teardown.
+
     sluice sync stop   --stream-id app-prod --target-driver postgres --target ... --wait --timeout 10m
     sluice sync health --stream-id app-prod --target-driver postgres --target ... \
         --max-stale-seconds 300   # exit non-zero if the last apply was more than 5 minutes ago
+    sluice sync decommission --stream-id wave-1 --source-driver postgres --source ... \
+        --target-driver postgres --target ... --yes   # drained wave: drop slot + publication, clear control row
 
    sync health's freshness check is --max-stale-seconds N (target-side wall-clock seconds since the last apply; 0 = informational only). When you also pass --source-driver + --source the probe reads the source position too and, on a PG→PG pair, exposes --max-lag-bytes N (source LSN bytes ahead of target; MySQL GTID sets aren't byte-distance comparable). Both exit 1 when breached — cron-friendly.
 

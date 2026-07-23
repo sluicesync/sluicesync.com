@@ -103,7 +103,7 @@ gcloud sql instances patch my-instance <span class="f">--database-flags</span>=c
   <li><strong>The <code>wal_level</code> preflight refusal</strong> — CDC against a <code>replica</code>-level instance refuses at startup, before touching any slot, pointing at the provider matrix whose Cloud SQL row (<code>cloudsql.logical_decoding = on</code>, restart included) was validated correct by this run.</li>
   <li><strong><code>SLUICE-E-CDC-REPLICATION-PERMISSION</code></strong> — a role without the REPLICATION attribute refuses with the exact <code>ALTER ROLE</code> remedy, and on Cloud SQL that remedy genuinely works as the master user (see the caveat above about the refusal's provider examples).</li>
   <li><strong>Slot-health monitoring</strong> — <code>wal_status</code> transitions and decode-spill counters, the same as any Postgres source; the validation stream ran WARN-free throughout.</li>
-  <li><strong><code>SLUICE-E-CONFIRMATION-REQUIRED</code></strong> — <code>slot drop</code> refuses without <code>--yes</code>, so a decommissioning script can't destroy a resumable position by accident.</li>
+  <li><strong><code>SLUICE-E-CONFIRMATION-REQUIRED</code></strong> — <code>slot drop</code> and <code>sync decommission</code> refuse without <code>--yes</code>, so a decommissioning script can't destroy a resumable position by accident.</li>
 </ul>
 
 <h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>

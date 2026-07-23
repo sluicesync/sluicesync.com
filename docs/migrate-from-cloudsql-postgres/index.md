@@ -96,7 +96,7 @@ An empty slot catalog is the Cloud SQL baseline — there are no Neon-style plat
 
 - Slot-health monitoring — wal_status transitions and decode-spill counters, the same as any Postgres source; the validation stream ran WARN-free throughout.
 
-- SLUICE-E-CONFIRMATION-REQUIRED — slot drop refuses without --yes, so a decommissioning script can't destroy a resumable position by accident.
+- SLUICE-E-CONFIRMATION-REQUIRED — slot drop and sync decommission refuse without --yes, so a decommissioning script can't destroy a resumable position by accident.
 
 ## Next steps
 
