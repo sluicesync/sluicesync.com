@@ -5837,6 +5837,10 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine.
 
+- 2026-07-24Cross-cutting The retry budget whose only proof of progress lived in the database that was down — sluice persists its CDC apply position in a control table on the target &mdash; the standard exactly-once move, since the position write rides the batch transaction. But the retry budget's only reset path was a successful position read against that same target, so when the store was the outage, progress between outages was never credited: the second target outage of a stream's lifetime exited &ldquo;budget exhausted&rdquo; on its first failures despite hours of verified progress in between. Progress evidence must be gathered where the outage can't reach it &mdash; in memory, while healthy.
+
+- 2026-07-24MySQL & MariaDB The CDC stream that reports green and applies nothing — Everyone &ldquo;knows&rdquo; row-based CDC needs binlog_format=ROW &mdash; the surprise is what a non-ROW source looks like from the consumer's side: nothing. A STATEMENT-format source cold-copies clean, then every change arrives as a QueryEvent the row dispatcher ignores &mdash; the target freezes at the snapshot, the position never advances past the cold-start anchor, the stream runs green, and shutdown exits nil. MIXED is the same class &mdash; and MIXED is MariaDB's platform default, so an un-tuned MariaDB source hits this out of the box.
+
 - 2026-07-23Postgres Quoted CREATE PUBLICATION preserves case; START_REPLICATION downcases it — Quoted DDL preserves case &mdash; but the name you pass to START_REPLICATION's publication_names option is parsed as an unquoted identifier list and folded to lowercase, so pgoutput looks up sluice_mypub, which doesn't exist. Nothing checks at stream start: the slot creates, the whole bulk copy runs green, the stream stays healthy while the source is idle &mdash; and the 42704 fires only inside the first change callback, arbitrarily delayed, or never on a quiet source. Validate replication-object names to ^[a-z0-9_]+$ (&le;63 bytes) before creating them.
 
 - 2026-07-23Cross-cutting found=false is two different facts — A sync retry loop chose &ldquo;force a clean re-establishment&rdquo; vs &ldquo;warm resume&rdquo; through a (found bool, err error) read whose error it discarded &mdash; and both engines return found=false when the read fails, so &ldquo;the target is down and I could not read the anchor row&rdquo; was indistinguishable from &ldquo;no anchor row exists,&rdquo; and the destructive branch latched. The kicker: a pure reliability improvement made it reachable, by keeping the process alive through the outage window a terminal exit had always masked.
@@ -10863,6 +10867,8 @@ From the reconnect: every retry attempt first re-establishes its connections &md
 
 Update &mdash; the ladder kept extending, twice. A third instance arrived within a day of the second (Bug 200, fixed v0.99.290): the retry stack's own APPLY path dials too. When a target restart severs the pool, the next apply's pool acquire (Postgres) or begin tx (MySQL) dials fresh into the refused window &mdash; and neither applier classifier had a dial-shape leg, so a mid-outage CDC apply exited terminally with zero retries, making the whole v0.99.288/289 connect-retry stack unreachable whenever writes were pending during the outage (the realistic case; the focus checks had passed only because they stopped the target with no writes in flight). Three instances on a ladder &mdash; the stream reopen, the connect phase, the apply path's own dial &mdash; give the thesis its short form: every seam that can dial is a classification site. Then a fourth instance (v0.99.291) proved the corollary. The mechanism this time was not a missing site but maintenance drift: the transient-shape vocabulary lived in four hand-mirrored lists (trigger-CDC poll, pipeline connect phase, both engine appliers' text legs), and within ONE release of Bug 199 they had already diverged &mdash; the Windows dial wordings never reached the trigger-CDC list, so a postgres-trigger-source sync on Windows still exited terminally on a routine managed-PG restart, the exact class fixed twice one file over. The fix collapsed all four sites onto one single-homed matcher (internal/nettransient) with per-site corpus-parity change-detectors, so a one-sided addition or a site that stops delegating fails CI. Corollary: if the sites can't share one classifier they WILL drift &mdash; single-home the list, and parity-gate every consumer against it.
 
+Update &mdash; a fifth instance (Bug 203, fixed v0.99.292) compounded that corollary. Single-homing the text corpus is not enough when a whole evidence class is missing from one site: the connect-phase classifier delegated to the shared corpus &mdash; network shapes only, which deliberately excludes PG server-lifecycle wordings &mdash; and had no structured SQLSTATE leg at all, so a re-establish attempt that landed in a restarting Postgres's FATAL: the database system is starting up (SQLSTATE 57P03) window exited terminal, while the applier and trigger-CDC poll classifiers both classified the identical SQLSTATE retriable. (The window is a second or two on a local container but 10&ndash;60 s on managed-PG restarts &mdash; exactly the real-world restart shape.) The fix single-homes the SQLSTATE set the same way as the text corpus: nettransient.IsConnectionAvailabilitySQLState (57P01&ndash;57P03 + class 08, matched structurally via the driver error's SQLState(), never message text), with the postgres-side predicate delegating to it and a delegation-parity pin that fails CI if either home drifts one-sided. And the MySQL sibling was ground-truthed rather than assumed &mdash; a restarting MySQL presents no structured handshake errno; the whole startup window surfaces as transport shapes the corpus already classifies &mdash; so no MySQL leg exists. Evidence, not symmetry, decides what each classification site needs.
+
 ## What sluice does about it
 
 Classify positively and narrowly, at the site that still holds the signal. Structured checks first (sentinels, net.Error timeouts, syscall errnos, pgconn's SafeToRetry contract), then a pinned text-fallback list for the shapes that reach you as prose &mdash; and the list is a change-detector test, so widening the retry surface fails a pin instead of slipping in. Everything unmatched stays terminal: wrong DSN, bad credentials, unknown host, and every unknown shape. The bounded budget is the loud-failure floor either way &mdash; a target that never comes back exhausts it and fails with the cause named.
@@ -11364,3 +11370,85 @@ When a name you create in one layer is consumed by another layer with its own pa
 - PostgreSQL documentation &mdash; identifier folding and quoting; START_REPLICATION / pgoutput plugin options; replication-slot naming rules (the server-side charset enforcement publications escape); NAMEDATALEN truncation.
 
 - Related field notes &mdash; two syncs, one publication (why per-stream publication names exist at all) and the first durable flag (the ratchet that faithfully recorded the broken name).
+
+
+===============================================================
+# The CDC stream that reports green and applies nothing
+(https://sluicesync.com/field-notes/binlog-format-statement-green-stream/)
+
+Everyone knows row-based CDC needs binlog_format=ROW — the surprise is what a non-ROW source looks like from the consumer's side: nothing. A STATEMENT-format source cold-copies clean, then every change arrives as a QueryEvent the row dispatcher ignores — the target freezes at the snapshot, the persisted position never advances, the stream runs green, and shutdown exits nil. MIXED is the same class, and MIXED is MariaDB's platform default.
+
+Observed &mdash; a real mysql:8.0 started with --binlog-format=STATEMENT, 2026-07-23: the filed &ldquo;quietly empty CDC stream&rdquo; premise was live-verified before sluice's gate shipped in v0.99.292. The silent mode existed on every earlier release; the engine behavior itself is by design (statement-based logging is a supported mode &mdash; just not one row-based CDC can replay).
+
+## What a non-ROW source looks like: nothing
+
+The requirement is folklore &mdash; row-based CDC needs binlog_format=ROW &mdash; but the failure shape when the source isn't ROW is worth seeing once, because it is total silence. The cold copy lands (3/3 rows in the observation &mdash; the target looks entirely plausible), and then every live INSERT/UPDATE/DELETE arrives as a QueryEvent: SQL text. A row-based dispatcher has an arm for QueryEvents &mdash; it consumes them for schema-cache invalidation, because that's how DDL arrives &mdash; and deliberately applies nothing from them, since executing arbitrary SQL text against the target is exactly what a row-based applier must never do. Every piece behaves correctly, and the composition loses everything:
+
+    observed on mysql:8.0, binlog_format=STATEMENT (2026-07-23):
+
+    cold copy    3/3 rows land            -- target looks right
+    live DML     arrives as QueryEvents   -- generic-DDL arm: nothing applied
+    target       frozen at the copy snapshot for the whole window
+    position     never advances past the cold-start anchor (before == after)
+    stream       keeps running, no error
+    shutdown     exits nil
+
+No error, no partial delivery, no log line. The stream is connected, consuming real events, heartbeating &mdash; and applying none of it. The worst silent-loss shape.
+
+## MIXED is the same class &mdash; and it's MariaDB's default
+
+Two sharpeners. First, MIXED is not a safe middle: the server statement-logs every write it judges deterministic, which is most DML, so a MIXED source loses most changes the same way &mdash; it's the same class, not a milder one. Second, the defaults split the family: MySQL 8.0 defaults to ROW, which hides the class from everyone who never touched the knob &mdash; while MIXED is MariaDB's platform default, so an un-tuned MariaDB source hits this out of the box.
+
+## Gate on the format you can actually replay
+
+Because nothing downstream will ever complain, the check has to be upfront &mdash; and at every stream start, since the variable is dynamic and can change between runs. sluice v0.99.292 reads @@GLOBAL.binlog_format at every binlog CDC chokepoint (stream start &mdash; covering the sync cold-start handoff, warm resume, and backup incremental &mdash; plus both snapshot openers, so a cold start refuses before the bulk copy) and refuses anything but ROW with the coded SLUICE-E-CDC-BINLOG-FORMAT-NOT-ROW, naming the value and the remedy. One resume caveat belongs in the refusal's fine print: flipping to ROW is dynamic but not retroactive &mdash; binlog segments already written under STATEMENT stay statement-logged, and the changes lost while the format was wrong were never recorded as row events at all, so the honest remedy is a fresh start plus re-verify, not a resume across the flip. Documented residual: a SUPER session-level binlog_format=STATEMENT override slips the global read.
+
+## The transferable lesson
+
+A CDC consumer must gate on the log format it can actually replay, at every stream start, because a wrong format produces no downstream signal: the events still flow, they're just the kind you ignore. &ldquo;Connected and consuming&rdquo; is not &ldquo;applying&rdquo; &mdash; if your pipeline's liveness signals measure the former, a format mismatch is green forever. The same family one knob over: binlog_row_image=MINIMAL eats every UPDATE &mdash; there the stream loses one verb's content; here it loses everything.
+
+## Primary sources
+
+- sluice v0.99.292: the binlog_format preflight and SLUICE-E-CDC-BINLOG-FORMAT-NOT-ROW (internal/engines/mysql/cdc_binlog_format_preflight.go), pinned by a real-server integration matrix &mdash; mysql STATEMENT, mysql MIXED, mariadb STATEMENT &mdash; each asserting the refusal fires with the target catalog untouched; the pre-gate live observation (frozen target, position anchor before == after, nil shutdown) is in the shipping commit's ground-truth record.
+
+- MySQL / MariaDB documentation &mdash; binlog_format and statement-based logging; MIXED's deterministic-write rule; MariaDB's MIXED default.
+
+- Related field notes &mdash; the platform default that eats every UPDATE (the row-image sibling: same source-knob-decides-what-the-stream-carries class) and two syncs, one publication (the Postgres cousin of a green stream delivering nothing).
+
+
+===============================================================
+# The retry budget whose only proof of progress lived in the database that was down
+(https://sluicesync.com/field-notes/position-store-is-the-target/)
+
+sluice persists its CDC apply position in a control table on the TARGET — the standard exactly-once move, since the position write rides the batch transaction. But the retry budget's only reset path was a successful position read against that same target, so when the store WAS the outage, progress between outages was never credited: the second target outage of a stream's lifetime exited 'budget exhausted' on its first failures, despite hours of verified progress in between.
+
+Observed &mdash; sluice's v0.99.291 regression cycle (Bug 202), isolated to a deterministic ~60-second repro. Loud and zero-loss: a relaunch warm-resumed and full-table checksums matched, on both affected versions. Reachable in v0.99.290&ndash;v0.99.291 &mdash; precisely since target-outage ride-out first worked (before that, the first outage exited terminally anyway); fixed in v0.99.292.
+
+## The exactly-once move that created the coupling
+
+sluice persists its CDC apply position in a control table on the target &mdash; the standard exactly-once move, because the position write rides the same transaction as the batch it describes: apply and position commit or roll back together. The apply-retry budget sat on top: a bounded count of consecutive failures, so a target that never comes back fails loudly instead of looping forever. Its only reset path was &ldquo;the position read succeeded AND the token advanced&rdquo; &mdash; a read against that same target. Said out loud, the coupling is obvious: the budget's only proof of progress lived in the database whose unavailability it existed to ride out. Nobody said it out loud.
+
+## The second outage
+
+Target outage #1 burns attempts 1&ndash;7; the target returns; the stream converges in-process and applies hours of verified changes. Then outage #2 arrives &mdash; minutes or days later &mdash; and the reset-path read fails, because the store is the outage. The counter inherits the old count, and the first failures of the new outage exit apply retry budget exhausted after 8 consecutive failures at position "" within a second or two. The order differential is what pins the mechanism:
+
+    target outage, then SOURCE outage   -> resets fine (attempt=1)
+                                           the position read succeeds; the target is up
+    target outage, then TARGET outage   -> never resets
+                                           first failure of outage #2 = attempt 8, dead
+
+## Gather the evidence where the outage can't reach it
+
+The fix is an in-memory progress ledger, gathered while healthy, under the same discipline as the found=false note: a failed read is never evidence, in either direction. While each retry attempt flows, a bounded sentinel polls the persisted position on a 5-second cadence and records the latest successful observation; a counted failure is credited with a fresh budget only when some successful, anchor-bearing read showed the token moved since the token recorded at the previous counted failure &mdash; which, because the position rides the batch transaction, proves durable commits happened in between. The loud-failure floor survives intact: a genuinely stuck batch (reads succeed, token frozen) and a never-reachable target (no successful reads at all) both still exhaust in exactly the configured attempts.
+
+## The transferable lesson
+
+Any system that keeps its progress cursor in the store it retries against has this bug latent &mdash; and the class is common, because co-locating the cursor with the writes is the correct exactly-once design; the mistake is only letting the health machinery inherit the co-location. Proving progress must not require reading the thing whose unavailability you are riding out: gather the evidence in memory while the store is reachable, credit it under the failed-reads-are-not-evidence rule, and let the budget stay the loud floor for the cases where no evidence ever arrives.
+
+## Primary sources
+
+- sluice v0.99.292: the committed-progress sentinel and in-memory ledger (internal/pipeline/streamer_retry.go), RED-before-GREEN against the carryover repro (the pin fails with the exact budget exhausted &hellip; at position "" shape when the credit is absent); the two-outage repro script and the source-vs-target order differential, byte-identical pre-fix on v0.99.290.
+
+- sluice ADR-0007 &mdash; the position write riding the apply batch's transaction (why a moved token is proof of durable commits).
+
+- Related field notes &mdash; found=false is two different facts (the sibling: the same discipline applied to a destructive latch, one seam over) and your retry loop's blind spot is its own reconnect (the ride-out arc whose promise this defect quietly halved).
