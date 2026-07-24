@@ -34,11 +34,21 @@ DO clusters use a private CA, so neither system roots nor a bare ?tls=true can v
     curl -s "https://api.digitalocean.com/v2/databases/<cluster-id>/ca" \
         -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" | jq -r '.ca.certificate' | base64 -d > do-ca.pem
 
+One-shot copy (dry-run first, then drop the flag):
+
     sluice migrate \
         --source-driver mysql --source 'doadmin:pass@tcp(db-mysql-nyc3-12345.b.db.ondigitalocean.com:25060)/defaultdb' \
         --source-tls-ca do-ca.pem \
         --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
         --dry-run
+
+Continuous sync — the same CA flag, plus a stream id. Set the binlog_retention_period knob above first: on DO defaults the reaper purges at ~13&ndash;16 minutes, so a stream that falls behind by that much loses its position for good.
+
+    sluice sync start \
+        --source-driver mysql --source 'doadmin:pass@tcp(db-mysql-nyc3-12345.b.db.ondigitalocean.com:25060)/defaultdb' \
+        --source-tls-ca do-ca.pem \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --stream-id do-app
 
 --source-tls-ca covers both the data connection and the binlog/CDC stream, and refuses if the DSN already sets tls= (one TLS decision, not two). The same flag exists on sync start, verify, and backup. The doadmin user has the replication grants sluice's binlog CDC needs — no extra GRANTs on defaults.
 

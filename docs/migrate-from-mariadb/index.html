@@ -47,6 +47,11 @@
 <span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> mariadb     <span class="f">--source</span> 'app:pass@tcp(mariadb-host:3306)/app' \
     <span class="f">--target-driver</span> planetscale <span class="f">--target</span> 'USER:PASS@tcp(aws.connect.psdb.cloud:3306)/mydb?tls=true'</code></pre>
+<p>For a continuous sync rather than a one-time copy, the same DSNs take a stream id — the source streams MariaDB's native binlog, whose domain-based GTIDs sluice parses and resumes off (see <a href="#cdc">the CDC section</a> for the two MariaDB-specific realities to plan around):</p>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mariadb <span class="f">--source</span> 'app:pass@tcp(mariadb-host:3306)/app' \
+    <span class="f">--target-driver</span> mysql   <span class="f">--target</span> 'root:pass@tcp(mysql-host:3306)/app' \
+    <span class="f">--stream-id</span> mariadb-app</code></pre>
 <p>Everything below is target-agnostic unless a heading says otherwise — the vanilla-MySQL and PlanetScale runs produced identical target schemas and values.</p>
 
 <h2 id="collation">MariaDB 11.4's default collation remaps (the most visible WARN) <a class="hlink" href="#collation" aria-label="Permalink to this section">#</a></h2>

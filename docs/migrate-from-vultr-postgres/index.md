@@ -8,6 +8,16 @@ Vultr Managed Databases for PostgreSQL works with sluice's vanilla postgres engi
 
 Vultr (an Aiven-lineage platform) ships CDC-ready — the only provider validated so far where that is true. wal_level=logical is set out of the box, and the master user (vultradmin) carries the REPLICATION attribute from first boot, so sync start works with zero preparation. max_replication_slots / max_wal_senders default to 20/20 and are raisable to 64 via the database's advanced options. For a custom role, ALTER ROLE <role> WITH REPLICATION works as vultradmin (no superuser needed — the platform patches the grant, like Cloud SQL and Azure).
 
+One-shot copy (dry-run first, then drop the flag):
+
+    sluice migrate \
+        --source-driver postgres \
+        --source 'postgres://vultradmin:pass@vultr-prod-xxx.vultrdb.com:16751/defaultdb?sslmode=require' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+Continuous sync — the same DSN, plus a stream id:
+
     sluice sync start \
         --source-driver postgres \
         --source 'postgres://vultradmin:pass@vultr-prod-xxx.vultrdb.com:16751/defaultdb?sslmode=require' \

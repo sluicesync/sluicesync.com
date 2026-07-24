@@ -27,6 +27,16 @@ The platform replication role is grant-restricted and irrelevant here — there 
 
 TLS is mandatory (plaintext refused at pg_hba) and the certificate chain is public (Microsoft/DigiCert roots). So sslmode=verify-full works with no CA download and no sslrootcert — use it on every Azure DSN; it is both the strictest and the zero-config mode (better than the per-instance-CA fetch that DigitalOcean, Cloud SQL, and Vultr require). If a client stack with its own bundled CA fails verification, it's missing an OS trust store, not an Azure quirk.
 
+One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no WAL, so it works before the REPLICATION flip above:
+
+    sluice migrate \
+        --source-driver postgres \
+        --source 'postgres://myadmin:pass@myserver.postgres.database.azure.com:5432/app?sslmode=verify-full' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+Continuous sync — the same DSN, plus a stream id:
+
     sluice sync start \
         --source-driver postgres \
         --source 'postgres://myadmin:pass@myserver.postgres.database.azure.com:5432/app?sslmode=verify-full' \

@@ -55,9 +55,15 @@ aws rds reboot-db-instance <span class="f">--db-instance-identifier</span> mydb 
 
 <h2 id="tls">TLS: force_ssl and the trust bundle <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
 <p><code>rds.force_ssl=1</code> is the platform default on PG 15+ engines — plaintext connections are refused at pg_hba (<code>no pg_hba.conf entry ... no encryption</code>). <code>sslmode=require</code> works out of the box; <code>verify-full</code> works with the AWS trust bundle passed in the DSN (Postgres endpoints take <code>sslrootcert=</code> in the DSN — the <code>--source-tls-ca</code> flag is for MySQL-family endpoints and refuses on Postgres rather than being silently ignored):</p>
-<pre><code><span class="k">curl</span> -sO https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
-
-<span class="k">sluice</span> sync start \
+<pre><code><span class="k">curl</span> -sO https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem</code></pre>
+<p>One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no WAL, so it needs none of the replication setup above:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres \
+    <span class="f">--source</span> 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full&amp;sslrootcert=global-bundle.pem' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync — the same DSN, plus a stream id:</p>
+<pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> postgres \
     <span class="f">--source</span> 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full&amp;sslrootcert=global-bundle.pem' \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \

@@ -52,6 +52,12 @@
   <li>Replication grants (<code>REPLICATION SLAVE</code>/<code>REPLICATION CLIENT</code>) are present on the admin user out of the box; <code>binlog_format=ROW</code> is read-only at the platform (no MIXED trap); <code>gtid_mode=OFF</code> by default (file/position CDC is fine); <code>sql_require_primary_key=OFF</code>; stock-strict <code>sql_mode</code> (no DigitalOcean-style ANSI surprise).</li>
   <li>Host pattern <code>*.mysql.database.azure.com</code>; the in-band fingerprint is <code>@@version</code> ending in <code>-azure</code>. One-time subscription step: <code>az provider register --namespace Microsoft.DBforMySQL</code> must have completed before instance creation works.</li>
 </ul>
+<p>One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no binlog, so the row-image knob above only gates the continuous form:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'myadmin:pass@tcp(myserver.mysql.database.azure.com:3306)/app?tls=true' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync — the same DSN, plus a stream id:</p>
 <pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'myadmin:pass@tcp(myserver.mysql.database.azure.com:3306)/app?tls=true' \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \

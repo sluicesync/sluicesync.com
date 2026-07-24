@@ -21,6 +21,13 @@ MariaDB uses the same Go MySQL DSN grammar as vanilla MySQL — user:pass@tcp(ho
         --source-driver mariadb     --source 'app:pass@tcp(mariadb-host:3306)/app' \
         --target-driver planetscale --target 'USER:PASS@tcp(aws.connect.psdb.cloud:3306)/mydb?tls=true'
 
+For a continuous sync rather than a one-time copy, the same DSNs take a stream id — the source streams MariaDB's native binlog, whose domain-based GTIDs sluice parses and resumes off (see the CDC section for the two MariaDB-specific realities to plan around):
+
+    sluice sync start \
+        --source-driver mariadb --source 'app:pass@tcp(mariadb-host:3306)/app' \
+        --target-driver mysql   --target 'root:pass@tcp(mysql-host:3306)/app' \
+        --stream-id mariadb-app
+
 Everything below is target-agnostic unless a heading says otherwise — the vanilla-MySQL and PlanetScale runs produced identical target schemas and values.
 
 ## MariaDB 11.4's default collation remaps (the most visible WARN)

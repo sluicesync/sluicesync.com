@@ -69,9 +69,15 @@
 
 <h2 id="tls">Connecting: the per-instance CA <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
 <p>Defaults accept plaintext (<code>sslMode: ALLOW_UNENCRYPTED_AND_ENCRYPTED</code>) — a plain DSN works and gets sluice's unencrypted-binlog-stream WARN. A bare <code>?tls=true</code> fails (<code>x509: certificate signed by unknown authority</code>): each instance has its own private CA (<code>CN=Google Cloud SQL Server CA</code>), the same class as DigitalOcean's — and unlike RDS there is no public bundle URL; the fetch is an authenticated API call:</p>
-<pre><code>gcloud sql instances describe my-instance <span class="f">--format</span>='value(serverCaCert.cert)' &gt; cloudsql-ca.pem
-
-<span class="k">sluice</span> sync start \
+<pre><code>gcloud sql instances describe my-instance <span class="f">--format</span>='value(serverCaCert.cert)' &gt; cloudsql-ca.pem</code></pre>
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'root:pass@tcp(34.148.x.y:3306)/app' \
+    <span class="f">--source-tls-ca</span> cloudsql-ca.pem \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync — the same CA flag, plus a stream id:</p>
+<pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'root:pass@tcp(34.148.x.y:3306)/app' \
     <span class="f">--source-tls-ca</span> cloudsql-ca.pem \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \

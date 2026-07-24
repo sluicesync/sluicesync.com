@@ -3354,13 +3354,19 @@ curl -X PATCH "https://api.digitalocean.com/v2/databases/<cluster-id>/config" \\
 <p>DO clusters use a <strong>private CA</strong>, so neither system roots nor a bare <code>?tls=true</code> can verify the server certificate. Fetch the cluster CA from the API and hand it to sluice with <code>--source-tls-ca</code> — CA-pinned <em>verify-ca</em> TLS (trust this CA, verify the chain, skip the hostname check that MySQL's SAN-less certificates can't satisfy):</p>
 ${pre(`# The API returns the cluster CA base64-encoded
 curl -s "https://api.digitalocean.com/v2/databases/<cluster-id>/ca" \\
-    -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" | jq -r '.ca.certificate' | base64 -d > do-ca.pem
-
-sluice migrate \\
+    -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" | jq -r '.ca.certificate' | base64 -d > do-ca.pem`)}
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+${pre(`sluice migrate \\
     --source-driver mysql --source 'doadmin:pass@tcp(db-mysql-nyc3-12345.b.db.ondigitalocean.com:25060)/defaultdb' \\
     --source-tls-ca do-ca.pem \\
     --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
     --dry-run`)}
+<p>Continuous sync — the same CA flag, plus a stream id. Set the <code>binlog_retention_period</code> knob above first: on DO defaults the reaper purges at ~13&ndash;16 minutes, so a stream that falls behind by that much loses its position for good.</p>
+${pre(`sluice sync start \\
+    --source-driver mysql --source 'doadmin:pass@tcp(db-mysql-nyc3-12345.b.db.ondigitalocean.com:25060)/defaultdb' \\
+    --source-tls-ca do-ca.pem \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --stream-id do-app`)}
 <p><code>--source-tls-ca</code> covers both the data connection and the binlog/CDC stream, and refuses if the DSN already sets <code>tls=</code> (one TLS decision, not two). The same flag exists on <code>sync start</code>, <code>verify</code>, and <code>backup</code>. The <code>doadmin</code> user has the replication grants sluice's binlog CDC needs — no extra GRANTs on defaults.</p>
 
 <h2 id="sql-mode">sql_mode differences worth knowing</h2>
@@ -3432,9 +3438,15 @@ CALL mysql.rds_show_configuration;                               -- verify: binl
 
 <h2 id="tls">TLS: the public regional bundle</h2>
 <p>RDS defaults allow plaintext (<code>require_secure_transport=OFF</code>), and a bare <code>?tls=true</code> fails — the RDS CA is not in system roots. The working recipe is <code>--source-tls-ca</code> with the public regional bundle (one well-known URL per region, no API call — contrast DO's authenticated CA endpoint):</p>
-${pre(`curl -sO https://truststore.pki.rds.amazonaws.com/us-east-1/us-east-1-bundle.pem
-
-sluice sync start \\
+${pre(`curl -sO https://truststore.pki.rds.amazonaws.com/us-east-1/us-east-1-bundle.pem`)}
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+${pre(`sluice migrate \\
+    --source-driver mysql --source 'admin:pass@tcp(mydb.abc123.us-east-1.rds.amazonaws.com:3306)/app' \\
+    --source-tls-ca us-east-1-bundle.pem \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run`)}
+<p>Continuous sync — the same CA flag, plus a stream id:</p>
+${pre(`sluice sync start \\
     --source-driver mysql --source 'admin:pass@tcp(mydb.abc123.us-east-1.rds.amazonaws.com:3306)/app' \\
     --source-tls-ca us-east-1-bundle.pem \\
     --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
@@ -3495,9 +3507,15 @@ aws rds reboot-db-instance --db-instance-identifier mydb    # static parameter: 
 
 <h2 id="tls">TLS: force_ssl and the trust bundle</h2>
 <p><code>rds.force_ssl=1</code> is the platform default on PG 15+ engines — plaintext connections are refused at pg_hba (<code>no pg_hba.conf entry ... no encryption</code>). <code>sslmode=require</code> works out of the box; <code>verify-full</code> works with the AWS trust bundle passed in the DSN (Postgres endpoints take <code>sslrootcert=</code> in the DSN — the <code>--source-tls-ca</code> flag is for MySQL-family endpoints and refuses on Postgres rather than being silently ignored):</p>
-${pre(`curl -sO https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
-
-sluice sync start \\
+${pre(`curl -sO https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`)}
+<p>One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no WAL, so it needs none of the replication setup above:</p>
+${pre(`sluice migrate \\
+    --source-driver postgres \\
+    --source 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full&sslrootcert=global-bundle.pem' \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run`)}
+<p>Continuous sync — the same DSN, plus a stream id:</p>
+${pre(`sluice sync start \\
     --source-driver postgres \\
     --source 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full&sslrootcert=global-bundle.pem' \\
     --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
@@ -3683,9 +3701,15 @@ ${pre(`gcloud sql instances patch my-instance --database-flags=binlog_expire_log
 
 <h2 id="tls">Connecting: the per-instance CA</h2>
 <p>Defaults accept plaintext (<code>sslMode: ALLOW_UNENCRYPTED_AND_ENCRYPTED</code>) — a plain DSN works and gets sluice's unencrypted-binlog-stream WARN. A bare <code>?tls=true</code> fails (<code>x509: certificate signed by unknown authority</code>): each instance has its own private CA (<code>CN=Google Cloud SQL Server CA</code>), the same class as DigitalOcean's — and unlike RDS there is no public bundle URL; the fetch is an authenticated API call:</p>
-${pre(`gcloud sql instances describe my-instance --format='value(serverCaCert.cert)' > cloudsql-ca.pem
-
-sluice sync start \\
+${pre(`gcloud sql instances describe my-instance --format='value(serverCaCert.cert)' > cloudsql-ca.pem`)}
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+${pre(`sluice migrate \\
+    --source-driver mysql --source 'root:pass@tcp(34.148.x.y:3306)/app' \\
+    --source-tls-ca cloudsql-ca.pem \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run`)}
+<p>Continuous sync — the same CA flag, plus a stream id:</p>
+${pre(`sluice sync start \\
     --source-driver mysql --source 'root:pass@tcp(34.148.x.y:3306)/app' \\
     --source-tls-ca cloudsql-ca.pem \\
     --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
@@ -3750,6 +3774,12 @@ ${pre(`az mysql flexible-server parameter set --resource-group <rg> --server-nam
   <li>Replication grants (<code>REPLICATION SLAVE</code>/<code>REPLICATION CLIENT</code>) are present on the admin user out of the box; <code>binlog_format=ROW</code> is read-only at the platform (no MIXED trap); <code>gtid_mode=OFF</code> by default (file/position CDC is fine); <code>sql_require_primary_key=OFF</code>; stock-strict <code>sql_mode</code> (no DigitalOcean-style ANSI surprise).</li>
   <li>Host pattern <code>*.mysql.database.azure.com</code>; the in-band fingerprint is <code>@@version</code> ending in <code>-azure</code>. One-time subscription step: <code>az provider register --namespace Microsoft.DBforMySQL</code> must have completed before instance creation works.</li>
 </ul>
+<p>One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no binlog, so the row-image knob above only gates the continuous form:</p>
+${pre(`sluice migrate \\
+    --source-driver mysql --source 'myadmin:pass@tcp(myserver.mysql.database.azure.com:3306)/app?tls=true' \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run`)}
+<p>Continuous sync — the same DSN, plus a stream id:</p>
 ${pre(`sluice sync start \\
     --source-driver mysql --source 'myadmin:pass@tcp(myserver.mysql.database.azure.com:3306)/app?tls=true' \\
     --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
@@ -3800,6 +3830,13 @@ ${pre(`ALTER ROLE <role> WITH REPLICATION;`)}</li>
 
 <h2 id="tls">TLS: the best story in the series</h2>
 <p>TLS is mandatory (plaintext refused at pg_hba) and the certificate chain is <strong>public</strong> (Microsoft/DigiCert roots). So <code>sslmode=verify-full</code> works with <strong>no CA download and no <code>sslrootcert</code></strong> — use it on every Azure DSN; it is both the strictest and the zero-config mode (better than the per-instance-CA fetch that DigitalOcean, Cloud SQL, and Vultr require). If a client stack with its own bundled CA fails verification, it's missing an OS trust store, not an Azure quirk.</p>
+<p>One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no WAL, so it works before the REPLICATION flip above:</p>
+${pre(`sluice migrate \\
+    --source-driver postgres \\
+    --source 'postgres://myadmin:pass@myserver.postgres.database.azure.com:5432/app?sslmode=verify-full' \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run`)}
+<p>Continuous sync — the same DSN, plus a stream id:</p>
 ${pre(`sluice sync start \\
     --source-driver postgres \\
     --source 'postgres://myadmin:pass@myserver.postgres.database.azure.com:5432/app?sslmode=verify-full' \\
@@ -3860,8 +3897,15 @@ write(
 <ul>
   <li>Host pattern <code>*.vultrdb.com</code>, on a nonstandard high port. <strong>Plaintext is accepted</strong> (<code>require_secure_transport=OFF</code>) but the unencrypted-binlog WARN applies. A bare <code>?tls=true</code> fails — each cluster has a private CA (Aiven &ldquo;Project CA&rdquo;) embedded in the create/GET API response's <code>ca_certificate</code> field. Save it and pass <code>--source-tls-ca</code> (no separate CA-endpoint call, unlike DO):</li>
 </ul>
+<p>One-shot copy (dry-run first, then drop the flag) — the shape this platform is best suited to, given the unfixable binlog window above:</p>
 ${pre(`# ca_certificate comes back inline in the database create/get API response — save it, then:
-sluice sync start \\
+sluice migrate \\
+    --source-driver mysql --source 'vultradmin:pass@tcp(vultr-prod-xxx.vultrdb.com:16751)/defaultdb' \\
+    --source-tls-ca vultr-ca.pem \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run`)}
+<p>Continuous sync — the same CA flag, plus a stream id. Keep it attached and caught up: a pause beyond ~10 minutes cannot be recovered on this platform.</p>
+${pre(`sluice sync start \\
     --source-driver mysql --source 'vultradmin:pass@tcp(vultr-prod-xxx.vultrdb.com:16751)/defaultdb' \\
     --source-tls-ca vultr-ca.pem \\
     --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
@@ -3905,6 +3949,13 @@ write(
 
 <h2 id="logical-replication">Enabling logical replication: nothing to do</h2>
 <p>Vultr (an Aiven-lineage platform) ships CDC-ready — the <strong>only provider validated so far where that is true</strong>. <code>wal_level=logical</code> is set out of the box, and the master user (<code>vultradmin</code>) carries the REPLICATION attribute from first boot, so <code>sync start</code> works with zero preparation. <code>max_replication_slots</code> / <code>max_wal_senders</code> default to 20/20 and are raisable to 64 via the database's advanced options. For a custom role, <code>ALTER ROLE &lt;role&gt; WITH REPLICATION</code> works as <code>vultradmin</code> (no superuser needed — the platform patches the grant, like Cloud SQL and Azure).</p>
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+${pre(`sluice migrate \\
+    --source-driver postgres \\
+    --source 'postgres://vultradmin:pass@vultr-prod-xxx.vultrdb.com:16751/defaultdb?sslmode=require' \\
+    --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \\
+    --dry-run`)}
+<p>Continuous sync — the same DSN, plus a stream id:</p>
 ${pre(`sluice sync start \\
     --source-driver postgres \\
     --source 'postgres://vultradmin:pass@vultr-prod-xxx.vultrdb.com:16751/defaultdb?sslmode=require' \\
@@ -3968,6 +4019,11 @@ sluice migrate \\
 sluice migrate \\
     --source-driver mariadb     --source 'app:pass@tcp(mariadb-host:3306)/app' \\
     --target-driver planetscale --target 'USER:PASS@tcp(aws.connect.psdb.cloud:3306)/mydb?tls=true'`)}
+<p>For a continuous sync rather than a one-time copy, the same DSNs take a stream id — the source streams MariaDB's native binlog, whose domain-based GTIDs sluice parses and resumes off (see <a href="#cdc">the CDC section</a> for the two MariaDB-specific realities to plan around):</p>
+${pre(`sluice sync start \\
+    --source-driver mariadb --source 'app:pass@tcp(mariadb-host:3306)/app' \\
+    --target-driver mysql   --target 'root:pass@tcp(mysql-host:3306)/app' \\
+    --stream-id mariadb-app`)}
 <p>Everything below is target-agnostic unless a heading says otherwise — the vanilla-MySQL and PlanetScale runs produced identical target schemas and values.</p>
 
 <h2 id="collation">MariaDB 11.4's default collation remaps (the most visible WARN)</h2>

@@ -35,6 +35,13 @@
 
 <h2 id="logical-replication">Enabling logical replication: nothing to do <a class="hlink" href="#logical-replication" aria-label="Permalink to this section">#</a></h2>
 <p>Vultr (an Aiven-lineage platform) ships CDC-ready — the <strong>only provider validated so far where that is true</strong>. <code>wal_level=logical</code> is set out of the box, and the master user (<code>vultradmin</code>) carries the REPLICATION attribute from first boot, so <code>sync start</code> works with zero preparation. <code>max_replication_slots</code> / <code>max_wal_senders</code> default to 20/20 and are raisable to 64 via the database's advanced options. For a custom role, <code>ALTER ROLE &lt;role&gt; WITH REPLICATION</code> works as <code>vultradmin</code> (no superuser needed — the platform patches the grant, like Cloud SQL and Azure).</p>
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres \
+    <span class="f">--source</span> 'postgres://vultradmin:pass@vultr-prod-xxx.vultrdb.com:16751/defaultdb?sslmode=require' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync — the same DSN, plus a stream id:</p>
 <pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> postgres \
     <span class="f">--source</span> 'postgres://vultradmin:pass@vultr-prod-xxx.vultrdb.com:16751/defaultdb?sslmode=require' \

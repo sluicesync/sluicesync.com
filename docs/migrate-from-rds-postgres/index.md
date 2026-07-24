@@ -33,6 +33,16 @@ rds.force_ssl=1 is the platform default on PG 15+ engines — plaintext connecti
 
     curl -sO https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
+One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no WAL, so it needs none of the replication setup above:
+
+    sluice migrate \
+        --source-driver postgres \
+        --source 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full&sslrootcert=global-bundle.pem' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+Continuous sync — the same DSN, plus a stream id:
+
     sluice sync start \
         --source-driver postgres \
         --source 'postgres://master:pass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full&sslrootcert=global-bundle.pem' \

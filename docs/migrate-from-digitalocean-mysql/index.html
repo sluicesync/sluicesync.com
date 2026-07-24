@@ -53,13 +53,19 @@
 <p>DO clusters use a <strong>private CA</strong>, so neither system roots nor a bare <code>?tls=true</code> can verify the server certificate. Fetch the cluster CA from the API and hand it to sluice with <code>--source-tls-ca</code> — CA-pinned <em>verify-ca</em> TLS (trust this CA, verify the chain, skip the hostname check that MySQL's SAN-less certificates can't satisfy):</p>
 <pre><code><span class="c"># The API returns the cluster CA base64-encoded</span>
 <span class="k">curl</span> -s "https://api.digitalocean.com/v2/databases/&lt;cluster-id&gt;/ca" \
-    -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" | jq -r '.ca.certificate' | base64 -d &gt; do-ca.pem
-
-<span class="k">sluice</span> migrate \
+    -H "Authorization: Bearer $DIGITALOCEAN_TOKEN" | jq -r '.ca.certificate' | base64 -d &gt; do-ca.pem</code></pre>
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+<pre><code><span class="k">sluice</span> migrate \
     <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'doadmin:pass@tcp(db-mysql-nyc3-12345.b.db.ondigitalocean.com:25060)/defaultdb' \
     <span class="f">--source-tls-ca</span> do-ca.pem \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
     <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync — the same CA flag, plus a stream id. Set the <code>binlog_retention_period</code> knob above first: on DO defaults the reaper purges at ~13&ndash;16 minutes, so a stream that falls behind by that much loses its position for good.</p>
+<pre><code><span class="k">sluice</span> sync start \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'doadmin:pass@tcp(db-mysql-nyc3-12345.b.db.ondigitalocean.com:25060)/defaultdb' \
+    <span class="f">--source-tls-ca</span> do-ca.pem \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--stream-id</span> do-app</code></pre>
 <p><code>--source-tls-ca</code> covers both the data connection and the binlog/CDC stream, and refuses if the DSN already sets <code>tls=</code> (one TLS decision, not two). The same flag exists on <code>sync start</code>, <code>verify</code>, and <code>backup</code>. The <code>doadmin</code> user has the replication grants sluice's binlog CDC needs — no extra GRANTs on defaults.</p>
 
 <h2 id="sql-mode">sql_mode differences worth knowing <a class="hlink" href="#sql-mode" aria-label="Permalink to this section">#</a></h2>

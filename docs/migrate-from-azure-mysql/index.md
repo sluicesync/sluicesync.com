@@ -32,6 +32,15 @@ Purge appears platform-scheduled and lazy — files can outlive the configured w
 
 - Host pattern *.mysql.database.azure.com; the in-band fingerprint is @@version ending in -azure. One-time subscription step: az provider register --namespace Microsoft.DBforMySQL must have completed before instance creation works.
 
+One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no binlog, so the row-image knob above only gates the continuous form:
+
+    sluice migrate \
+        --source-driver mysql --source 'myadmin:pass@tcp(myserver.mysql.database.azure.com:3306)/app?tls=true' \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+Continuous sync — the same DSN, plus a stream id:
+
     sluice sync start \
         --source-driver mysql --source 'myadmin:pass@tcp(myserver.mysql.database.azure.com:3306)/app?tls=true' \
         --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \

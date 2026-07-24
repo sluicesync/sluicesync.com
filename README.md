@@ -17,6 +17,13 @@ served at **[sluicesync.com](https://sluicesync.com)** via **Cloudflare Pages**.
   shared layout + content, then committed as plain HTML. To edit docs: change the page
   bodies in `build.mjs`, run `node build.mjs`, and commit the regenerated
   `docs/**/index.html`.
+- **Every Platform Guide carries both a `sluice migrate` block and a `sluice sync start`
+  block**, using that platform's own DSN shape and connection knobs — the one-shot copy
+  and the continuous form are separate decisions a reader arrives with, and a guide that
+  shows only one silently implies the other isn't supported there. The single deliberate
+  exception is `migrate-from-supabase-read-replica`, where CDC is genuinely refused (a
+  replica can't host the publication) and the page says so. Audited and made consistent
+  2026-07-24; nine guides were carrying only one of the two.
 - `assets/docs.css` is the shared docs stylesheet.
 - Branding assets (`sluice-logo*.png`, favicons, `og-image.png`) mirror
   `sluicesync/sluice/branding/`.

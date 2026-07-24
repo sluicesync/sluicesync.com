@@ -65,9 +65,15 @@ CALL mysql.rds_show_configuration;                               -- verify: binl
 
 <h2 id="tls">TLS: the public regional bundle <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
 <p>RDS defaults allow plaintext (<code>require_secure_transport=OFF</code>), and a bare <code>?tls=true</code> fails — the RDS CA is not in system roots. The working recipe is <code>--source-tls-ca</code> with the public regional bundle (one well-known URL per region, no API call — contrast DO's authenticated CA endpoint):</p>
-<pre><code><span class="k">curl</span> -sO https://truststore.pki.rds.amazonaws.com/us-east-1/us-east-1-bundle.pem
-
-<span class="k">sluice</span> sync start \
+<pre><code><span class="k">curl</span> -sO https://truststore.pki.rds.amazonaws.com/us-east-1/us-east-1-bundle.pem</code></pre>
+<p>One-shot copy (dry-run first, then drop the flag):</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'admin:pass@tcp(mydb.abc123.us-east-1.rds.amazonaws.com:3306)/app' \
+    <span class="f">--source-tls-ca</span> us-east-1-bundle.pem \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync — the same CA flag, plus a stream id:</p>
+<pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'admin:pass@tcp(mydb.abc123.us-east-1.rds.amazonaws.com:3306)/app' \
     <span class="f">--source-tls-ca</span> us-east-1-bundle.pem \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \

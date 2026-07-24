@@ -48,6 +48,13 @@
 
 <h2 id="tls">TLS: the best story in the series <a class="hlink" href="#tls" aria-label="Permalink to this section">#</a></h2>
 <p>TLS is mandatory (plaintext refused at pg_hba) and the certificate chain is <strong>public</strong> (Microsoft/DigiCert roots). So <code>sslmode=verify-full</code> works with <strong>no CA download and no <code>sslrootcert</code></strong> — use it on every Azure DSN; it is both the strictest and the zero-config mode (better than the per-instance-CA fetch that DigitalOcean, Cloud SQL, and Vultr require). If a client stack with its own bundled CA fails verification, it's missing an OS trust store, not an Azure quirk.</p>
+<p>One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no WAL, so it works before the REPLICATION flip above:</p>
+<pre><code><span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> postgres \
+    <span class="f">--source</span> 'postgres://myadmin:pass@myserver.postgres.database.azure.com:5432/app?sslmode=verify-full' \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync — the same DSN, plus a stream id:</p>
 <pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> postgres \
     <span class="f">--source</span> 'postgres://myadmin:pass@myserver.postgres.database.azure.com:5432/app?sslmode=verify-full' \

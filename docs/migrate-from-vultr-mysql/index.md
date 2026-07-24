@@ -22,7 +22,17 @@ Treat Vultr MySQL as a migrate-and-cut-over source. Keep the sync stream attache
 
 - Host pattern *.vultrdb.com, on a nonstandard high port. Plaintext is accepted (require_secure_transport=OFF) but the unencrypted-binlog WARN applies. A bare ?tls=true fails — each cluster has a private CA (Aiven &ldquo;Project CA&rdquo;) embedded in the create/GET API response's ca_certificate field. Save it and pass --source-tls-ca (no separate CA-endpoint call, unlike DO):
 
+One-shot copy (dry-run first, then drop the flag) — the shape this platform is best suited to, given the unfixable binlog window above:
+
     # ca_certificate comes back inline in the database create/get API response — save it, then:
+    sluice migrate \
+        --source-driver mysql --source 'vultradmin:pass@tcp(vultr-prod-xxx.vultrdb.com:16751)/defaultdb' \
+        --source-tls-ca vultr-ca.pem \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+Continuous sync — the same CA flag, plus a stream id. Keep it attached and caught up: a pause beyond ~10 minutes cannot be recovered on this platform.
+
     sluice sync start \
         --source-driver mysql --source 'vultradmin:pass@tcp(vultr-prod-xxx.vultrdb.com:16751)/defaultdb' \
         --source-tls-ca vultr-ca.pem \

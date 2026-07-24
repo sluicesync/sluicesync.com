@@ -47,8 +47,15 @@
 <ul>
   <li>Host pattern <code>*.vultrdb.com</code>, on a nonstandard high port. <strong>Plaintext is accepted</strong> (<code>require_secure_transport=OFF</code>) but the unencrypted-binlog WARN applies. A bare <code>?tls=true</code> fails — each cluster has a private CA (Aiven &ldquo;Project CA&rdquo;) embedded in the create/GET API response's <code>ca_certificate</code> field. Save it and pass <code>--source-tls-ca</code> (no separate CA-endpoint call, unlike DO):</li>
 </ul>
+<p>One-shot copy (dry-run first, then drop the flag) — the shape this platform is best suited to, given the unfixable binlog window above:</p>
 <pre><code><span class="c"># ca_certificate comes back inline in the database create/get API response — save it, then:</span>
-<span class="k">sluice</span> sync start \
+<span class="k">sluice</span> migrate \
+    <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'vultradmin:pass@tcp(vultr-prod-xxx.vultrdb.com:16751)/defaultdb' \
+    <span class="f">--source-tls-ca</span> vultr-ca.pem \
+    <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+    <span class="f">--dry-run</span></code></pre>
+<p>Continuous sync — the same CA flag, plus a stream id. Keep it attached and caught up: a pause beyond ~10 minutes cannot be recovered on this platform.</p>
+<pre><code><span class="k">sluice</span> sync start \
     <span class="f">--source-driver</span> mysql <span class="f">--source</span> 'vultradmin:pass@tcp(vultr-prod-xxx.vultrdb.com:16751)/defaultdb' \
     <span class="f">--source-tls-ca</span> vultr-ca.pem \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \

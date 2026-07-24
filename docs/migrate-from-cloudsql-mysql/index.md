@@ -56,6 +56,16 @@ Defaults accept plaintext (sslMode: ALLOW_UNENCRYPTED_AND_ENCRYPTED) — a plain
 
     gcloud sql instances describe my-instance --format='value(serverCaCert.cert)' > cloudsql-ca.pem
 
+One-shot copy (dry-run first, then drop the flag):
+
+    sluice migrate \
+        --source-driver mysql --source 'root:pass@tcp(34.148.x.y:3306)/app' \
+        --source-tls-ca cloudsql-ca.pem \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+Continuous sync — the same CA flag, plus a stream id:
+
     sluice sync start \
         --source-driver mysql --source 'root:pass@tcp(34.148.x.y:3306)/app' \
         --source-tls-ca cloudsql-ca.pem \

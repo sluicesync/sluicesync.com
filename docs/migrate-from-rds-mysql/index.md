@@ -51,6 +51,16 @@ RDS defaults allow plaintext (require_secure_transport=OFF), and a bare ?tls=tru
 
     curl -sO https://truststore.pki.rds.amazonaws.com/us-east-1/us-east-1-bundle.pem
 
+One-shot copy (dry-run first, then drop the flag):
+
+    sluice migrate \
+        --source-driver mysql --source 'admin:pass@tcp(mydb.abc123.us-east-1.rds.amazonaws.com:3306)/app' \
+        --source-tls-ca us-east-1-bundle.pem \
+        --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
+        --dry-run
+
+Continuous sync — the same CA flag, plus a stream id:
+
     sluice sync start \
         --source-driver mysql --source 'admin:pass@tcp(mydb.abc123.us-east-1.rds.amazonaws.com:3306)/app' \
         --source-tls-ca us-east-1-bundle.pem \
