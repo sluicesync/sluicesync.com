@@ -278,6 +278,8 @@ const FIELD_NOTES = [
   { slug: "found-false-is-two-facts", date: "2026-07-23", engine: "Cross-cutting", label: "found=false is two different facts", dek: "A sync retry loop chose &ldquo;force a clean re-establishment&rdquo; vs &ldquo;warm resume&rdquo; through a <code>(found bool, err error)</code> read whose error it discarded &mdash; and both engines return <code>found=false</code> when the read <em>fails</em>, so &ldquo;the target is down and I could not read the anchor row&rdquo; was indistinguishable from &ldquo;no anchor row exists,&rdquo; and the destructive branch latched. The kicker: a pure reliability improvement made it reachable, by keeping the process alive through the outage window a terminal exit had always masked." },
   { slug: "publication-names-downcase", date: "2026-07-23", engine: "Postgres", label: "Quoted CREATE PUBLICATION preserves case; START_REPLICATION downcases it", dek: "Quoted DDL preserves case &mdash; but the name you pass to <code>START_REPLICATION</code>'s <code>publication_names</code> option is parsed as an <em>unquoted</em> identifier list and folded to lowercase, so pgoutput looks up <code>sluice_mypub</code>, which doesn't exist. Nothing checks at stream start: the slot creates, the whole bulk copy runs green, the stream stays healthy while the source is idle &mdash; and the 42704 fires only inside the first change callback, arbitrarily delayed, or never on a quiet source. Validate replication-object names to <code>^[a-z0-9_]+$</code> (&le;63 bytes) before creating them." },
   { slug: "binlog-format-statement-green-stream", date: "2026-07-24", engine: "MySQL & MariaDB", label: "The CDC stream that reports green and applies nothing", dek: "Everyone &ldquo;knows&rdquo; row-based CDC needs <code>binlog_format=ROW</code> &mdash; the surprise is what a non-ROW source looks like from the consumer's side: nothing. A STATEMENT-format source cold-copies clean, then every change arrives as a QueryEvent the row dispatcher ignores &mdash; the target freezes at the snapshot, the position never advances past the cold-start anchor, the stream runs green, and shutdown exits nil. MIXED is the same class &mdash; and MIXED is MariaDB's platform default, so an un-tuned MariaDB source hits this out of the box." },
+  { slug: "unique-semantics-dropped", date: "2026-07-24", engine: "Postgres", label: "Your UNIQUE constraint survived the migration; its semantics didn't", dek: "<code>NULLS NOT DISTINCT</code>, <code>DEFERRABLE</code>, and <code>WITHOUT OVERLAPS</code> all land on the target as a plain <code>UNIQUE</code> &mdash; <em>including Postgres&rarr;Postgres</em>. Same name, same columns, and it quietly accepts rows the source would have rejected. Plus two catalog surprises: <code>NULLS NOT DISTINCT</code> isn't on <code>pg_constraint</code>, and <code>WITHOUT OVERLAPS</code> is PG&nbsp;18, not 17." },
+  { slug: "warning-erased-by-next-statement", date: "2026-07-24", engine: "MySQL &amp; Vitess", label: "Your own next statement erases the warning", dek: "Under a relaxed <code>sql_mode</code>, MySQL coerces <code>300</code> into a <code>TINYINT</code> as <code>127</code> and tells you once &mdash; on the session diagnostics area, which the <em>next</em> statement clears. For a CDC applier whose position write shares the batch transaction, the statement that makes the batch durable is the statement that destroys the proof it was coerced." },
   { slug: "position-store-is-the-target", date: "2026-07-24", engine: "Cross-cutting", label: "The retry budget whose only proof of progress lived in the database that was down", dek: "sluice persists its CDC apply position in a control table on the target &mdash; the standard exactly-once move, since the position write rides the batch transaction. But the retry budget's only reset path was a successful position read against that same target, so when the store <em>was</em> the outage, progress between outages was never credited: the second target outage of a stream's lifetime exited &ldquo;budget exhausted&rdquo; on its first failures despite hours of verified progress in between. Progress evidence must be gathered where the outage can't reach it &mdash; in memory, while healthy." },
 ];
 
@@ -10109,6 +10111,8 @@ target outage, then TARGET outage   -> never resets
 <h2 id="the-fix">Gather the evidence where the outage can't reach it</h2>
 <p>The fix is an in-memory progress ledger, gathered <em>while healthy</em>, under the same discipline as <a href="/field-notes/found-false-is-two-facts/">the found=false note</a>: a failed read is never evidence, in either direction. While each retry attempt flows, a bounded sentinel polls the persisted position on a 5-second cadence and records the latest successful observation; a counted failure is credited with a fresh budget only when some successful, anchor-bearing read showed the token moved since the token recorded at the previous counted failure &mdash; which, because the position rides the batch transaction, proves durable commits happened in between. The loud-failure floor survives intact: a genuinely stuck batch (reads succeed, token frozen) and a never-reachable target (no successful reads at all) both still exhaust in exactly the configured attempts.</p>
 
+<p class="fn-meta"><strong>Amendment (2026-07-25)</strong> &mdash; the criterion described above is what the fix <em>intended</em>; the first implementation needed one more release to actually have it. In sluice v0.99.292 the ledger's baseline only ever advanced <em>inside</em> a counted-failure iteration, so a Run whose very first outage struck within one sentinel poll of starting never established a valid baseline &mdash; and later evidence then had nothing to compare against, exiting &ldquo;budget exhausted&rdquo; despite verified durable progress in between. The narrow case (a <em>young</em> Run only) was found by the next release's regression cycle and closed in v0.100.0 by two additions in the same evidence-based spirit: <strong>within-iteration advancement</strong> (two successful observations inside one iteration showing different tokens credit a fresh budget with no baseline at all) and <strong>baseline seeding</strong> from the Run's first successful anchor-bearing observation, wherever it occurs. The loud floors are unchanged and still pinned at exactly N. The generalizable half is worth keeping: an evidence rule is only as good as the moments it can <em>collect</em> evidence, and &ldquo;we have no baseline yet&rdquo; is a different state from &ldquo;the baseline shows no progress&rdquo; &mdash; conflating the two is what turned a correct criterion into a wrong verdict.</p>
+
 <h2 id="lesson">The transferable lesson</h2>
 <p>Any system that keeps its progress cursor in the store it retries against has this bug latent &mdash; and the class is common, because co-locating the cursor with the writes is the <em>correct</em> exactly-once design; the mistake is only letting the health machinery inherit the co-location. Proving progress must not require reading the thing whose unavailability you are riding out: gather the evidence in memory while the store is reachable, credit it under the failed-reads-are-not-evidence rule, and let the budget stay the loud floor for the cases where no evidence ever arrives.</p>
 
@@ -10117,6 +10121,100 @@ target outage, then TARGET outage   -> never resets
   <li>sluice v0.99.292: the committed-progress sentinel and in-memory ledger (<code>internal/pipeline/streamer_retry.go</code>), RED-before-GREEN against the carryover repro (the pin fails with the exact <code>budget exhausted &hellip; at position ""</code> shape when the credit is absent); the two-outage repro script and the source-vs-target order differential, byte-identical pre-fix on v0.99.290.</li>
   <li>sluice ADR-0007 &mdash; the position write riding the apply batch's transaction (why a moved token is proof of durable commits).</li>
   <li>Related field notes &mdash; <a href="/field-notes/found-false-is-two-facts/">found=false is two different facts</a> (the sibling: the same discipline applied to a destructive latch, one seam over) and <a href="/field-notes/retry-loops-reconnect-blind-spot/">your retry loop's blind spot is its own reconnect</a> (the ride-out arc whose promise this defect quietly halved).</li>
+</ul>
+`,
+  })
+);
+
+
+write(
+  "field-notes/unique-semantics-dropped",
+  page({
+    slug: "field-notes/unique-semantics-dropped",
+    title: "Your UNIQUE constraint survived the migration; its semantics didn't",
+    subtitle: "NULLS NOT DISTINCT, DEFERRABLE, and WITHOUT OVERLAPS all land on the target as a plain UNIQUE — including Postgres→Postgres. The constraint has the right name and the right columns, and quietly accepts rows the source would have rejected.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; Postgres source, every sluice target including same-engine Postgres. A read-time WARN shipped in sluice v0.100.0; the weakening itself is real, and faithful carry remains an open follow-up.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A <code>UNIQUE</code> constraint is not one thing. Postgres lets it carry three attributes that change <em>what it actually rejects</em>: <code>NULLS NOT DISTINCT</code> (PG&nbsp;15+), <code>DEFERRABLE</code>, and <code>WITHOUT OVERLAPS</code> (PG&nbsp;18+). Every migration target was landing all three as a plain <code>UNIQUE</code> &mdash; and the surprising part is that this includes <strong>Postgres&nbsp;&rarr;&nbsp;Postgres</strong>, the direction people reasonably assume is lossless.</p>
+<p>Nothing errors. The constraint exists on the target, with the same name and the same columns. It simply admits data the source would have refused.</p>
+
+<h2 id="what-the-target-accepts">What the target now accepts</h2>
+<ul>
+  <li><strong><code>NULLS NOT DISTINCT</code></strong> &mdash; the default <code>UNIQUE</code> treats every NULL as distinct from every other, so a nullable unique column accepts unlimited NULL rows. A source declared <code>NULLS NOT DISTINCT</code> rejects the <em>second</em> row with a NULL in the key. Drop the attribute and the target happily stores both &mdash; the uniqueness invariant now has a hole exactly where the data is missing.</li>
+  <li><strong><code>DEFERRABLE</code></strong> &mdash; a deferred constraint is checked at COMMIT, which is what makes &ldquo;swap two rows' unique values in one transaction&rdquo; legal: the intermediate state violates uniqueness and is repaired before commit. Land it as immediate and those transactions start failing at the <em>statement</em>. This one fails loudly rather than silently &mdash; but it fails in the application, after cutover, on a workload that worked yesterday.</li>
+  <li><strong><code>WITHOUT OVERLAPS</code></strong> &mdash; a temporal key whose last column is a range, rejecting rows whose periods <em>overlap</em> rather than merely rows that are equal. Drop it and equality checking is all that is left: two reservations for the same room with overlapping (but not identical) date ranges both land.</li>
+</ul>
+<p>All three share the shape that makes constraint differences dangerous: the target is <em>strictly more permissive</em> than the source, so nothing breaks at migration time. It breaks later, when data the source's schema made impossible finally arrives.</p>
+
+<h2 id="catalog">Two catalog surprises worth the detour</h2>
+<p><strong><code>NULLS NOT DISTINCT</code> is not on <code>pg_constraint</code>.</strong> Its two siblings are &mdash; <code>condeferrable</code> and <code>conperiod</code> &mdash; so the natural assumption is a <code>connullsnotdistinct</code> column beside them. There isn't one. The flag lives on the <em>index</em>, as <code>pg_index.indnullsnotdistinct</code>, because that is where the null-handling behavior is implemented. Assuming the symmetry produces a <code>42703 column does not exist</code> against a real PG&nbsp;16 &mdash; which is the good outcome; the bad one is a version gate that silently never fires.</p>
+<pre><code>${esc(`-- the two that ARE on pg_constraint
+SELECT conname, condeferrable, conperiod FROM pg_constraint WHERE contype = 'u';
+
+-- the one that is NOT — it lives on the index
+SELECT c.conname, i.indnullsnotdistinct
+FROM   pg_constraint c
+JOIN   pg_index i ON i.indexrelid = c.conindid
+WHERE  c.contype = 'u';`)}</code></pre>
+<p><strong><code>WITHOUT OVERLAPS</code> is PG&nbsp;18, not PG&nbsp;17.</strong> Temporal constraints landed in the PG&nbsp;17 development tree and were <em>reverted before GA</em>. Plenty of secondary material still describes them as a 17 feature. Version-gate <code>conperiod</code> at 17 and you read a column that isn't there on every real PG&nbsp;17 server.</p>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The Postgres schema reader now reads all three attributes &mdash; version-gated so pre-15 and pre-18 servers never hit a <code>42703</code> &mdash; carries them as metadata on its internal index representation, and emits one WARN per affected constraint at schema-read time, naming the attribute, the weaker landing, and a recreate-on-target hint. It is a WARN, not a refusal: the migration completes and the operator decides.</p>
+<p>One residual is worth stating plainly, because a note that only advertises the fix is not much use: the WARN is gated on the attribute being <em>constraint-backed</em>. A plain <code>CREATE UNIQUE INDEX &hellip; NULLS NOT DISTINCT</code> &mdash; an index, not a constraint &mdash; is still weakened silently. If you use that form, check it by hand.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>When you copy a schema, ask not &ldquo;does the constraint exist on the target&rdquo; but &ldquo;does it reject the same rows.&rdquo; Name and column list are the easy part, and the part every tool gets right; the modifiers that change the predicate live in catalog columns you have to go looking for &mdash; sometimes on a different catalog than the constraint itself. And the direction you trust most deserves the check most: same-engine migrations are where nobody thinks to look, precisely because both sides speak the same dialect.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Postgres <a href="https://www.postgresql.org/docs/current/sql-createtable.html">CREATE TABLE</a> &mdash; <code>UNIQUE NULLS NOT DISTINCT</code>, <code>DEFERRABLE</code>, and the temporal <code>WITHOUT OVERLAPS</code> form.</li>
+  <li>Postgres <a href="https://www.postgresql.org/docs/current/catalog-pg-index.html">pg_index</a> (<code>indnullsnotdistinct</code>) and <a href="https://www.postgresql.org/docs/current/catalog-pg-constraint.html">pg_constraint</a> (<code>condeferrable</code>, <code>conperiod</code>) &mdash; the asymmetry above.</li>
+  <li>Related field note &mdash; <a href="/field-notes/cdc-carries-no-default/">the replication stream never tells you the column default</a>, the same class one layer down: schema metadata a transport declines to carry.</li>
+</ul>
+`,
+  })
+);
+
+write(
+  "field-notes/warning-erased-by-next-statement",
+  page({
+    slug: "field-notes/warning-erased-by-next-statement",
+    title: "Your own next statement erases the warning",
+    subtitle: "Under a relaxed sql_mode MySQL coerces 300 into a TINYINT as 127 and tells you exactly once — on the session diagnostics area, which the next statement clears. For a CDC applier whose position write shares the batch transaction, the statement that makes the batch durable is the statement that destroys the evidence.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; MySQL-family target under an explicit relaxed-<code>sql_mode</code> opt-in. A CDC-apply-path probe shipped in sluice v0.100.0. Strict mode &mdash; the default &mdash; still refuses the value loudly at the statement; this path is reachable only when an operator asks for it.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>Relaxing <code>sql_mode</code> is the standard move for getting a stubborn legacy import to finish. What it actually does is convert a class of <em>loud refusals</em> into <em>silent coercions</em>. <code>300</code> into a <code>TINYINT</code> becomes <code>127</code>. An over-long string becomes a truncated one. The statement succeeds, the row count is right, and the value is wrong.</p>
+<p>MySQL does tell you. It raises a warning &mdash; once &mdash; into the session's diagnostics area, readable with <code>SHOW WARNINGS</code>. And the diagnostics area is <strong>per-statement</strong>: the very next statement on that connection clears it.</p>
+
+<h2 id="why">Why that is a design constraint, not a detail</h2>
+<p>For a CDC applier this is sharper than it first looks, because of where the applier's own bookkeeping lives. sluice persists its apply position in a control table on the target, and that position write rides the <em>same transaction</em> as the batch it describes &mdash; that co-location is what makes the apply exactly-once (see <a href="/field-notes/position-store-is-the-target/">the position-store note</a> for the same design biting differently).</p>
+<p>So the sequence inside one transaction is: write the rows, write the position, commit. Which means <strong>the statement that makes the batch durable is the statement that erases the proof the batch was coerced.</strong> By the time anything downstream could ask &ldquo;did that apply cleanly?&rdquo;, the answer has already been overwritten by the applier's own housekeeping.</p>
+<p>There is no after-the-fact recovery. You cannot ask the server later, and you cannot reconstruct it from the row, because a coerced <code>127</code> is indistinguishable from a value that was always <code>127</code>. The probe has to sit at the write call sites, on the same connection and the same transaction, immediately after each value-writing statement &mdash; or the evidence is already gone.</p>
+<pre><code>${esc(`-- relaxed session
+SET sql_mode = '';
+INSERT INTO t (small) VALUES (300);       -- succeeds; stores 127
+SHOW WARNINGS;                            -- 1 row: "Out of range value ..."
+
+-- but insert ANY statement between the two and the evidence is gone:
+INSERT INTO t (small) VALUES (300);
+UPDATE sluice_cdc_state SET pos = '...';  -- the applier's own position write
+SHOW WARNINGS;                            -- Empty set. The clamp is unrecoverable.`)}</code></pre>
+
+<h2 id="what-sluice-does">What sluice does about it</h2>
+<p>The apply path now probes for clamp warnings on the same transaction, immediately after each value-writing statement &mdash; the serial single-row write and the coalesced multi-row upsert both &mdash; and WARNs naming the table and column. The cost shape falls out of the same per-statement fact: a <strong>strict</strong> session short-circuits before any round trip, so the default path pays exactly zero added latency, and a table that has already warned never probes again. <code>DELETE</code> and <code>TRUNCATE</code> write no operator values and are not probed.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>A diagnostic scoped to &ldquo;the last statement&rdquo; can only be collected synchronously, at the seam that produced it. That sounds obvious stated plainly, and it is routinely violated by accident, because the layers that insert a statement between your write and your read are exactly the ones you stop thinking about: a position or checkpoint write, a savepoint, a metrics or heartbeat query, a connection-pool reset probe, an ORM's post-write refetch. Any of them is a silent evidence destroyer. If your system relies on a per-statement diagnostic, audit what runs between the write and the read &mdash; and be most suspicious of your own bookkeeping, which is the one thing guaranteed to run on that connection.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>MySQL <a href="https://dev.mysql.com/doc/refman/8.0/en/show-warnings.html">SHOW WARNINGS</a> &mdash; the diagnostics area and its per-statement lifetime.</li>
+  <li>MySQL <a href="https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html">Server SQL Modes</a> &mdash; what strict mode refuses and what a relaxed mode coerces instead.</li>
+  <li>Related field note &mdash; <a href="/field-notes/redact-two-engines/">one redaction flag, two engines, two behaviors</a>, where the same MySQL clamp turned an anonymization rule into a constant.</li>
 </ul>
 `,
   })
