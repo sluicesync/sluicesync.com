@@ -281,6 +281,9 @@ const FIELD_NOTES = [
   { slug: "unique-semantics-dropped", date: "2026-07-24", engine: "Postgres", label: "Your UNIQUE constraint survived the migration; its semantics didn't", dek: "<code>NULLS NOT DISTINCT</code>, <code>DEFERRABLE</code>, and <code>WITHOUT OVERLAPS</code> all land on the target as a plain <code>UNIQUE</code> &mdash; <em>including Postgres&rarr;Postgres</em>. Same name, same columns, and it quietly accepts rows the source would have rejected. Plus two catalog surprises: <code>NULLS NOT DISTINCT</code> isn't on <code>pg_constraint</code>, and <code>WITHOUT OVERLAPS</code> is PG&nbsp;18, not 17." },
   { slug: "warning-erased-by-next-statement", date: "2026-07-24", engine: "MySQL &amp; Vitess", label: "Your own next statement erases the warning", dek: "Under a relaxed <code>sql_mode</code>, MySQL coerces <code>300</code> into a <code>TINYINT</code> as <code>127</code> and tells you once &mdash; on the session diagnostics area, which the <em>next</em> statement clears. For a CDC applier whose position write shares the batch transaction, the statement that makes the batch durable is the statement that destroys the proof it was coerced." },
   { slug: "position-store-is-the-target", date: "2026-07-24", engine: "Cross-cutting", label: "The retry budget whose only proof of progress lived in the database that was down", dek: "sluice persists its CDC apply position in a control table on the target &mdash; the standard exactly-once move, since the position write rides the batch transaction. But the retry budget's only reset path was a successful position read against that same target, so when the store <em>was</em> the outage, progress between outages was never credited: the second target outage of a stream's lifetime exited &ldquo;budget exhausted&rdquo; on its first failures despite hours of verified progress in between. Progress evidence must be gathered where the outage can't reach it &mdash; in memory, while healthy." },
+  { slug: "goaway-said-reconnect", date: "2026-07-26", engine: "MySQL &amp; Vitess", label: "The transport said &ldquo;please reconnect&rdquo;; the driver reported &ldquo;your request is malformed&rdquo;", dek: "HTTP/2's polite drain &mdash; <code>GOAWAY</code> with <code>ErrCode=NO_ERROR</code> &mdash; arrives through gRPC as <code>codes.InvalidArgument</code>, because the code describes the envelope-parse failure rather than your request. A classifier that correctly treats <code>InvalidArgument</code> as terminal therefore kills an unattended stream on routine platform maintenance." },
+  { slug: "alerts-that-could-never-fire", date: "2026-07-26", engine: "Postgres", label: "Three alerts that could never fire, and nobody noticed because no wrong number was ever reported", dek: "A per-pod metric fan where Postgres carries only <code>planetscale_role</code> &mdash; no <code>tablet_type</code>, no <code>container</code> &mdash; so the selection cascade honestly refused, and a storage alert sat permanently inert. Replica lag was worse: <em>neither</em> engine emits a primary series, because a primary has no lag." },
+  { slug: "free-usage-is-invisible", date: "2026-07-26", engine: "Cross-cutting", label: "Your usage is invisible in the API for exactly as long as it's free", dek: "The billing API omits every <code>$0.00</code> line item, so a metered-but-unbilled resource returns nothing &mdash; and the metrics endpoint's per-pod counters rotate away underneath you, where the textbook <code>increase()</code> rule reads routine backend skew as counter resets and over-counts by 2.2&times;." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -10215,6 +10218,165 @@ SHOW WARNINGS;                            -- Empty set. The clamp is unrecoverab
   <li>MySQL <a href="https://dev.mysql.com/doc/refman/8.0/en/show-warnings.html">SHOW WARNINGS</a> &mdash; the diagnostics area and its per-statement lifetime.</li>
   <li>MySQL <a href="https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html">Server SQL Modes</a> &mdash; what strict mode refuses and what a relaxed mode coerces instead.</li>
   <li>Related field note &mdash; <a href="/field-notes/redact-two-engines/">one redaction flag, two engines, two behaviors</a>, where the same MySQL clamp turned an anonymization rule into a constant.</li>
+</ul>
+`,
+  })
+);
+
+
+write(
+  "field-notes/goaway-said-reconnect",
+  page({
+    slug: "field-notes/goaway-said-reconnect",
+    title: "The transport said “please reconnect”; the driver reported “your request is malformed”",
+    subtitle: "HTTP/2's polite drain arrives through gRPC as InvalidArgument, because the status code describes the envelope-parse failure rather than your request. A classifier that correctly treats InvalidArgument as terminal therefore kills an unattended stream on routine platform maintenance.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; a PlanetScale/Vitess CDC stream against a managed source. Fixed in sluice v0.101.0; loud and zero-loss, but the stream stayed down until a human restarted it.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A continuous replication stream exited on its own, cleanly, with this:</p>
+<pre><code>${esc(`rpc error: code = InvalidArgument desc = protocol error: incomplete envelope:
+http2: server sent GOAWAY and closed the connection;
+LastStreamID=1, ErrCode=NO_ERROR, debug="graceful_stop"`)}</code></pre>
+<p>Nothing was wrong. An edge pod was being rotated &mdash; ordinary platform maintenance &mdash; and the server did precisely what the protocol says it should: it sent a <code>GOAWAY</code> frame carrying <strong><code>NO_ERROR</code></strong>, which is HTTP/2's way of saying &ldquo;this connection is going away; open a new one.&rdquo; It is the politest thing a server can do before disappearing.</p>
+
+<h2 id="why">Why a correct classifier gets this wrong</h2>
+<p>The trouble is where that message surfaces. gRPC hands it up as <code>codes.InvalidArgument</code> &mdash; and <code>InvalidArgument</code> means, in every sane reading, <em>the caller sent something wrong</em>. Retrying a malformed request unchanged is the textbook thing you must not do: it burns the retry budget and masks a real fault. So a careful client treats <code>InvalidArgument</code> as terminal, and that rule is right.</p>
+<p>The rule is right and the outcome is still wrong, because <strong>the status code is describing a different subject than you think</strong>. It is not classifying the operator's request; it is classifying the <em>envelope parse</em> that failed when the connection went away mid-frame. The transport's &ldquo;please reconnect&rdquo; has been re-labelled, by the layer in between, as the application's &ldquo;you asked wrongly.&rdquo;</p>
+<p>That is the transferable shape, and it is not specific to gRPC or HTTP/2: <strong>when a lower layer's condition is reported through a higher layer's vocabulary, the code you switch on may be answering a question you did not ask.</strong> Any place you map a transport event onto an application-level taxonomy, some conditions arrive wearing the wrong label.</p>
+
+<h2 id="the-fix">The fix, and the part that must not be simplified</h2>
+<p>The recovery is trivial &mdash; reconnect &mdash; but the <em>detection</em> has one trap worth stating plainly. It is tempting to match on the word <code>GOAWAY</code>. Do not. A <code>GOAWAY</code> is only benign when its error code is benign:</p>
+<pre><code>${esc(`ErrCode=NO_ERROR            → graceful drain; reconnect (retriable)
+ErrCode=PROTOCOL_ERROR      → the peer rejects how you are speaking
+ErrCode=ENHANCE_YOUR_CALM   → you are being throttled off
+ErrCode=INADEQUATE_SECURITY → your TLS posture was refused`)}</code></pre>
+<p>Those last three are the peer telling you that reconnecting <em>identically</em> will fail identically. So the predicate has to be a <strong>conjunction</strong> &mdash; a GOAWAY <em>and</em> a no-error code &mdash; which is precisely what a plain substring match cannot express. Implementations also attach a free-text debug field (vtgate sends <code>debug="graceful_stop"</code>); that is corroborating only, and must not be load-bearing, because it is a peer-chosen string that can change without notice while the standards-defined error code cannot.</p>
+<p>One further sharp edge: the same drain reaches more than one call site. In a Vitess deployment it hits the replication reader directly, and it <em>also</em> arrives on the write path wrapped inside a MySQL <code>Error 1105</code>, because vtgate packages the upstream gRPC status into a MySQL error for its clients. Fixing the reader alone leaves the writer exposed to the identical event.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>If you operate against a managed platform, its pods rotate; that is not an incident, it is Tuesday. Any long-lived connection you hold will be drained, politely, on someone else's schedule. Ask what your client does with that drain &mdash; and specifically, ask whether the status code you branch on is describing your request or describing the plumbing. A continuous process that stops on routine maintenance is not continuous, and the failure looks like a clean exit rather than a crash, so nothing pages anyone.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>RFC 9113 &sect;6.8 &mdash; <a href="https://www.rfc-editor.org/rfc/rfc9113.html#name-goaway">GOAWAY</a>, and &sect;7 <a href="https://www.rfc-editor.org/rfc/rfc9113.html#name-error-codes">error codes</a> (<code>NO_ERROR</code> = 0x00).</li>
+  <li>gRPC <a href="https://grpc.github.io/grpc/core/md_doc_statuscodes.html">status code definitions</a> &mdash; what <code>INVALID_ARGUMENT</code> is meant to signify.</li>
+  <li>Related field note &mdash; <a href="/field-notes/retry-loops-reconnect-blind-spot/">your retry loop's blind spot is its own reconnect</a>.</li>
+</ul>
+`,
+  })
+);
+
+write(
+  "field-notes/alerts-that-could-never-fire",
+  page({
+    slug: "field-notes/alerts-that-could-never-fire",
+    title: "Three alerts that could never fire, and nobody noticed because no wrong number was ever reported",
+    subtitle: "A metric fanned across pods, a selection cascade that honestly refused to guess, and three thresholds that sat silent for months. Honest-but-silent degradation is harder to catch than a wrong value, because everything downstream looks exactly like healthy.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; PlanetScale control-plane metrics consumed for target-health alerting. Three separate signals, one shared root cause. Fixed in sluice v0.101.0.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>A storage-utilisation alert had never fired against a Postgres target. Not &ldquo;fired late&rdquo; or &ldquo;fired wrongly&rdquo; &mdash; <em>never</em>, since the day it shipped. The same was true of a replica-lag alert, on both engines. And nobody noticed, for the most uncomfortable reason available: <strong>at no point was a wrong number ever reported.</strong> The code was scrupulously honest. It simply said &ldquo;I cannot observe this&rdquo; and moved on, and an unobserved metric produces no alert, no error, and no log line anyone reads twice.</p>
+
+<h2 id="why">Why the cascade refused</h2>
+<p>Control-plane metrics for a clustered database are emitted <em>per pod</em>, so a client wanting &ldquo;the write target's disk usage&rdquo; has to pick one series out of several. The obvious way is a cascade of increasingly loose matches, ending in a deliberate refusal:</p>
+<pre><code>${esc(`0. exact container match      → take it
+1. tablet_type=primary AND
+   component=vttablet          → take it
+2. any tablet_type=primary     → take it
+3. exactly one series          → take it
+4. several, none identifiable  → REFUSE (report "unobserved")`)}</code></pre>
+<p>Tier 4 is the right instinct: with three indistinguishable pods, guessing gives you a number that is wrong two-thirds of the time, and a wrong disk-usage figure is worse than none. But look at what the Postgres volume metric actually carries:</p>
+<pre><code>${esc(`planetscale_volume_available_bytes{
+  planetscale_component="hzinstance",
+  planetscale_pod="hzi-…-useast1c-…",
+  planetscale_role="primary"          ← the only discriminator
+} 10133684224`)}</code></pre>
+<p>No <code>tablet_type</code>. No <code>container</code>. Only <code>planetscale_role</code> &mdash; which nothing in the cascade read. Three pods, no recognised discriminator, straight to tier 4, forever. The escape hatch that existed for Postgres (<em>match the container name</em>) had been added for CPU and memory, which <em>are</em> emitted per container; the volume pair is emitted per <em>pod</em> and never carried that label at all. The rescue was one metric family short of the metric that needed rescuing.</p>
+
+<h2 id="lag">Replica lag: a category error, not a label mismatch</h2>
+<p>Lag failed for a different and more instructive reason. The same primary-selection was applied &mdash; and <strong>no primary series exists, on either engine</strong>. Obvious in hindsight: <em>a primary has no replication lag.</em> Every lag series is tagged <code>replica</code>, so primary-selection searched for something that cannot exist, found nothing, and refused. Any branch with two or more replicas therefore had lag permanently unobserved.</p>
+<p>The right reduction was never &ldquo;pick the primary&rdquo; but &ldquo;take the worst&rdquo; &mdash; an alert cares about the furthest-behind replica &mdash; and on a single-replica branch that degenerates to the same value, which is why nothing looked broken in small deployments.</p>
+
+<h2 id="worst-pod">And the primary was the wrong pod to watch anyway</h2>
+<p>Fixing the selector surfaced a third problem. With the primary now readable, the replicas turned out to be <em>consistently fuller</em>:</p>
+<pre><code>${esc(`role=primary   cell=useast1c   available 10,133,684,224   (5.62% used)
+role=replica   cell=useast1a   available 10,100,211,712   (5.93% used)
+role=replica   cell=useast1b   available 10,100,211,712   (5.93% used)`)}</code></pre>
+<p>A storage alert exists to fire before a volume fills. The pod that fills first is the one to watch, and it is not reliably the primary &mdash; so &ldquo;correctly read the primary&rdquo; would still have been the wrong question. The answer is two signals, not one: the primary's figure, because that is the volume your own writes consume and therefore what write-rate throttling should act on; and the fullest pod's, because that is what an alert should watch. Merging them would silently change the meaning of every historical sample already stored.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>&ldquo;Unobserved&rdquo; is the correct behaviour and a terrible end state. A system that refuses to guess is right to refuse, but refusal is <em>indistinguishable from healthy</em> at every layer above it: no alert, no error, no anomalous value on a dashboard. If you have a threshold that has never fired, that is not evidence it never needed to &mdash; go and prove the metric behind it is actually being read. And when you consume a metric fanned across replicas, decide deliberately which reduction the question wants: the primary, the worst, or the sum. Each is right for a different question, and picking by habit is how you end up correctly reading the wrong pod.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>PlanetScale <a href="https://planetscale.com/docs/vitess/integrations/prometheus-metrics">Prometheus metrics</a> (Vitess) and <a href="https://planetscale.com/docs/postgres/monitoring/prometheus-metrics-postgres">for Postgres</a> &mdash; the per-pod label shapes above.</li>
+  <li>Related field note &mdash; <a href="/field-notes/found-false-is-two-facts/">found=false is two different facts</a>, the same honesty problem one layer down.</li>
+</ul>
+`,
+  })
+);
+
+write(
+  "field-notes/free-usage-is-invisible",
+  page({
+    slug: "field-notes/free-usage-is-invisible",
+    title: "Your usage is invisible in the API for exactly as long as it's free",
+    subtitle: "The billing API omits every $0.00 line item, so a metered-but-unbilled resource returns nothing at all. The metrics endpoint can measure it — but its counters live on pods that rotate away, and the textbook increase() rule reads routine backend skew as counter resets and over-counts by 2.2×.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; PlanetScale Postgres egress, measured against billing over three invoice snapshots and ~34 hours of one-minute polling (8,024 samples across four databases). Investigation, not a defect report: no product change resulted, but three wrong conclusions did, in sequence.</p>
+
+<h2 id="the-question">The question</h2>
+<p>How much data is leaving this database? It sounds like a question with an answer, and the platform exposes two places to look: a billing API with invoice line items, and a Prometheus metrics endpoint with byte counters. Both of them mislead, in different and instructive ways.</p>
+
+<h2 id="the-invoice">The invoice API omits what it does not charge for</h2>
+<p>The invoice line items came back with compute and storage, and <strong>no egress row at all</strong>. The obvious inference &mdash; egress is not billed here &mdash; is wrong, and the way it is wrong is worth internalising.</p>
+<p>Comparing the API's response against a CSV export of the <em>same</em> invoice, joined on line-item ID, gives an unambiguous rule:</p>
+<pre><code>${esc(`CSV export       532 line items
+JSON API         225 line items
+missing          307  — of which $0.00: 307  (100%)
+returned         225  — of which $0.00:   0  (0%)`)}</code></pre>
+<p>The API omits <strong>every zero-cost line item</strong>. Egress on this account is metered at a rate of <code>$0.00 per 1 GB</code>, so its rows &mdash; carrying real, non-zero <em>quantities</em> &mdash; are dropped for having a zero <em>price</em>. The categories that vanish are precisely the usage-based ones: storage-per-byte, IOPS, throughput, development-branch seconds, and egress.</p>
+<p>So the resource is measured, the measurement is retrievable by a human via CSV export, and the API will not return it <strong>for exactly as long as it remains free</strong> &mdash; and would silently start appearing the day it became chargeable. Any integration that reads &ldquo;no egress row&rdquo; as &ldquo;no egress&rdquo; is not merely wrong; it is wrong in the direction of confident zero.</p>
+
+<h2 id="the-counters">The metrics endpoint can measure it, if you accumulate correctly</h2>
+<p>The metrics endpoint exposes the bytes directly. Summing the current values, though, gave a figure roughly <strong>70&times; below</strong> the billed quantity &mdash; and the counters looked frozen for an hour at a stretch while the database was demonstrably committing transactions.</p>
+<p>The counters are not broken; they are <em>per edge pod</em>, and the pod fleet rotates. Watching one branch across two hours:</p>
+<pre><code>${esc(`series count      8  →  6      (two connectors vanished, one appeared)
+surviving pod  2,156 → 90,445   (+88,289 — monotonic, as a counter should be)
+SUM           295,608 → 301,327 (+5,719 — because the departed pods
+                                 took 196,379 bytes with them)`)}</code></pre>
+<p>Every individual series is a well-behaved counter: monotonically increasing, reset to zero on restart, exactly as the Prometheus contract specifies. But a <em>point-in-time sum across an ephemeral set</em> is not cumulative anything. Pods that served traffic and then rotated away are simply gone from the total.</p>
+
+<h2 id="the-trap">The trap: the textbook rule over-counts by 2.2&times;</h2>
+<p>The standard fix is per-series accumulation &mdash; what <code>increase()</code> does: track each series, sum its deltas, and treat any decrease as a counter reset by crediting the new value. Over a clean 24-hour window that reconstructed egress to within 39% and 124% of billed &mdash; <em>worse</em> than the naive sum on one database.</p>
+<p>The reason is a detail the contract does not cover. This endpoint's values <strong>dip constantly</strong>: 350 and 1,255 small decreases in that window, with the sample's own embedded timestamp still advancing and several series dipping in the same scrape. That is backend-view skew &mdash; successive scrapes served by replicas with slightly different views &mdash; not a counter restart. A representative event:</p>
+<pre><code>${esc(`901,858 → 900,640     a 0.14% dip
+
+textbook rule: "decrease ⇒ reset" ⇒ credit the ENTIRE 900,640 bytes
+reality:       the true delta was −1,218`)}</code></pre>
+<p>One misread dip injects the whole counter. With a skew-tolerant rule instead &mdash; accumulate against a per-series high-water mark, and treat a decrease as a genuine reset only when it falls below a relative threshold of that mark &mdash; the same data reconstructs to <strong>0.98&times; and 1.09&times;</strong> of billed.</p>
+<pre><code>${esc(`                    billed      textbook increase()   high-water rule
+soak-pg231       0.442 MB/h    0.614  (1.39×)         0.432  (0.98×)
+d1cdc-pg         0.075 MB/h    0.168  (2.24×)         0.082  (1.09×)`)}</code></pre>
+
+<h2 id="open">What is still unexplained &mdash; stated as such</h2>
+<p>One residual has no explanation and should not be dressed up as one. Over an earlier window, the same method reconstructed one database to <strong>1.01&times;</strong> and another to <strong>2.21&times;</strong>. Most of that gap turned out to be an artifact &mdash; the second database's stream was down for 7.5 hours of an 18-hour billing window, so the metrics covered only its active time &mdash; but correcting for the outage still leaves roughly <strong>1.28&times;</strong> unaccounted for, between two databases on the same tier, in the same region, with identical pod counts, over the same window, with no series churn or counter resets on either. That is a question for the vendor, not a settled method.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Three separate lessons fell out of one question, and each one first arrived as a wrong answer:</p>
+<ul>
+  <li><strong>An API that filters by one attribute can hide a different one entirely.</strong> A price filter silently became a quantity filter. Ask what your data source omits, not just what it returns &mdash; and treat &ldquo;no row&rdquo; as <em>unknown</em>, never as <em>zero</em>.</li>
+  <li><strong>Correct counters plus an ephemeral series set do not sum to a cumulative total.</strong> The contract is per series; the fleet is not.</li>
+  <li><strong>The standard accumulation rule assumes decreases are resets.</strong> On an endpoint with backend skew that assumption is expensive, because each misread costs an entire counter rather than a small error.</li>
+</ul>
+<p>The meta-lesson is the one that cost the most: every intermediate conclusion here was internally consistent and confidently held, and each was overturned by a source that was independent of the previous one. If a measurement matters, get a second source before you build on the first &mdash; the CSV export is what falsified the API, and billing is what falsified the metrics.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>Prometheus &mdash; <a href="https://prometheus.io/docs/concepts/metric_types/#counter">counter semantics</a> and <a href="https://prometheus.io/docs/prometheus/latest/querying/functions/#increase">increase()</a>, including its reset handling.</li>
+  <li>PlanetScale <a href="https://planetscale.com/docs/api/reference/get_invoice_line_items">invoice line items API</a> (requires the <code>read_invoices</code> scope) and the <a href="https://planetscale.com/pricing">pricing dimensions</a> that list egress for Postgres.</li>
 </ul>
 `,
   })
