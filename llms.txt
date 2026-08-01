@@ -14,6 +14,7 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 
 - [Migrate MySQL → Postgres](https://sluicesync.com/docs/migrate-mysql-to-postgres/): The flagship first migration: connect, preview the plan, copy the data, and verify it landed.
 - [Preview & validate before you migrate](https://sluicesync.com/docs/preview-and-validate/): See the exact target DDL, steer the type translation, and confirm the copy — without guessing.
+- [Sizing & plan recommendations](https://sluicesync.com/docs/sizing/): What to change as your dataset grows — because past a certain size the limit stops being sluice and starts being the target platform's plan, storage architecture, and per-statement limits.
 - [Verify & reconcile](https://sluicesync.com/docs/verify-reconcile/): Confirm every row landed and no structural drift crept in — then know exactly what to do when it didn't.
 - [Zero-downtime migration (continuous sync)](https://sluicesync.com/docs/zero-downtime-cutover/): Cold-start the data, let CDC catch up while the app keeps writing, then cut over in a brief, controlled window.
 - [Staged (wave) migration](https://sluicesync.com/docs/staged-wave-migration/): Move your biggest or most self-contained tables first, cut them over, then bring the rest across in later waves.
