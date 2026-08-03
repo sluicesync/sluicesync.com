@@ -10762,6 +10762,174 @@ function errorCodeTextDrift(errorCodesMdPath) {
 // fails the build naming both counts, so a release that mints a code, rewords
 // one, or registers an engine can't leave this site silently stale. No sibling
 // checkout (e.g. CI for the site alone) skips with a notice. No new deps.
+// UNDOCUMENTED_FLAGS is the FROZEN debt: flags the binary accepts that the
+// published command reference does not document, measured when this check was
+// introduced. 91 of them.
+//
+// It is a debt list, not an allowlist. Every entry is a flag an operator can
+// pass and cannot look up — including ones other pages already link to
+// (--skip-foreign-keys is referenced by the region-move guide and appears
+// nowhere in the reference).
+//
+// Frozen rather than fixed, deliberately. Failing on all 91 would mean either
+// blocking every site build until they are all written up, or disabling the
+// check — and the second always wins. Freezing means no NEW flag joins the
+// list silently, while the existing debt is explicit, counted, and burnable.
+// Delete a name once its reference row exists; the check then holds that flag
+// documented forever.
+const UNDOCUMENTED_FLAGS = new Set([
+  "--analyze-after",
+  "--apply-delay",
+  "--apply-tune-target-latency",
+  "--auto-prune-change-log",
+  "--auto-prune-interval",
+  "--auto-prune-keep",
+  "--azure-wrap-algorithm",
+  "--backfill-added-column",
+  "--bulk-batch-size",
+  "--chunk-size",
+  "--compaction-pk-strategy",
+  "--control-keyspace",
+  "--copy-table-parallelism",
+  "--diagnose-on-crash-dir",
+  "--diagnose-on-crash-privacy",
+  "--enable-pg-extension",
+  "--encrypt-mode",
+  "--exclude-view",
+  "--fleet",
+  "--fleet-concurrency",
+  "--float-reread-max-rows",
+  "--heartbeat-interval",
+  "--if-exists",
+  "--ignore-charset-collation",
+  "--ignore-extras",
+  "--include-empty",
+  "--include-view",
+  "--index-build-mem",
+  "--keep-duration",
+  "--keep-incrementals",
+  "--keyset-source",
+  "--kms-region",
+  "--log-file",
+  "--log-format",
+  "--max-changes",
+  "--max-memory",
+  "--migration-id",
+  "--mysql-sql-mode",
+  "--no-coordinate-live-ddl",
+  "--no-float-exact-reread",
+  "--no-intra-table-stealing",
+  "--no-progress",
+  "--no-source-heartbeat",
+  "--notify-smtp-auth",
+  "--notify-smtp-from",
+  "--notify-smtp-host",
+  "--notify-smtp-password",
+  "--notify-smtp-port",
+  "--notify-smtp-tls",
+  "--notify-smtp-to",
+  "--notify-smtp-username",
+  "--patroni-mode",
+  "--planetscale-raise-query-timeout",
+  "--pprof-listen",
+  "--privacy",
+  "--raw-copy-format",
+  "--reap-stale-backends",
+  "--rebuild-catalog",
+  "--retain-rotate-at",
+  "--retain-rotate-at-chain-length",
+  "--retry-attempts",
+  "--retry-backoff-base",
+  "--retry-backoff-cap",
+  "--rollover-hook",
+  "--rollover-max-bytes",
+  "--rollover-max-changes",
+  "--rollover-window",
+  "--sequence-margin",
+  "--shard-coordination-lease-duration",
+  "--shard-coordination-renew-deadline",
+  "--shard-coordination-retry-period",
+  "--since",
+  "--sink-file",
+  "--sink-file-max-bytes",
+  "--sink-file-max-files",
+  "--sink-http",
+  "--skip-foreign-keys",
+  "--skip-views",
+  "--smart-compaction",
+  "--smart-compaction-off",
+  "--source-heartbeat-prune-window",
+  "--source-heartbeat-table-name",
+  "--strict-float",
+  "--summary",
+  "--upfront-indexes",
+  "--version",
+  "--vstream-copy-table-parallelism",
+  "--vstream-preserve-skew",
+  "--watch",
+  "--window",
+  "--zero-date",
+]);
+
+// cliFlagDrift compares every flag the sluice binary accepts against the flags
+// the published command reference documents.
+//
+// It exists because the reference had fallen 91 flags behind the binary
+// before anyone noticed, and nothing could have noticed: the reference is
+// hand-written prose and the flags are Go struct fields.
+//
+// Source of truth is docs/dev/cli-flags.txt in the sibling checkout, which
+// sluice generates from KONG OWN MODEL and gates with
+// cmd/sluice/cli_flag_manifest_test.go — so it cannot disagree with what the
+// binary accepts.
+//
+// Only the flag NAME is compared, not its prose. A flag whose description went
+// stale is a different problem, and claiming this catches it would be worse
+// than not claiming it.
+const LF = String.fromCharCode(10);
+
+function cliFlagDrift(manifestPath) {
+  if (!existsSync(manifestPath)) {
+    console.log("drift check: no " + manifestPath + " — CLI flag comparison skipped");
+    return;
+  }
+  const inBinary = new Set();
+  for (const line of readFileSync(manifestPath, "utf8").split(String.fromCharCode(10))) {
+    if (!line.trim() || line.startsWith("#")) continue;
+    const m = line.match(/--([a-z0-9][a-z0-9-]*)$/);
+    if (m) inBinary.add("--" + m[1]);
+  }
+  if (inBinary.size === 0) {
+    console.error("drift check FAILED: " + manifestPath + " yielded no flags — an empty set agrees with any reference");
+    process.exit(1);
+  }
+  const commandsPage = join(ROOT, "docs", "commands", "index.md");
+  if (!existsSync(commandsPage)) {
+    console.error("drift check FAILED: " + commandsPage + " not found — cannot compare CLI flags");
+    process.exit(1);
+  }
+  const documented = new Set(readFileSync(commandsPage, "utf8").match(/--[a-z0-9][a-z0-9-]*/g) || []);
+  const missing = [...inBinary].filter((f) => !documented.has(f) && !UNDOCUMENTED_FLAGS.has(f)).sort();
+  const paid = [...UNDOCUMENTED_FLAGS].filter((f) => documented.has(f) || !inBinary.has(f)).sort();
+  if (missing.length) {
+    console.error(
+      "drift check FAILED: " + missing.length + " CLI flag(s) are accepted by sluice but absent from " +
+      "the command reference:" + LF + "  " + missing.join(LF + "  ") +
+      LF + "Add a row for each to the commands page, or — if one is genuinely internal — add it to " +
+      "UNDOCUMENTED_FLAGS with a reason."
+    );
+    process.exit(1);
+  }
+  if (paid.length) {
+    console.error(
+      "drift check FAILED: " + paid.length + " flag(s) in UNDOCUMENTED_FLAGS are now documented or gone; " +
+      "remove them from that list so the check keeps holding them:" + LF + "  " + paid.join(LF + "  ")
+    );
+    process.exit(1);
+  }
+  console.log("drift check: " + inBinary.size + " CLI flags, " + UNDOCUMENTED_FLAGS.size + " still undocumented (frozen debt)");
+}
+
 function driftCheck() {
   const sluiceRoot = join(ROOT, "..", "sluice");
   const registryPath = join(sluiceRoot, "internal", "sluicecode", "sluicecode.go");
@@ -10769,6 +10937,11 @@ function driftCheck() {
     console.log("drift check: no sibling sluice checkout at " + sluiceRoot + " — skipped");
     return;
   }
+
+  // (d) CLI flags: every flag the binary accepts vs the published command
+  // reference. Runs FIRST so it reports even while (a) is red for unrelated
+  // reasons — a check masked by a neighbour failure is a check nobody sees.
+  cliFlagDrift(join(sluiceRoot, "docs", "dev", "cli-flags.txt"));
 
   // (a) error-code rows vs the registered code constants.
   const registered = (readFileSync(registryPath, "utf8").match(/Code = "SLUICE-E-/g) || []).length;
