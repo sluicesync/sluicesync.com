@@ -4740,6 +4740,8 @@ A PlanetScale database is pinned to its region at creation, and there is no nati
 
 - Throughput is target-tier-CPU-bound. The bulk copy is limited by the target cluster's CPU; scale the tier for a faster copy.
 
+- Large tables — consider --upfront-indexes. By default sluice defers secondary-index creation until after the rows are copied, which is faster overall: building an index once over a finished table beats maintaining it write-by-write. On a large PlanetScale target that default can bite, because the deferred ADD INDEX is a single statement and PlanetScale enforces a statement-time limit — a big enough table can exceed it, and the index build then fails after the copy has already succeeded. --upfront-indexes creates the secondary indexes before the bulk copy and lets the load maintain them, so there is no large post-copy build to time out. It trades a slower copy for removing that failure mode, and it is worth taking on a multi-hundred-GB table, or any table you have previously seen an index build struggle on. Available on both sync start and migrate. If you would rather keep the default and lift the ceiling instead, --planetscale-raise-query-timeout raises the keyspace timeout for the duration of the run and reverts it afterwards — but that is a keyspace-wide change rolled out by a tablet restart, so it affects anyone else on the keyspace.
+
 ## Provision the target & connect
 
 Create the destination database in the new region, sized to match (or exceed) the source. A PS-10 branch takes roughly 7–8 minutes to reach READY:
@@ -4781,6 +4783,8 @@ A continuous sync snapshots and bulk-copies the source, then streams live CDC �
         --source-driver planetscale --source "$SLUICE_SOURCE" \
         --target-driver planetscale --target "$SLUICE_TARGET" \
         --apply-batch-size 50
+
+If any table is large — hundreds of GB, or one you have seen a slow index build on — add --upfront-indexes to that second command. It builds the secondary indexes before the copy instead of after, so a post-copy ADD INDEX cannot run into PlanetScale's statement-time limit once the rows are already in place. See the gotcha above for the trade-off.
 
 Watch it catch up from another shell, and gate cutover on freshness:
 

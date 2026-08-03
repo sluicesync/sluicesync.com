@@ -4304,6 +4304,8 @@ write(
   <li><strong>One run per keyspace.</strong> A PlanetScale database is a single keyspace, and each <code>sync start</code> / <code>migrate</code> moves one source keyspace to one target. To move several databases, run one per database (each with its own <code>--stream-id</code> and target) or supervise them with a <a href="/docs/operate-fleet/">sync fleet config</a> — no single run spans multiple source keyspaces.</li>
   <li><strong>The <code>sync stop --wait</code> drain message.</strong> On VStream teardown, <code>sync stop --wait</code> may print a "did not complete drain within …" timeout even though the stream <em>did</em> drain and exit cleanly. Verify the process actually exited rather than treating that message alone as a failure.</li>
   <li><strong>Throughput is target-tier-CPU-bound.</strong> The bulk copy is limited by the target cluster's CPU; scale the tier for a faster copy.</li>
+
+  <li><strong>Large tables — consider <code>--upfront-indexes</code>.</strong> By default sluice defers secondary-index creation until after the rows are copied, which is faster overall: building an index once over a finished table beats maintaining it write-by-write. On a large PlanetScale target that default can bite, because the deferred <code>ADD INDEX</code> is a single statement and PlanetScale enforces a statement-time limit — a big enough table can exceed it, and the index build then fails <em>after</em> the copy has already succeeded. <code>--upfront-indexes</code> creates the secondary indexes <em>before</em> the bulk copy and lets the load maintain them, so there is no large post-copy build to time out. It trades a slower copy for removing that failure mode, and it is worth taking on a multi-hundred-GB table, or any table you have previously seen an index build struggle on. Available on both <code>sync start</code> and <code>migrate</code>. If you would rather keep the default and lift the ceiling instead, <code>--planetscale-raise-query-timeout</code> raises the keyspace timeout for the duration of the run and reverts it afterwards — but that is a <em>keyspace-wide</em> change rolled out by a tablet restart, so it affects anyone else on the keyspace.</li>
 </ul>
 
 <h2 id="connect">Provision the target &amp; connect</h2>
@@ -4336,6 +4338,7 @@ sluice sync start --stream-id region-move \\
     --source-driver planetscale --source "$SLUICE_SOURCE" \\
     --target-driver planetscale --target "$SLUICE_TARGET" \\
     --apply-batch-size 50`)}
+<p>If any table is large — hundreds of GB, or one you have seen a slow index build on — add <code>--upfront-indexes</code> to that second command. It builds the secondary indexes before the copy instead of after, so a post-copy <code>ADD INDEX</code> cannot run into PlanetScale's statement-time limit once the rows are already in place. See the <a href="#notes">gotcha above</a> for the trade-off.</p>
 <p>Watch it catch up from another shell, and gate cutover on freshness:</p>
 ${pre(`sluice sync status --stream-id region-move \\
     --target-driver planetscale --target "$SLUICE_TARGET"
