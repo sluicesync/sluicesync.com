@@ -86,8 +86,8 @@
 <p>When a change refuses, the error is deliberately greppable and names the specific offending object plus the operator action. It carries three parts: the classify error (which shape / how many changes), a structured drift diff that names the exact columns / indexes / constraints that differ, and a recovery hint. The hint spells out the drained model:</p>
 <ul>
   <li>Run <code>sluice sync stop --wait</code> to drain in-flight changes.</li>
-  <li>Apply the schema change on the target (manually, or via <code>sluice schema migrate</code>).</li>
-  <li>Resume with <code>sluice sync start --resume</code>.</li>
+  <li>Apply the schema change on the target — manually, or through a governed channel such as <a href="/docs/commands/#deploy-ddl"><code>sluice deploy-ddl</code></a> (PlanetScale deploy requests) or <a href="/docs/commands/#schema-add-table"><code>sluice schema add-table</code></a> when the change is a whole new table.</li>
+  <li>Resume by re-running <code>sluice sync start</code> with the same <code>--stream-id</code> — it warm-resumes from the persisted position.</li>
   <li>It also notes that <code>--schema-changes=refuse</code> keeps the drained model as the default for any subsequent source DDL.</li>
 </ul>
 
@@ -102,19 +102,19 @@
 psql "$SOURCE_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
 psql "$TARGET_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
 
-<span class="c"># 3. Resume from the persisted CDC position</span>
-<span class="k">sluice</span> sync start <span class="f">--resume</span> \
+<span class="c"># 3. Resume — the same --stream-id warm-resumes from the persisted CDC position</span>
+<span class="k">sluice</span> sync start \
     <span class="f">--stream-id</span> app-prod \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> 'root:rootpw@tcp(localhost:3306)/app' \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://...target...'</code></pre>
-<p>The <code>--resume</code> flag picks up the persisted CDC position (source LSN / GTID set / VStream cursor), so pre-stop events apply cleanly and the first event after resume sees the new shape on both sides. Without <code>--resume</code>, sluice refuses to bulk-copy into a populated target. The order "stop &rarr; ALTER source &rarr; ALTER target &rarr; start" is robust regardless of which side commits the DDL first, as long as both sides carry the new shape before resume.</p>
+<p>There is no resume flag to pass: re-invoking <code>sync start</code> with the same <code>--stream-id</code> finds that stream's persisted CDC position (source LSN / GTID set / VStream cursor) and continues from it, so pre-stop events apply cleanly and the first event after resume sees the new shape on both sides. It does not re-run the snapshot, and it never bulk-copies into the populated target. The order "stop &rarr; ALTER source &rarr; ALTER target &rarr; start" is robust regardless of which side commits the DDL first, as long as both sides carry the new shape before resume.</p>
 <div class="note"><strong>Plan the target-side change first.</strong> <code>sluice schema diff</code> runs the source schema through sluice's translation pipeline and reports drift against the target's actual schema — apply the ALTER on the source, run the diff, and it surfaces the missing-on-target columns / type mismatches with suggested <code>ALTER</code> statements as a starting point. It does not know your data volume or lock duration, so review them before running.</div>
 
 <h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><a href="/docs/commands/#sync-start">sync start reference</a> — the <code>--schema-changes</code> row and the full sync flag set.</li>
   <li><a href="/docs/migrate-mysql-to-postgres/">Migrate MySQL to Postgres</a> — the one-shot migration the drained model resumes onto.</li>
-  <li><a href="/docs/commands/#schema">schema diff / schema migrate</a> — pre-flight drift and apply the target-side change.</li>
+  <li><a href="/docs/commands/#schema">schema preview / diff</a> — pre-flight the drift, then apply the target-side change yourself (or via <a href="/docs/commands/#deploy-ddl">deploy-ddl</a>).</li>
 </ul>
 
     <div class="pager"><a class="prev" href="/docs/staged-wave-migration/">← Staged (wave) migration</a><a class="next" href="/docs/redact-pii/">Redact PII →</a></div>

@@ -56,7 +56,7 @@ WHERE slot_type = 'logical';
 <ul>
   <li><strong>Keep the consumer active.</strong> sluice's PG CDC reader sends <code>pg_send_standby_status_update</code> every 10&nbsp;seconds whether or not events are flowing, so the slot reads as <code>active</code> from the primary's perspective and the standby's sync keeps pace. The operational rule: run <code>sync start</code> <em>continuously</em>, not as a one-shot during low-traffic windows.</li>
   <li><strong>Make a quiet source advance on purpose.</strong> For genuinely idle databases, inject WAL activity with <code>SELECT pg_logical_emit_message(false, 'sluice-heartbeat', '')</code> on a timer — it writes to WAL without modifying any user data (sluice's reader sees and discards it), guaranteeing the slot moves even if the active consumer briefly disconnects.</li>
-  <li><strong>Backstop.</strong> If the slot is lost regardless, <code>sync start --resume</code> detects it, drops it, and falls through to a fresh cold-start rather than silently stalling.</li>
+  <li><strong>Backstop.</strong> If the slot is lost regardless, re-running <code>sync start</code> with the same <code>--stream-id</code> — the ordinary warm-resume invocation — detects the loss, drops the stale slot, and falls through to a fresh cold-start rather than silently stalling.</li>
 </ul>
 
 <h2 id="lesson">The transferable lesson <a class="hlink" href="#lesson" aria-label="Permalink to this section">#</a></h2>

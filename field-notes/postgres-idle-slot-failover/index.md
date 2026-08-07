@@ -35,7 +35,7 @@ Keep the slot advancing, two ways, and fall through cleanly if it's lost anyway:
 
 - Make a quiet source advance on purpose. For genuinely idle databases, inject WAL activity with SELECT pg_logical_emit_message(false, 'sluice-heartbeat', '') on a timer — it writes to WAL without modifying any user data (sluice's reader sees and discards it), guaranteeing the slot moves even if the active consumer briefly disconnects.
 
-- Backstop. If the slot is lost regardless, sync start --resume detects it, drops it, and falls through to a fresh cold-start rather than silently stalling.
+- Backstop. If the slot is lost regardless, re-running sync start with the same --stream-id — the ordinary warm-resume invocation — detects the loss, drops the stale slot, and falls through to a fresh cold-start rather than silently stalling.
 
 ## The transferable lesson
 

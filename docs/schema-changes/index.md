@@ -71,9 +71,9 @@ When a change refuses, the error is deliberately greppable and names the specifi
 
 - Run sluice sync stop --wait to drain in-flight changes.
 
-- Apply the schema change on the target (manually, or via sluice schema migrate).
+- Apply the schema change on the target — manually, or through a governed channel such as sluice deploy-ddl (PlanetScale deploy requests) or sluice schema add-table when the change is a whole new table.
 
-- Resume with sluice sync start --resume.
+- Resume by re-running sluice sync start with the same --stream-id — it warm-resumes from the persisted position.
 
 - It also notes that --schema-changes=refuse keeps the drained model as the default for any subsequent source DDL.
 
@@ -90,13 +90,13 @@ When a change refuses — or when you run --schema-changes=refuse deliberately �
     psql "$SOURCE_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
     psql "$TARGET_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
 
-    # 3. Resume from the persisted CDC position
-    sluice sync start --resume \
+    # 3. Resume — the same --stream-id warm-resumes from the persisted CDC position
+    sluice sync start \
         --stream-id app-prod \
         --source-driver mysql    --source 'root:rootpw@tcp(localhost:3306)/app' \
         --target-driver postgres --target 'postgres://...target...'
 
-The --resume flag picks up the persisted CDC position (source LSN / GTID set / VStream cursor), so pre-stop events apply cleanly and the first event after resume sees the new shape on both sides. Without --resume, sluice refuses to bulk-copy into a populated target. The order "stop → ALTER source → ALTER target → start" is robust regardless of which side commits the DDL first, as long as both sides carry the new shape before resume.
+There is no resume flag to pass: re-invoking sync start with the same --stream-id finds that stream's persisted CDC position (source LSN / GTID set / VStream cursor) and continues from it, so pre-stop events apply cleanly and the first event after resume sees the new shape on both sides. It does not re-run the snapshot, and it never bulk-copies into the populated target. The order "stop → ALTER source → ALTER target → start" is robust regardless of which side commits the DDL first, as long as both sides carry the new shape before resume.
 
 Plan the target-side change first. sluice schema diff runs the source schema through sluice's translation pipeline and reports drift against the target's actual schema — apply the ALTER on the source, run the diff, and it surfaces the missing-on-target columns / type mismatches with suggested ALTER statements as a starting point. It does not know your data volume or lock duration, so review them before running.
 
@@ -106,7 +106,7 @@ Plan the target-side change first. sluice schema diff runs the source schema thr
 
 - Migrate MySQL to Postgres — the one-shot migration the drained model resumes onto.
 
-- schema diff / schema migrate — pre-flight drift and apply the target-side change.
+- schema preview / diff — pre-flight the drift, then apply the target-side change yourself (or via deploy-ddl).
 
 ---
 Canonical page: https://sluicesync.com/docs/schema-changes/ · Full docs index: https://sluicesync.com/llms.txt
