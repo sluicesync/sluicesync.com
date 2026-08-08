@@ -2,10 +2,20 @@
 
 > Every sluice command, its purpose, the flags that matter most, and worked examples.
 
-The general shape is sluice <command> [flags]. Every command accepts the
-global flags (--config, --log-level, …).
-Run sluice <command> --help for the complete flag list — the tables below cover the
-flags you'll reach for most.
+The general shape is sluice <command> [flags]. Run sluice <command> --help for the
+complete flag list — the tables below cover the flags you'll reach for most.
+
+Every command accepts the global flags, described in full on the
+configuration page: --config/-c and --log-level/-l;
+--log-format (text or json — one object per line, for Loki / Datadog / CloudWatch ingestion of a long-running sync);
+--no-progress (force plain structured-log output even at an interactive terminal, disabling the pretty progress view);
+--max-memory (soft ceiling on the Go heap, e.g. 2GiB, to bound RSS);
+--stage-dir (where the large scratch files land);
+--pprof-listen (bind net/http/pprof at an address for the life of the subcommand — the tool for diagnosing a silent stall: fetch /debug/pprof/goroutine?debug=2 for every goroutine's stack);
+the legacy-MySQL controls --mysql-sql-mode and --zero-date;
+the SQLite/D1 --sqlite-date-encoding;
+the flat-file declarations --csv-header / --csv-no-header / --csv-null / --csv-delimiter;
+and --version/-V.
 
 Parallelism flags mean different things per command. The same flag name maps to a different axis depending on the verb — read this row before tuning.
 
@@ -139,6 +149,32 @@ Flag · Purpose ·
 
 --csv-null / --csv-header / --csv-no-header / --csv-delimiter · Flat-file source declarations (ADR-0163) for --source-driver csv|tsv — see the flat-file note under engines. Refused (never silently ignored) when the source driver is not a flat-file engine. ·
 
+--include-view / --exclude-view / --skip-views · View filters, the sibling of the -table family (comma-separated, repeatable, glob-aware; include and exclude are mutually exclusive). --skip-views drops view processing entirely — the flag for schemas whose views are managed out-of-band by Atlas / sqitch / Liquibase. All three are also accepted by sync start (cold-start schema-apply only — CDC never replicates views) and by schema preview / diff. ·
+
+--enable-pg-extension · Opt a Postgres extension type into passthrough (repeatable; ADR-0032). Recognised: vector (pgvector), pg_trgm, hstore, citext. Same-engine PG → PG preserves the source-native shape; on a MySQL target only hstore (→ JSON) and citext (→ VARCHAR with a case-insensitive collation) have built-in translators — the rest keep the loud-failure default. Each named extension must be installed on both ends: sluice preflights pg_extension before any data moves. Also on sync start and schema preview / diff. ·
+
+--keyset-source · Required when any --redact rule uses hash:hmac-sha256 or tokenize:dict (PII Phase 4, ADR-0041). Forms: file:PATH (keyset YAML on disk), env:VARNAME, or db:DSN (a sluice_keysets table on the named DSN — the form that keeps surrogates stable across streams). Resolved once at startup: rotating a keyset takes effect on the next process start, never hot. Also on sync start, backup full, and schema preview. ·
+
+--migration-id · Stable identifier this run's progress is keyed under in sluice_migrate_state — the key --resume looks up. Auto-generated from source/target host info when unset, so set it explicitly if the DSNs may change between the run and its resume. ·
+
+--bulk-batch-size · Rows per committed batch on the resume copy path (default 5000). Each batch commits with an updated cursor in sluice_migrate_state.table_progress, so a crash mid-table resumes without re-copying the prefix — lower values shorten the replay window, higher ones amortise the per-transaction cost. Only consulted on resume: a cold-start migrate takes the faster plain-INSERT / COPY path. Tables with no PK fall back to truncate-and-redo regardless. On sync start the same flag sizes the ADR-0079 fast cold-start's within-table cursor path (PG source; inert on MySQL / VStream, whose cold-copy is engine-internal). ·
+
+--upfront-indexes · Build every secondary index before the bulk copy — right after the bare tables are created — instead of the default deferred post-copy build, so the load maintains the indexes as it writes. Trades a slower copy for no post-copy ADD INDEX; the motivating case is a large PlanetScale-MySQL target, where a deferred ALTER … ADD INDEX on a multi-GB table can hit the statement-time wall (errno 3024) and die after an otherwise-correct copy. Engine-neutral (it calls the same index-creation path the deferred phase does, so MySQL and Postgres targets both). FK ordering is unchanged — foreign keys are still created last. Also on sync start for its cold-start. ·
+
+--index-build-mem · Postgres target only: per-build maintenance_work_mem for the deferred index phase, which runs against an otherwise-idle target. A human size (512MB, 2GB) or a raw byte count; default auto probes pg_settings and raises well above the provider's steady-state ~4%-of-RAM default (the dominant index-build speedup), flooring at the current value — sluice only ever raises. auto also lifts max_parallel_maintenance_workers toward the max_worker_processes ceiling. Best-effort: a denied SET WARNs and the build proceeds untuned, never failing the phase. Inert on MySQL targets. Also on sync start's cold-start. ·
+
+--analyze-after · Refresh the target's planner statistics once the copy, constraints, and views are in place — one per-table ANALYZE (Postgres), ANALYZE TABLE (MySQL), or ANALYZE (SQLite). A freshly bulk-loaded table has stale statistics, so the first post-cutover queries plan badly until autovacuum or a background analyze catches up; this closes that window at cutover time. Advisory — a per-table failure WARNs and never fails the migration. Off by default. Also on sync start (cold-start only; steady-state CDC apply is unaffected). ·
+
+--skip-foreign-keys · Don't create foreign-key constraints on the target — and instead ensure each skipped FK's referencing column tuple is indexed (an index is synthesized only when no existing target index already covers those columns as a left-prefix). Engine-agnostic. The flag for a target with limited FK support (a sharded Vitess / PlanetScale keyspace) or FKs managed out-of-band: it lets an FK-bearing source transition without stripping FKs from the source first, and on a MySQL target it preserves the backing index MySQL would otherwise only create alongside the FK. Mutually exclusive with --allow-degraded-fks — opposite intents. Also on sync start (cold-start schema-apply is the only phase that creates FKs). See PlanetScale region move and Foreign keys on Vitess. ·
+
+--raw-copy-format · Wire format for the same-engine raw-copy fast lane (ADR-0078, PG → PG): text (default) is cross-major safe; binary is used only when the source and target server majors match — sluice probes both and downgrades to text loudly on a mismatch; auto requests binary and lets the probe decide. The lane itself engages only for a no-transform copy (no --redact, --type-override, --expr-override, or --inject-shard-column); any transform falls the copy back to the IR path. The win is skipping the per-value decode/re-encode, not text-vs-binary. Also on sync start's fast cold-start (ADR-0079); inert on MySQL / VStream sources. ·
+
+--reap-stale-backends · Postgres target only: authorise pg_terminate_backend on sluice's own orphaned backends found during the cold-start preflight — typically a SIGKILL'd or OOM'd prior run whose server-side COPY backend still holds a target-table lock and a connection slot. Detection runs always and reports loudly; this flag is only the authorisation to act, and is off by default because a legitimately-running concurrent sluice on the same target is a real possibility (you see the report first and decide). An orphan is narrowly defined: a backend whose application_name carries the sluice/ prefix, owned by the connecting role, not the current session, and either idle-in-transaction or holding a lock on a relation sluice is about to write. It never touches another role's or a non-sluice session and needs no superuser grant. Inert against engines with no backend model (MySQL). Also on sync start. ·
+
+--planetscale-raise-query-timeout · Opt-in, PlanetScale target only (ADR-0182): raise the keyspace's queryserver-config-query-timeout to its 3600s maximum for the duration of the migration, then put it back. Read the cost before using it — this is a keyspace-wide config change whose rollout is a rolling tablet restart (~2–6m each way, and again on revert) that affects everyone else on the keyspace. Requires --planetscale-org plus the service token; refused loudly on a non-PlanetScale target or without them. Skipped with an INFO line when no table is large enough to approach the wall. Crash-safe: the raise is recorded in sluice_migrate_state and a --resume or bare re-run reverts a dangling raise before anything else. Composes with --upfront-indexes and the deploy-request fallback — headroom on a fast-enough tier, not a guarantee. Also on sync start, where only the cold-start raises (a warm resume has no copy to protect) and the record lives in sluice_cdc_query_timeout_raise keyed by stream-id. ·
+
+--diagnose-on-crash-dir / --diagnose-on-crash-privacy · Auto-write a diagnose bundle to a directory if the command exits with an error (ADR-0056). Off by default and opt-in only — an unattended bundle landing on disk is itself a privacy risk. The privacy level defaults to basic (the safest: state-table dumps only, no DSN locators, no version metadata, no logs) rather than diagnose's own standard default; standard / verbose opt up explicitly. The privacy flag is only consulted when the directory is set. Also on sync start. ·
+
   Filtered dry run, then apply:
 
     sluice migrate --source-driver mysql --source ... --target-driver postgres --target ... \
@@ -228,6 +264,10 @@ Flag · Purpose ·
 
 --source-heartbeat-interval · Write a heartbeat row on the source every interval so the slot/binlog can't be evicted past the consumer against an idle source. ·
 
+--no-source-heartbeat / --source-heartbeat-table-name / --source-heartbeat-prune-window · The rest of the source-heartbeat family (ADR-0061), all consulted only when --source-heartbeat-interval > 0. --no-source-heartbeat is the opt-out escape hatch — it skips the writer even when an interval is configured (in YAML, say), for managed DBs and read-replicas where the table DDL is restricted; sluice already WARNs-once-and-skips on a permission error, so this exists to silence that warning deliberately. --source-heartbeat-table-name renames the table (default sluice_heartbeat) for namespaces where a DBA pre-creates it. --source-heartbeat-prune-window (default 1h) is the age above which heartbeat rows are periodically deleted; 0 disables the prune and the table grows unbounded. ·
+
+--heartbeat-interval · Cadence of sluice's own log heartbeat — an INFO stream: heartbeat line on a wall-clock timer (default 60s, 0 disables). Distinct from --source-heartbeat-interval, which writes a row on the source database. This one exists to tell a silent stall (process alive, applying nothing, logging nothing) apart from a wedge (process alive, not even heartbeating). ·
+
 --dry-run, -n · Show cold-start vs warm-resume and the planned actions without starting. ·
 
 --schema-already-applied · Skip all cold-start DDL (you promise the target catalog matches). For Atlas/Liquibase-managed or PlanetScale Safe-Migrations targets. ·
@@ -243,6 +283,36 @@ Flag · Purpose ·
 --reset-target-data · Destructive recovery: delete the CDC-state row, DROP every source-schema table on the target, then run a fresh cold-start. For a wedged-state recovery (e.g. slot-missing fall-through). Prompts (type reset) unless --yes. See ADR-0023. ·
 
 --restart-from-scratch · Force a fresh cold-start re-copy from the beginning, ignoring any persisted resume position (incl. a mid-COPY cursor) — without dropping the target (the idempotent copy absorbs the overlap). For a bad checkpoint. Differs from --force-cold-start (keeps the position) and --reset-target-data (drops tables). (v0.99.10) ·
+
+--copy-table-parallelism · Native (self-managed, non-Vitess) MySQL source only: the cold-copy read axis — how many concurrent FTWRL-coordinated pinned-snapshot reader connections the copy opens (ADR-0101). Consistency is identical to serial: one FTWRL cut, one binlog position. 0 (default) means unset — fall back to the source DSN's copy_table_parallelism, then to the engine default (auto: 4, clamped to the table count). An explicit flag value wins over the DSN parameter; 1 opts out to serial. A source without the RELOAD privilege (RDS / Aurora) falls back to serial with a loud WARN. Inert on Postgres and VStream sources — this is why --table-parallelism is PG-source-only here. ·
+
+--vstream-copy-table-parallelism · VStream (PlanetScale / Vitess) source only: the cold-copy read axis — how many concurrent single-table COPY streams the auto-shard cold-copy runs (ADR-0099), the read-side sibling of the write-side --copy-fanout-degree. 0 (default) = unset, falling back to the DSN's vstream_copy_table_parallelism and then the engine default of 1 (serial single stream); an explicit value wins over the DSN parameter. Inert on Postgres and native-MySQL sources. ·
+
+--no-intra-table-stealing · Native-MySQL concurrent cold-copy only (--copy-table-parallelism > 1, which the engine default already is): turn off intra-table PK-range work-stealing (ADR-0119). By default a large chunk-eligible table is split into PK ranges so an idle reader can steal a chunk of the last big table, keeping the copy N-wide to the tail instead of tapering to a single reader; with this set, every table is one whole-table work item. A throughput knob, not a correctness one — chunk coverage is gap-free and overlap-free either way. Inert on PG / VStream sources and on a serial copy. ·
+
+--strict-float / --no-float-exact-reread · VStream (PlanetScale / Vitess) source cold-start only. vttablet's rowstreamer renders single-precision FLOAT at mysqld's 6-significant-digit display precision (8388608 → 8388610), so a VStream COPY lands those columns rounded. By default sluice re-reads them exactly over SQL (the ADR-0153 (col * 1E0) projection) and UPDATEs the target rows by PK before CDC begins, restoring float32 exactness — one extra read pass. --no-float-exact-reread skips that repair and keeps the rounding. --strict-float goes the other way: refuse loudly (SLUICE-E-VSTREAM-FLOAT-LOSSY, exit 3) before any row moves for a table the re-read cannot repair — no primary key to target it, or a single-precision FLOAT inside the primary key — where the default is a WARN plus rounded values. Passing both is refused (one disables the exactness the other demands). Both inert on sources whose snapshot is already float-exact (native MySQL, Postgres) and on schemas with no single-precision FLOAT column. backup full takes the same pair plus --float-reread-max-rows. ·
+
+--vstream-preserve-skew · VStream CDC only: opt back in to vtgate's MinimizeSkew hold — a commit-time-ordered merged stream across shards — on the steady-state multi-shard stream. Since ADR-0120 it is off by default: both shards stream and drain concurrently, because a real cross-region A/B showed the old on-by-default freezing the lagging shard under an apply-deficit backlog. Set this only if you specifically need strict cross-shard commit-time delivery and accept the catch-up-wedge risk. The DSN form vstream_preserve_skew=true also works; the flag wins. Inert on PG / native-MySQL sources and on a single-shard keyspace. ·
+
+--apply-delay · Delayed-replica mode (ADR-0121) — the MySQL MASTER_DELAY "oops window" pattern. Hold each steady-state change until its source commit timestamp plus this duration has elapsed, so a target deliberately kept N behind lets you stop sluice before an accidental DROP TABLE or runaway DELETE replicates, and recover from the still-intact target. Only the steady-state CDC apply is delayed; the cold-start copy is not. Exactly-once survives a crash mid-window: a held-but-unapplied change never advances the durable position, so it is re-read on restart. Held changes backpressure to the source read (bounded memory, no large in-heap buffer) — for delays approaching the source's replication idle timeout (wal_sender_timeout, net_write_timeout) raise that server-side value or the source may reap the connection and sluice reconnects-and-replays. The configured delay is subtracted from sluice_sync_lag_seconds, so a healthy delayed replica reads ~0 lag rather than delay. 0 (default) disables. ·
+
+--apply-tune-target-latency · Override the AIMD apply controller's p95 target latency (ADR-0052). Engine defaults when unset: 5s on planetscale (Vitess's 20s transaction killer with 4× headroom), 10s on mysql / postgres. Only consulted while the controller is active — --no-auto-tune makes it moot. ·
+
+--control-keyspace · MySQL / PlanetScale / Vitess target only: put sluice's three CDC control tables (sluice_cdc_state, sluice_cdc_schema_history, sluice_shard_consolidation_lease) in this unsharded sidecar keyspace rather than the connection's default one. A sharded Vitess keyspace requires a primary vindex on every table and the control tables have none, so a sync against a sharded target otherwise dies with VT09001: table sluice_cdc_state does not have a primary vindex. Usually you can omit it: against a sharded target sluice auto-detects the sole unsharded sidecar and refuses loudly if there are zero or several candidates. On a sharded target the position write becomes a best-effort cross-keyspace commit — acceptable, since that apply is already cross-shard and resume is idempotent. Empty on an unsharded or non-Vitess target is unchanged behaviour; inert on non-MySQL targets. The same flag is accepted by sync status / stop / health / decommission and schema add-table (where it must match what the stream was started with), and by restore for a chain restore's incremental-replay leg. ·
+
+--no-coordinate-live-ddl · Disable live cross-shard DDL coordination (ADR-0054). Coordination is on whenever --inject-shard-column is set: one shard's stream takes a lease, applies the DDL once on the consolidated target and records the schema version plus a DDL checksum; the peer shards verify the checksum, skip the apply, and keep streaming. This flag restores the pre-v0.73 drained model instead — you run sync stop --wait on every shard, migrate the schema once, then re-run sync start with each shard's same --stream-id (which warm-resumes) on every shard. A no-op when --inject-shard-column is unset. ·
+
+--shard-coordination-lease-duration / --shard-coordination-renew-deadline / --shard-coordination-retry-period · Timings for that DDL-coordination lease (ADR-0054), consulted only when --inject-shard-column is set and --no-coordinate-live-ddl is absent. The holder writes lease_expires_at = now + lease-duration every retry-period; a stalled holder loses the lease after the duration and the takeover stream probes-and-records. Defaults 30s / 20s / 10s, and the ordering retry-period < renew-deadline < lease-duration is enforced. Raise the lease to something like 300s if you run ALTERs on tables large enough that the apply window exceeds 30s. ·
+
+--backfill-added-column · After a forwarded ADD COLUMN lands, populate the already-shipped target rows with real source values instead of leaving them on the column's DEFAULT (NULL if none) — ADR-0058. The streamer issues a bounded PK-cursor SELECT (pk, new_col) against the source and emits synthetic UPDATE events. Off by default and knowingly opt-in: the cost is proportional to the table's source row count. Consulted whenever schema-change forwarding is active — i.e. under the default --schema-changes=forward; --schema-changes=refuse makes it moot, as do --inject-shard-column (whose own boundary router handles the shape) and multi-database streams (which don't forward DDL at all). ·
+
+--auto-prune-change-log / --auto-prune-interval / --auto-prune-keep · Trigger-CDC sources only (postgres-trigger / sqlite-trigger / d1-trigger) — a no-op on every other engine, which has no change log. Reap consumed rows from the source's sluice_change_log in-stream so it can't grow unbounded on a continuous sync (ADR-0137): equivalent to cronning sluice trigger prune, without the cron. Off by default — auto-DELETEing rows on the source is an explicit opt-in. Only rows below the target's persisted CDC frontier (minus --auto-prune-keep, default 1000) are removed, so warm-resume is never starved, and a prune failure is logged and swallowed. Multi-stream safe: every trigger-CDC sync records its applied frontier in the source's sluice_change_log_consumers table and the cut is taken at the minimum across registered consumers. Two caveats before enabling it on a shared source — a change log predating that registry is refused (nothing is pruned) until you re-run sluice trigger setup to migrate it, and a peer sync on an older sluice never registers at all, so upgrade every sync on the source first. Cadence via --auto-prune-interval (default 5m). ·
+
+--patroni-mode · Control the Patroni / HA-managed Postgres source detection. auto (default) runs the engine heuristics plus a DSN hostname-pattern check and warns if any signal fires; on skips the heuristics and forces the warning (for tenant-isolated managed PG the heuristics miss); off suppresses it entirely (you have confirmed a self-hosted single-node PG with no HA). Pair --patroni-mode=on with --strict-preflight to turn the warning into a hard refusal. ·
+
+--notify-smtp-host + family · Email sink for threshold alerts — one relay covers every transactional provider (SendGrid / Mailgun / SES / Postmark are all SMTP) and self-hosted relays. Opt-in: the sink is inert until --notify-smtp-host is set, and setting it makes --notify-smtp-from and at least one --notify-smtp-to (repeatable) required. --notify-smtp-tls picks the transport — starttls (default), implicit (TLS from connect), or none (cleartext, trusted local relay only) — and --notify-smtp-port defaults from it (587 for starttls/none, 465 for implicit). --notify-smtp-auth is none (default), plain, or login; the latter two need --notify-smtp-username (e.g. apikey for SendGrid) and the password, which is read only from the SLUICE_NOTIFY_SMTP_PASSWORD env var (--notify-smtp-password is never to be passed on the command line; it is masked in all logging). Advisory and failure-isolated like the other sinks — a dead relay is logged and swallowed. The identical set is accepted by metrics-watch. ·
+
+Shared with migrate · The copy-phase flags documented under migrate apply to the cold-start here with the same meaning: --upfront-indexes, --index-build-mem, --analyze-after, --skip-foreign-keys, --bulk-batch-size, --raw-copy-format, --reap-stale-backends, --planetscale-raise-query-timeout, --enable-pg-extension, --keyset-source, --redact, --type-override, the view filters --include-view / --exclude-view / --skip-views, and --diagnose-on-crash-dir / --diagnose-on-crash-privacy. Only the cold-start is affected — steady-state CDC apply builds no indexes, creates no constraints, and replicates no views. ·
 
   Source DDL auto-applies by default (v0.99.45, ADR-0091). A running stream now forwards unambiguous source schema changes onto the target automatically — including a destructive DROP COLUMN, which drops the column (and its data) on the target. This keeps the sync online through routine schema evolution, but it means a source DDL change propagates without operator review. To gate DDL through a separate change-management process, start the stream with --schema-changes=refuse — any source DDL then surfaces loudly instead of applying. (The older --forward-schema-add-column flag is deprecated: it warns and still forwards, subsumed by the new default.)
 
@@ -276,7 +346,7 @@ Flag · Purpose ·
 ### sluice sync status · stop · health · decommission
 Inspect, gracefully stop, health-check, and retire a stream. All take --stream-id plus the target connection (decommission takes the source too).
 
-- sync status — show the stream's persisted position and phase.
+- sync status — show the stream's persisted position and phase. --watch DURATION re-renders on that interval until interrupted (--watch 2s is the usual operator cadence; 0, the default, prints once and exits). --summary prepends an aggregate header — stream count, oldest and most-recent ages — which is what makes a fleet listing skimmable rather than a wall of rows.
 
 - sync stop — request the stream to drain in-flight changes and exit cleanly. By default it just files the stop request and returns; pass --wait / -w to block until the running streamer drains and clears its stop signal (with --timeout, default 5m; on timeout the CLI exits non-zero and the stop request remains in place). Use --wait to coordinate ALTER windows or scripted teardowns.
 
@@ -400,9 +470,11 @@ Flag · Purpose ·
 ### sluice cutover
 Two-phase sequence priming at cutover: re-read source sequence / AUTO_INCREMENT state and apply it to the target with a safety margin, so the first post-cutover INSERT can't collide on the primary key.
 
-    sluice cutover --config sluice.yaml --cutover-sequence-margin 1000
+    sluice cutover --config sluice.yaml --sequence-margin 1000
 
    Run after the snapshot has caught up and just before switching application traffic to the target.
+
+   --sequence-margin (default 1000) is the headroom added on top of every source sequence value before it is applied — cover for in-flight source-side INSERTs between the read and the apply, and between the apply and the moment you actually flip traffic. The same margin doubles as the idempotency tolerance: a re-run within margin rows of the first does not refuse. (The older spelling --cutover-sequence-margin still works as a deprecated alias.)
 
 ## backup
 
@@ -417,7 +489,7 @@ backup incremental · Append an incremental onto the existing chain. ·
 
 backup stream run / stop · Run as a long-lived process appending incrementals at a rolling cadence; stop drains the in-flight rollover and exits cleanly. ·
 
-backup verify · Re-checksum every chunk in a chain and report mismatches. ·
+backup verify · Read-only chain check. Re-checksums every chunk against the manifest and reports mismatches; --depth read additionally parses every chunk back through the reader restore uses. ·
 
 backup prune / compact · Retention: drop the oldest segments, or merge consecutive segments whose gaps fall within --merge-window. Compact splits a merge group at a rotation-boundary coverage gap instead of refusing the run (v0.99.41) — chains stopped while the source was idle stay compactable. ·
 
@@ -450,6 +522,40 @@ Flag · Purpose ·
 --verify-key · Read side (restore / backup verify / the broker / export-as-parquet): the public key that verifies an asymmetrically-signed chain — an SPKI PEM file (the offline DR path) or kms://... to fetch the trusted key online. Required for such a chain — the KEK does NOT verify an asymmetric signature, and the recorded manifest key reference is never trusted; verification anchors on the key you name. Absent it, the chain WARNs present-but-unverified and proceeds (DR-safe) unless --require-signature. ·
 
 --require-signature · Strict-always signature policy on restore/verify: a signed chain that cannot be verified (no matching key supplied) is refused rather than warned. An INVALID signature is always refused regardless of this flag. Leave off for the DR-safe default (never fail a restore for a signature it cannot check). ·
+
+--encrypt-mode · per-chain (one content key for the whole chain — one KEK derive or KMS Decrypt per restore) or per-chunk (one content key per chunk — defence in depth, at the cost of a wrap per chunk). Omit it to inherit the chain's existing mode; a fresh full defaults to per-chain. Extending an encrypted chain with the wrong mode is refused, so in practice you set this once, on the chain root. ·
+
+--kms-region / --azure-wrap-algorithm · Provider knobs for KMS mode. --kms-region overrides the AWS region for KMS calls (otherwise AWS_REGION or the SDK's own resolution). --azure-wrap-algorithm overrides the Azure Key Vault wrap algorithm, which defaults to RSA-OAEP-256 and works for software-protected RSA keys — an HSM-backed AES key needs A256KW. Both are accepted by every command that touches an encrypted chain (backup full / incremental / stream run / verify / prune / compact / export-as-parquet, restore, and the from-backup broker). ·
+
+--keyset-source · On backup full, the companion to --redact when a rule uses hash:hmac-sha256 or tokenize:dict — same file: / env: / db: forms as migrate's. Redaction is applied at chunk-write time, so the chain rests PII-clean; a restore reproduces the redacted shape and never re-applies (or undoes) it. ·
+
+--chunk-size · Maximum rows (on full) or changes (on incremental / stream run) per chunk file; the writer rolls over on reaching it. Default 100000. Smaller chunks restore faster — the per-chunk SHA-256 verification fails fast on the smallest possible unit — but inflate the manifest. ·
+
+--since · On incremental / stream run: the BackupID of the parent manifest this run chains off. Empty (default) picks the most recent manifest at the destination. ·
+
+--window / --max-changes · backup incremental's two window bounds. --window (default 5m) is the wall-clock duration it streams CDC events for; --max-changes stops after N events, 0 (default) meaning time-bound only. Both are approximate in the same way: transaction framing counts as events (a one-row transaction is three), and the window always extends to the next TxCommit so a chain never ends mid-transaction — and never closes before it has passed the parent's end position. ·
+
+--rollover-window / --rollover-max-changes / --rollover-max-bytes · backup stream run's rollover thresholds — the long-lived process's equivalent of the above; whichever fires first commits the rollover. Defaults: 5m, 100000 events, 64 MiB of buffered chunk bytes. The byte bound is checked at chunk-flush boundaries, so the buffer can transiently exceed it by up to one chunk. ·
+
+--include-empty · On backup stream run: commit a manifest even for a rollover that captured zero changes. Off by default — an idle window adds nothing to the chain, and stream_state.json already covers liveness without polluting it. ·
+
+--rollover-hook · Shell command run after each rollover commits successfully, with SLUICE_ROLLOVER_MANIFEST_PATH, _PARENT_BACKUP_ID, _BACKUP_ID, _CHANGES, _BYTES, and _ELAPSED_MS in the environment — the hook for driving downstream catalog updates or notifications. 30s timeout; a hook error is WARN-logged and never fails the stream. ·
+
+--retain-rotate-at / --retain-rotate-at-chain-length · In-process segment rotation on backup stream run (ADR-0046): cap the open segment and start a fresh one over the same CDC handle once it reaches this age, or once this many incrementals have been committed to it — no operator wrapper, no stream exit. Either threshold firing wins; 0 disables each. Pair with backup prune to bound total disk. ·
+
+--retry-attempts / --retry-backoff-base / --retry-backoff-cap · backup stream run's retry budget for consecutive retriable rollover failures: how many it absorbs before giving up (default 8; 1 disables retry), the base interval (default 100ms, doubling), and the per-interval ceiling (default 30s). Mirrors the sync stream's --apply-retry-* knobs, whose spellings are accepted here as aliases. ·
+
+--keep-incrementals / --keep-duration · backup prune's retention policy — keep at least the N most-recent incrementals, or keep those younger than a duration (168h = 7d, 720h = 30d). Mutually exclusive. Both round up to a segment boundary, because prune retires only whole segments: you always keep more than you asked for, never fewer. ·
+
+--smart-compaction / --smart-compaction-off / --compaction-pk-strategy · backup compact's event-level collapse (ADR-0064): within each merge group's change-chunks, INSERT+UPDATE becomes an INSERT, UPDATE+UPDATE an UPDATE, INSERT+DELETE nothing, UPDATE+DELETE a DELETE. Off by default — opt in when an update-heavy workload makes the CPU cost worth the smaller chain; --smart-compaction-off states that default explicitly, as an audit trail or as the recovery flag after a refuse-loudly on a corrupt PK. The two are mutually exclusive. --compaction-pk-strategy picks the row identity the collapse keys on and has no effect without --smart-compaction: pk (default) uses the declared primary key, replica-identity is a PG-facing alias for pk today, and none disables per-row collapse (a debugging escape hatch). ·
+
+--depth · backup verify's two depths — hash (default) or read. hash re-hashes every chunk's stored bytes against the manifest SHA-256, plus (with --encrypt and the chain's key) the real authenticated open every encrypted chunk gets at restore. read additionally streams every chunk — data and change chunks — through its own real reader and discards the rows, which is the only evidence verify has that is not the artifact it is checking: it catches an over-long row line, a truncated stream, and a wrong recorded codec, all of which hash perfectly and then fail at restore (SLUICE-E-BACKUP-CHUNK-UNREADABLE, the Bug 226 shape). It subsumes the hash depth (the reader hashes as it goes and decrypts at open). It costs one full read + decompress + decrypt + decode per chunk, which is why the cheap depth stays the default for a cron probe against object storage. On an encrypted chain read requires --encrypt + key material and refuses up front without it — parsing is all it does, so it cannot degrade to the key-less depth the way hash can. A parse proves the chunk decodes, not that its values are correct: only sluice verify against the source answers that, and only a test-restore proves the rows apply. Assert the reported Chunks / Decrypted / Depth fields rather than the exit status. ·
+
+--dry-run, -n · On backup prune and backup compact — the two chain-hygiene verbs, which are the only backup subcommands that irreversibly drop history or rewrite the catalog. Prints the plan (which segments would be retired or merged) and exits without touching the chain. Run it first, read the plan, then run for real: prune's retention rounds up to a segment boundary, so the number of incrementals it actually retains is usually larger than the one you asked for, and the dry run is where you see that before it happens rather than after. ·
+
+--rebuild-catalog · backup verify repair mode: rebuild lineage.json from scratch by walking the conventional one-segment layout (manifest.json + manifests/incr-*.json), then exit. For a single-segment backup that was manually mutated. The compression codec is sniffed from the chunk magic bytes; on an encrypted chain also pass --encrypt plus the passphrase / KMS reference, since the codec is sealed inside the envelope. It cannot repair a rotated, multi-segment chain: that sub-directory structure is not reconstructable from a bare walk — lineage.json is the structural record there. ·
+
+--strict-float / --no-float-exact-reread / --float-reread-max-rows · backup full from a VStream (PlanetScale / Vitess) source only. The same single-precision-FLOAT repair described under sync start: by default sluice re-reads FLOAT columns exactly from the source and patches the archived rows, so the backup stores exact float32. The cost is a bounded within-row temporal skew — the FLOAT reflects a read instant just after the snapshot VGTID; it is zero on a quiescent source, and it self-heals on a chain restore because incrementals replay from the full's position forward, so it persists only for a standalone-full restore of a source taking concurrent FLOAT writes. --no-float-exact-reread keeps the rounded-but-perfectly-consistent snapshot for operators who value within-row consistency over FLOAT precision. --strict-float refuses (SLUICE-E-VSTREAM-FLOAT-LOSSY, exit 3) instead of falling back to a WARN for any table that cannot be made exact. --float-reread-max-rows caps the per-table row buffer the repair uses so it stays bounded-memory — 0 (default) means 2,000,000 rows, a few hundred MB worst case; a larger FLOAT-bearing table falls back (WARN, or refusal under --strict-float) rather than buffering. A keyless table keeps the rounding regardless: there is no key to target the re-read. ·
 
     sluice backup full --source-driver postgres --source ... --target s3://my-bucket/app-chain --chain-slot
     sluice backup incremental --source-driver postgres --source ... --target s3://my-bucket/app-chain
@@ -519,6 +625,8 @@ Flag · Purpose ·
 --planetscale-database / --planetscale-branch / --planetscale-service-token-id / --planetscale-service-token / --planetscale-deploy-timeout · ADR-0148 index-build fallback inputs — same set and defaults as migrate's (database from the --target DSN, branch main, deadline 1h; service token via env). Before v0.99.259 a restore's walled PlanetScale index build always ended at the SLUICE-E-INDEX-* hint even with credentials available. On timeout the deploy keeps running in PlanetScale and re-running the restore re-probes and rebuilds only what is still missing. ·
 
 --target-tls-ca · CA-pinned verify-ca TLS to a MySQL target (ADR-0158) — see the migrate row. ·
+
+--control-keyspace · MySQL / PlanetScale / Vitess target, chain restores only: the unsharded sidecar keyspace the incremental-replay leg's CDC control tables live in. That leg writes sluice_cdc_state / sluice_cdc_schema_history / sluice_shard_consolidation_lease, and a sharded target rejects those vindex-less tables — point this at a separate unsharded keyspace to unblock it. Omit to auto-detect the sole unsharded sidecar (a loud refusal if there are zero or several candidates). Inert on non-MySQL targets and on a single-full restore, which replays nothing. Full semantics under sync start. ·
 
     sluice restore --from s3://my-bucket/app-chain \
         --target-driver postgres --target ...
@@ -752,6 +860,18 @@ Inspect translation without moving data: print the target DDL sluice would emit,
     sluice schema preview --source-driver mysql --source ... --target-driver postgres
     sluice schema diff    --source-driver mysql --source ... --target-driver postgres --target ...
 
+Flag · Purpose ·
+
+--include-view / --exclude-view / --skip-views · Scope which views are previewed / diffed (comma-separated, repeatable, glob-aware; include and exclude are mutually exclusive). --skip-views drops views from the comparison entirely — the flag for a target whose views are managed out-of-band, where view drift isn't sluice's concern. Same spellings as migrate's. ·
+
+--ignore-charset-collation · schema diff only: suppress MySQL charset / collation differences, which operators often manage out-of-band via server defaults rather than per-column. ·
+
+--ignore-extras · schema diff only: suppress "extra on target" findings — tables, columns, and indexes present on the target but absent from the source. Use it when the target legitimately hosts other applications' tables, so the diff reports only what sluice would have to change. ·
+
+--enable-pg-extension · Same extension passthrough opt-in as migrate's (vector, pg_trgm, hstore, citext) — pass the same set you intend to migrate with, or the preview / diff will show the loud-failure default instead of the shape you'll actually get. ·
+
+--redact / --keyset-source · schema preview only: annotate which columns your --redact rules would hit, so you can see the plan before committing to it. Each affected column's CREATE TABLE line gains a trailing -- REDACTED via <strategy> comment; the DDL itself is unchanged, since redaction transforms values, not types. --keyset-source takes the same forms as on migrate. ·
+
 ## verify
 
 ### sluice verify
@@ -786,7 +906,9 @@ Refresh PostgreSQL materialized views on the target (PG-only). Handy as a schedu
 Manage source-side Postgres replication slots — list sluice-created slots, or drop an orphaned one left by an interrupted stream.
 
     sluice slot list --source-driver postgres --source ...
-    sluice slot drop --source-driver postgres --source ... --slot-name sluice_slot
+    sluice slot drop --source-driver postgres --source ... --slot-name sluice_slot --if-exists
+
+   slot drop --if-exists treats a missing slot as success rather than an error — the form to use in teardown scripts and re-runnable playbooks, where the slot may already be gone.
 
 ## diagnose
 
@@ -794,6 +916,8 @@ Manage source-side Postgres replication slots — list sluice-created slots, or 
 Assemble an operator bundle (source/target capability + role state, debug-zip shape) to attach when filing an issue.
 
     sluice diagnose --source-driver mysql --source ... --target-driver postgres --target ... --out ./sluice-diagnose.zip
+
+   --privacy decides what goes in the bundle, and ADR-0056 holds the full inclusion/exclusion contract. basic is state-table dumps only — no version, no DSN, no logs. standard (the default here) adds redacted CLI args, the sluice version, engine health probes, capabilities, and target-health telemetry. verbose adds a per-table COUNT(*) on the target — a slow path on large tables — plus the last 200 lines of the file named by --log-file. That log path is sluice's own slog output file; empty (the default) means no log is included at any level. Note the auto-on-crash form of this bundle (--diagnose-on-crash-dir) deliberately defaults to basic instead, because nobody is present to review what it wrote.
 
    Supply the five PlanetScale telemetry flags — --planetscale-org, --planetscale-metrics-token-id / --planetscale-metrics-token (env), --planetscale-metrics-db (defaults to the --target DSN's database), --planetscale-metrics-branch (default main) — to add a target-health metrics snapshot (CPU/mem/storage/lag) to the bundle. Control-plane credential, distinct from --target. See sync start for the same flag semantics.
 
@@ -810,7 +934,15 @@ Flag · Purpose ·
 
 --planetscale-metrics-token-id / --planetscale-metrics-token · Service-token (read_metrics_endpoints) ID + secret. Set via the env vars PLANETSCALE_METRICS_TOKEN_ID / PLANETSCALE_METRICS_TOKEN — never on the command line. ·
 
---planetscale-metrics-db · Required — the database to watch (there is no --target DSN to derive it from). ·
+--planetscale-metrics-db · Required — the database to watch (there is no --target DSN to derive it from), unless --fleet replaces it. ·
+
+--fleet / --fleet-concurrency · Watch the whole org instead of one database: every database + branch the org's metrics service discovery returns, fanned out on the same cadence. Mutually exclusive with --planetscale-metrics-db. --fleet-concurrency bounds how many per-branch scrapes run at once each poll (default 4, max 16) — the knob for keeping the fan-out's load on the PlanetScale metrics API in hand. ·
+
+--include-database / --exclude-database · --fleet mode only (ADR-0180) — scope the org-wide fan-out to a subset. Each takes a glob (comma-separated, repeatable), matched against both database and database/branch, so --include-database 'app-*' and --exclude-database '*/dev' both work. They combine, and exclude wins when a database matches both. Note the value domain differs from migrate's same-named table filters: these are PlanetScale database/branch globs, not table names. ·
+
+--sink-file / --sink-file-max-bytes / --sink-file-max-files · Append every polled sample to a rotating JSONL file, one record per line — opt-in durable storage for a portal or warehouse with no Prometheus involved. Rotation size defaults to 64 MiB (0 selects that default; a negative value disables rotation and you own the file's growth), keeping 5 generations by default (PATH.1 … PATH.N). Advisory: a write failure is logged and swallowed, never stalling the poll. ·
+
+--sink-http · POST each polled sample batch as JSON to an endpoint — the same record schema as --sink-file. Treated as a credential: set it via the SLUICE_METRICS_SINK_HTTP env var. Advisory and failure-isolated. ·
 
 --planetscale-metrics-branch · Branch to filter the series to (default main). ·
 
@@ -822,7 +954,7 @@ Flag · Purpose ·
 
 --metrics-listen · Also serve a Prometheus /metrics endpoint re-exporting the watched database's CPU/mem/storage/lag as the sluice_target_* gauge family — turning the daemon into a standalone PlanetScale-metrics exporter. Ignored with --once. ·
 
---notify-* · The telemetry-backed alerter set — --notify-webhook / --notify-slack sinks (env SLUICE_NOTIFY_WEBHOOK / SLUICE_NOTIFY_SLACK) and the --notify-storage-util / --notify-cpu-util / --notify-mem-util / --notify-lag-seconds / --notify-storage-growth-per-min thresholds + --notify-cooldown — identical semantics to sync start. (The target-probe rules — sync lag and the v0.99.288 vacuum advisories — live on sync start only; the daemon holds no database connection.) ·
+--notify-* · The telemetry-backed alerter set — --notify-webhook / --notify-slack sinks (env SLUICE_NOTIFY_WEBHOOK / SLUICE_NOTIFY_SLACK) and the --notify-storage-util / --notify-cpu-util / --notify-mem-util / --notify-lag-seconds / --notify-storage-growth-per-min thresholds + --notify-cooldown — identical semantics to sync start, including the whole --notify-smtp-* email-relay family. (The target-probe rules — sync lag and the v0.99.288 vacuum advisories — live on sync start only; the daemon holds no database connection.) ·
 
   Run as an alert-only daemon (tokens via env; fire on 85% storage):
 

@@ -1,6 +1,7 @@
 // Static docs generator for sluicesync.com.
 // Output is plain HTML committed to the repo — Cloudflare Pages serves it as-is (auto-deploys on push to main)
 // (no build step on Pages). Edit the page bodies below and re-run:  node build.mjs
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -678,10 +679,20 @@ write(
     title: "Command reference",
     subtitle: "Every sluice command, its purpose, the flags that matter most, and worked examples.",
     body: `
-<p>The general shape is <code>sluice &lt;command&gt; [flags]</code>. Every command accepts the
-<a href="/docs/configuration/#global-flags">global flags</a> (<code>--config</code>, <code>--log-level</code>, …).
-Run <code>sluice &lt;command&gt; --help</code> for the complete flag list — the tables below cover the
-flags you'll reach for most.</p>
+<p>The general shape is <code>sluice &lt;command&gt; [flags]</code>. Run <code>sluice &lt;command&gt; --help</code> for the
+complete flag list — the tables below cover the flags you'll reach for most.</p>
+
+<p>Every command accepts the <a href="/docs/configuration/#global-flags">global flags</a>, described in full on the
+configuration page: <code>--config</code>/<code>-c</code> and <code>--log-level</code>/<code>-l</code>;
+<code>--log-format</code> (<code>text</code> or <code>json</code> — one object per line, for Loki / Datadog / CloudWatch ingestion of a long-running sync);
+<code>--no-progress</code> (force plain structured-log output even at an interactive terminal, disabling the pretty progress view);
+<code>--max-memory</code> (soft ceiling on the Go heap, e.g. <code>2GiB</code>, to bound RSS);
+<code>--stage-dir</code> (where the large scratch files land);
+<code>--pprof-listen</code> (bind <code>net/http/pprof</code> at an address for the life of the subcommand — the tool for diagnosing a silent stall: fetch <code>/debug/pprof/goroutine?debug=2</code> for every goroutine's stack);
+the legacy-MySQL controls <code>--mysql-sql-mode</code> and <code>--zero-date</code>;
+the SQLite/D1 <code>--sqlite-date-encoding</code>;
+the flat-file declarations <code>--csv-header</code> / <code>--csv-no-header</code> / <code>--csv-null</code> / <code>--csv-delimiter</code>;
+and <code>--version</code>/<code>-V</code>.</p>
 
 <div class="note"><strong>Parallelism flags mean different things per command.</strong> The same flag name maps to a different axis depending on the verb — read this row before tuning.
 <table><thead><tr><th>Flag</th><th>What it controls</th></tr></thead><tbody>
@@ -760,6 +771,19 @@ ${cmd(
   <tr><td><code>--planetscale-org</code></td><td class="desc"><strong>On migrate</strong> this arms the automatic <strong>deploy-request index-build fallback</strong> on a <code>planetscale</code> target (ADR-0148) — on <a href="/docs/commands/#restore">restore</a> and <a href="/docs/commands/#sync-start">sync start</a> the same flag serves both this fallback and the telemetry opt-in, each arming on its own token pair (v0.99.259). When a deferred post-copy <code>ADD INDEX</code> hits PlanetScale's statement-time wall (errno 3024) or the safe-migrations direct-DDL block (errno 1105), sluice builds it via a dev branch + deploy request instead. Requires safe migrations ON (sluice never toggles it) plus a service token (<code>PLANETSCALE_SERVICE_TOKEN_ID</code> / <code>PLANETSCALE_SERVICE_TOKEN</code> env). Control-plane only, distinct from the data-plane <code>--target</code> DSN; ignored on non-planetscale targets; off when unset (the migrate is unchanged).</td></tr>
   <tr><td><code>--planetscale-database</code> / <code>--planetscale-branch</code></td><td class="desc">Database name (defaults to the <code>--target</code> DSN's database) and production branch (default <code>main</code>) for the ADR-0148 index-build fallback. Only consulted when <code>--planetscale-org</code> is set.</td></tr>
   <tr><td><code>--csv-null</code> / <code>--csv-header</code> / <code>--csv-no-header</code> / <code>--csv-delimiter</code></td><td class="desc">Flat-file source declarations (ADR-0163) for <code>--source-driver csv|tsv</code> — see the <a href="/docs/commands/#engines">flat-file note under engines</a>. Refused (never silently ignored) when the source driver is not a flat-file engine.</td></tr>
+  <tr><td><code>--include-view</code> / <code>--exclude-view</code> / <code>--skip-views</code></td><td class="desc">View filters, the sibling of the <code>-table</code> family (comma-separated, repeatable, glob-aware; include and exclude are mutually exclusive). <code>--skip-views</code> drops view processing entirely — the flag for schemas whose views are managed out-of-band by Atlas / sqitch / Liquibase. All three are also accepted by <a href="/docs/commands/#sync-start">sync start</a> (cold-start schema-apply only — CDC never replicates views) and by <a href="/docs/commands/#schema">schema preview / diff</a>.</td></tr>
+  <tr><td><code>--enable-pg-extension</code></td><td class="desc">Opt a Postgres extension type into passthrough (repeatable; ADR-0032). Recognised: <code>vector</code> (pgvector), <code>pg_trgm</code>, <code>hstore</code>, <code>citext</code>. Same-engine PG&nbsp;→&nbsp;PG preserves the source-native shape; on a <strong>MySQL</strong> target only <code>hstore</code> (→ JSON) and <code>citext</code> (→ VARCHAR with a case-insensitive collation) have built-in translators — the rest keep the loud-failure default. Each named extension must be installed on <em>both</em> ends: sluice preflights <code>pg_extension</code> before any data moves. Also on <a href="/docs/commands/#sync-start">sync start</a> and <a href="/docs/commands/#schema">schema preview / diff</a>.</td></tr>
+  <tr><td><code>--keyset-source</code></td><td class="desc"><strong>Required</strong> when any <code>--redact</code> rule uses <code>hash:hmac-sha256</code> or <code>tokenize:dict</code> (PII Phase 4, ADR-0041). Forms: <code>file:PATH</code> (keyset YAML on disk), <code>env:VARNAME</code>, or <code>db:DSN</code> (a <code>sluice_keysets</code> table on the named DSN — the form that keeps surrogates stable <em>across</em> streams). Resolved once at startup: rotating a keyset takes effect on the next process start, never hot. Also on <a href="/docs/commands/#sync-start">sync start</a>, <a href="/docs/commands/#backup">backup full</a>, and <a href="/docs/commands/#schema">schema preview</a>.</td></tr>
+  <tr><td><code>--migration-id</code></td><td class="desc">Stable identifier this run's progress is keyed under in <code>sluice_migrate_state</code> — the key <code>--resume</code> looks up. Auto-generated from source/target host info when unset, so set it explicitly if the DSNs may change between the run and its resume.</td></tr>
+  <tr><td><code>--bulk-batch-size</code></td><td class="desc">Rows per committed batch on the <strong>resume</strong> copy path (default <code>5000</code>). Each batch commits with an updated cursor in <code>sluice_migrate_state.table_progress</code>, so a crash mid-table resumes without re-copying the prefix — lower values shorten the replay window, higher ones amortise the per-transaction cost. Only consulted on resume: a cold-start migrate takes the faster plain-INSERT / <code>COPY</code> path. Tables with no PK fall back to truncate-and-redo regardless. On <a href="/docs/commands/#sync-start">sync start</a> the same flag sizes the ADR-0079 fast cold-start's within-table cursor path (PG source; inert on MySQL / VStream, whose cold-copy is engine-internal).</td></tr>
+  <tr><td><code>--upfront-indexes</code></td><td class="desc">Build every secondary index <strong>before</strong> the bulk copy — right after the bare tables are created — instead of the default deferred post-copy build, so the load maintains the indexes as it writes. Trades a slower copy for no post-copy <code>ADD INDEX</code>; the motivating case is a large PlanetScale-MySQL target, where a deferred <code>ALTER … ADD INDEX</code> on a multi-GB table can hit the statement-time wall (errno 3024) and die <em>after</em> an otherwise-correct copy. Engine-neutral (it calls the same index-creation path the deferred phase does, so MySQL and Postgres targets both). FK ordering is unchanged — foreign keys are still created last. Also on <a href="/docs/commands/#sync-start">sync start</a> for its cold-start.</td></tr>
+  <tr><td><code>--index-build-mem</code></td><td class="desc"><strong>Postgres target only:</strong> per-build <code>maintenance_work_mem</code> for the deferred index phase, which runs against an otherwise-idle target. A human size (<code>512MB</code>, <code>2GB</code>) or a raw byte count; default <code>auto</code> probes <code>pg_settings</code> and raises well above the provider's steady-state ~4%-of-RAM default (the dominant index-build speedup), flooring at the current value — sluice only ever raises. <code>auto</code> also lifts <code>max_parallel_maintenance_workers</code> toward the <code>max_worker_processes</code> ceiling. Best-effort: a denied <code>SET</code> WARNs and the build proceeds untuned, never failing the phase. Inert on MySQL targets. Also on <a href="/docs/commands/#sync-start">sync start</a>'s cold-start.</td></tr>
+  <tr><td><code>--analyze-after</code></td><td class="desc">Refresh the target's planner statistics once the copy, constraints, and views are in place — one per-table <code>ANALYZE</code> (Postgres), <code>ANALYZE TABLE</code> (MySQL), or <code>ANALYZE</code> (SQLite). A freshly bulk-loaded table has stale statistics, so the first post-cutover queries plan badly until autovacuum or a background analyze catches up; this closes that window at cutover time. Advisory — a per-table failure WARNs and never fails the migration. Off by default. Also on <a href="/docs/commands/#sync-start">sync start</a> (cold-start only; steady-state CDC apply is unaffected).</td></tr>
+  <tr><td><code>--skip-foreign-keys</code></td><td class="desc">Don't create foreign-key constraints on the target — and instead ensure each skipped FK's referencing column tuple <em>is indexed</em> (an index is synthesized only when no existing target index already covers those columns as a left-prefix). Engine-agnostic. The flag for a target with limited FK support (a sharded Vitess / PlanetScale keyspace) or FKs managed out-of-band: it lets an FK-bearing source transition without stripping FKs from the source first, and on a MySQL target it preserves the backing index MySQL would otherwise only create alongside the FK. Mutually exclusive with <code>--allow-degraded-fks</code> — opposite intents. Also on <a href="/docs/commands/#sync-start">sync start</a> (cold-start schema-apply is the only phase that creates FKs). See <a href="/docs/planetscale-region-move/">PlanetScale region move</a> and <a href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a>.</td></tr>
+  <tr><td><code>--raw-copy-format</code></td><td class="desc">Wire format for the same-engine raw-copy fast lane (ADR-0078, <strong>PG&nbsp;→&nbsp;PG</strong>): <code>text</code> (default) is cross-major safe; <code>binary</code> is used only when the source and target server majors match — sluice probes both and downgrades to text loudly on a mismatch; <code>auto</code> requests binary and lets the probe decide. The lane itself engages only for a <em>no-transform</em> copy (no <code>--redact</code>, <code>--type-override</code>, <code>--expr-override</code>, or <code>--inject-shard-column</code>); any transform falls the copy back to the IR path. The win is skipping the per-value decode/re-encode, not text-vs-binary. Also on <a href="/docs/commands/#sync-start">sync start</a>'s fast cold-start (ADR-0079); inert on MySQL / VStream sources.</td></tr>
+  <tr><td><code>--reap-stale-backends</code></td><td class="desc"><strong>Postgres target only:</strong> authorise <code>pg_terminate_backend</code> on sluice's <em>own</em> orphaned backends found during the cold-start preflight — typically a SIGKILL'd or OOM'd prior run whose server-side <code>COPY</code> backend still holds a target-table lock and a connection slot. Detection runs <em>always</em> and reports loudly; this flag is only the authorisation to act, and is off by default because a legitimately-running concurrent sluice on the same target is a real possibility (you see the report first and decide). An orphan is narrowly defined: a backend whose <code>application_name</code> carries the <code>sluice/</code> prefix, owned by the connecting role, not the current session, and either idle-in-transaction or holding a lock on a relation sluice is about to write. It never touches another role's or a non-sluice session and needs no superuser grant. Inert against engines with no backend model (MySQL). Also on <a href="/docs/commands/#sync-start">sync start</a>.</td></tr>
+  <tr><td><code>--planetscale-raise-query-timeout</code></td><td class="desc"><strong>Opt-in, PlanetScale target only</strong> (ADR-0182): raise the keyspace's <code>queryserver-config-query-timeout</code> to its 3600s maximum for the duration of the migration, then put it back. Read the cost before using it — this is a <strong>keyspace-wide</strong> config change whose rollout is a <strong>rolling tablet restart</strong> (~2–6m each way, and again on revert) that affects everyone else on the keyspace. Requires <code>--planetscale-org</code> plus the service token; refused loudly on a non-PlanetScale target or without them. Skipped with an INFO line when no table is large enough to approach the wall. Crash-safe: the raise is recorded in <code>sluice_migrate_state</code> and a <code>--resume</code> or bare re-run reverts a dangling raise before anything else. Composes with <code>--upfront-indexes</code> and the deploy-request fallback — headroom on a fast-enough tier, not a guarantee. Also on <a href="/docs/commands/#sync-start">sync start</a>, where only the cold-start raises (a warm resume has no copy to protect) and the record lives in <code>sluice_cdc_query_timeout_raise</code> keyed by stream-id.</td></tr>
+  <tr><td><code>--diagnose-on-crash-dir</code> / <code>--diagnose-on-crash-privacy</code></td><td class="desc">Auto-write a <a href="/docs/commands/#diagnose">diagnose</a> bundle to a directory if the command exits with an error (ADR-0056). Off by default and opt-in only — an unattended bundle landing on disk is itself a privacy risk. The privacy level defaults to <code>basic</code> (the safest: state-table dumps only, no DSN locators, no version metadata, no logs) rather than <code>diagnose</code>'s own <code>standard</code> default; <code>standard</code> / <code>verbose</code> opt up explicitly. The privacy flag is only consulted when the directory is set. Also on <a href="/docs/commands/#sync-start">sync start</a>.</td></tr>
   </tbody></table>
   <p><strong>Filtered dry run, then apply:</strong></p>
   ${pre(`sluice migrate --source-driver mysql --source ... --target-driver postgres --target ... \\
@@ -813,6 +837,8 @@ ${cmd(
   <tr><td><code>--apply-retry-backoff-base</code> / <code>--apply-retry-backoff-cap</code></td><td class="desc">Exponential backoff between retriable apply failures: base <code>100ms</code> (doubling), capped at <code>30s</code>. Only consulted when <code>--apply-retry-attempts &gt; 1</code>.</td></tr>
   <tr><td><code>--apply-exec-timeout</code></td><td class="desc">Per-statement deadline on every apply-path <code>ExecContext</code> (default <code>60s</code>). Closes the silent-stall mode where a half-closed target connection blocks the apply goroutine inside the driver; on expiry the batch is retried on a fresh connection. <code>0</code> disables (unbounded).</td></tr>
   <tr><td><code>--source-heartbeat-interval</code></td><td class="desc">Write a heartbeat row on the source every interval so the slot/binlog can't be evicted past the consumer against an idle source.</td></tr>
+  <tr><td><code>--no-source-heartbeat</code> / <code>--source-heartbeat-table-name</code> / <code>--source-heartbeat-prune-window</code></td><td class="desc">The rest of the source-heartbeat family (ADR-0061), all consulted only when <code>--source-heartbeat-interval &gt; 0</code>. <code>--no-source-heartbeat</code> is the opt-out escape hatch — it skips the writer even when an interval is configured (in YAML, say), for managed DBs and read-replicas where the table DDL is restricted; sluice already WARNs-once-and-skips on a permission error, so this exists to silence that warning deliberately. <code>--source-heartbeat-table-name</code> renames the table (default <code>sluice_heartbeat</code>) for namespaces where a DBA pre-creates it. <code>--source-heartbeat-prune-window</code> (default <code>1h</code>) is the age above which heartbeat rows are periodically deleted; <code>0</code> disables the prune and the table grows unbounded.</td></tr>
+  <tr><td><code>--heartbeat-interval</code></td><td class="desc">Cadence of sluice's own <em>log</em> heartbeat — an INFO <code>stream: heartbeat</code> line on a wall-clock timer (default <code>60s</code>, <code>0</code> disables). Distinct from <code>--source-heartbeat-interval</code>, which writes a row on the source database. This one exists to tell a silent stall (process alive, applying nothing, logging nothing) apart from a wedge (process alive, not even heartbeating).</td></tr>
   <tr><td><code>--dry-run</code>, <code>-n</code></td><td class="desc">Show cold-start vs warm-resume and the planned actions without starting.</td></tr>
   <tr><td><code>--schema-already-applied</code></td><td class="desc">Skip all cold-start DDL (you promise the target catalog matches). For Atlas/Liquibase-managed or PlanetScale Safe-Migrations targets.</td></tr>
   <tr><td><code>--include-table</code> / <code>--exclude-table</code></td><td class="desc">Glob-aware table filters (mutually exclusive). Scope the cold-start snapshot <em>and</em> its resume — including the PlanetScale (VStream) snapshot, so an excluded table in a large keyspace is never streamed (v0.99.12–v0.99.13), not just the write path.</td></tr>
@@ -821,6 +847,21 @@ ${cmd(
   <tr><td><code>--force-cold-start</code></td><td class="desc">Skip the pre-flight check that refuses to bulk-copy into a populated target. Use with caution — an INSERT into a non-empty table can collide on the primary key. Still warm-resumes from a persisted position (it only skips the check); ignored on the warm-resume path.</td></tr>
   <tr><td><code>--reset-target-data</code></td><td class="desc">Destructive recovery: delete the CDC-state row, DROP every source-schema table on the target, then run a fresh cold-start. For a wedged-state recovery (e.g. slot-missing fall-through). Prompts (type <code>reset</code>) unless <code>--yes</code>. See ADR-0023.</td></tr>
   <tr><td><code>--restart-from-scratch</code></td><td class="desc">Force a fresh cold-start re-copy from the beginning, ignoring any persisted resume position (incl. a mid-COPY cursor) — <em>without</em> dropping the target (the idempotent copy absorbs the overlap). For a bad checkpoint. Differs from <code>--force-cold-start</code> (keeps the position) and <code>--reset-target-data</code> (drops tables). (v0.99.10)</td></tr>
+  <tr><td><code>--copy-table-parallelism</code></td><td class="desc"><strong>Native (self-managed, non-Vitess) MySQL source only:</strong> the cold-copy <em>read</em> axis — how many concurrent FTWRL-coordinated pinned-snapshot reader connections the copy opens (ADR-0101). Consistency is identical to serial: one FTWRL cut, one binlog position. <code>0</code> (default) means unset — fall back to the source DSN's <a href="/docs/configuration/#dsn-tuning"><code>copy_table_parallelism</code></a>, then to the engine default (auto: 4, clamped to the table count). An explicit flag value wins over the DSN parameter; <code>1</code> opts out to serial. A source without the <code>RELOAD</code> privilege (RDS / Aurora) falls back to serial with a loud WARN. Inert on Postgres and VStream sources — this is why <code>--table-parallelism</code> is PG-source-only here.</td></tr>
+  <tr><td><code>--vstream-copy-table-parallelism</code></td><td class="desc"><strong>VStream (PlanetScale / Vitess) source only:</strong> the cold-copy <em>read</em> axis — how many concurrent single-table COPY streams the auto-shard cold-copy runs (ADR-0099), the read-side sibling of the write-side <code>--copy-fanout-degree</code>. <code>0</code> (default) = unset, falling back to the DSN's <code>vstream_copy_table_parallelism</code> and then the engine default of <code>1</code> (serial single stream); an explicit value wins over the DSN parameter. Inert on Postgres and native-MySQL sources.</td></tr>
+  <tr><td><code>--no-intra-table-stealing</code></td><td class="desc"><strong>Native-MySQL concurrent cold-copy only</strong> (<code>--copy-table-parallelism &gt; 1</code>, which the engine default already is): turn off intra-table PK-range work-stealing (ADR-0119). By default a large chunk-eligible table is split into PK ranges so an idle reader can steal a <em>chunk</em> of the last big table, keeping the copy N-wide to the tail instead of tapering to a single reader; with this set, every table is one whole-table work item. A throughput knob, not a correctness one — chunk coverage is gap-free and overlap-free either way. Inert on PG / VStream sources and on a serial copy.</td></tr>
+  <tr><td><code>--strict-float</code> / <code>--no-float-exact-reread</code></td><td class="desc"><strong>VStream (PlanetScale / Vitess) source cold-start only.</strong> vttablet's rowstreamer renders single-precision <code>FLOAT</code> at mysqld's 6-significant-digit display precision (<code>8388608</code> → <code>8388610</code>), so a VStream COPY lands those columns rounded. By default sluice re-reads them exactly over SQL (the ADR-0153 <code>(col * 1E0)</code> projection) and UPDATEs the target rows by PK before CDC begins, restoring float32 exactness — one extra read pass. <code>--no-float-exact-reread</code> skips that repair and keeps the rounding. <code>--strict-float</code> goes the other way: refuse loudly (<code>SLUICE-E-VSTREAM-FLOAT-LOSSY</code>, exit 3) before any row moves for a table the re-read <em>cannot</em> repair — no primary key to target it, or a single-precision FLOAT inside the primary key — where the default is a WARN plus rounded values. Passing both is refused (one disables the exactness the other demands). Both inert on sources whose snapshot is already float-exact (native MySQL, Postgres) and on schemas with no single-precision FLOAT column. <a href="/docs/commands/#backup"><code>backup full</code></a> takes the same pair plus <code>--float-reread-max-rows</code>.</td></tr>
+  <tr><td><code>--vstream-preserve-skew</code></td><td class="desc"><strong>VStream CDC only:</strong> opt back in to vtgate's <code>MinimizeSkew</code> hold — a commit-time-ordered merged stream across shards — on the steady-state multi-shard stream. Since ADR-0120 it is <strong>off</strong> by default: both shards stream and drain concurrently, because a real cross-region A/B showed the old on-by-default freezing the lagging shard under an apply-deficit backlog. Set this only if you specifically need strict cross-shard commit-time delivery and accept the catch-up-wedge risk. The DSN form <code>vstream_preserve_skew=true</code> also works; the flag wins. Inert on PG / native-MySQL sources and on a single-shard keyspace.</td></tr>
+  <tr><td><code>--apply-delay</code></td><td class="desc">Delayed-replica mode (ADR-0121) — the MySQL <code>MASTER_DELAY</code> "oops window" pattern. Hold each steady-state change until its <em>source commit timestamp</em> plus this duration has elapsed, so a target deliberately kept N behind lets you stop sluice before an accidental <code>DROP TABLE</code> or runaway <code>DELETE</code> replicates, and recover from the still-intact target. Only the steady-state CDC apply is delayed; the cold-start copy is not. Exactly-once survives a crash mid-window: a held-but-unapplied change never advances the durable position, so it is re-read on restart. Held changes backpressure to the source read (bounded memory, no large in-heap buffer) — for delays approaching the source's replication idle timeout (<code>wal_sender_timeout</code>, <code>net_write_timeout</code>) raise that <em>server-side</em> value or the source may reap the connection and sluice reconnects-and-replays. The configured delay is subtracted from <code>sluice_sync_lag_seconds</code>, so a healthy delayed replica reads ~0 lag rather than <code>delay</code>. <code>0</code> (default) disables.</td></tr>
+  <tr><td><code>--apply-tune-target-latency</code></td><td class="desc">Override the AIMD apply controller's p95 target latency (ADR-0052). Engine defaults when unset: <code>5s</code> on planetscale (Vitess's 20s transaction killer with 4× headroom), <code>10s</code> on mysql / postgres. Only consulted while the controller is active — <code>--no-auto-tune</code> makes it moot.</td></tr>
+  <tr><td><code>--control-keyspace</code></td><td class="desc"><strong>MySQL / PlanetScale / Vitess target only:</strong> put sluice's three CDC control tables (<code>sluice_cdc_state</code>, <code>sluice_cdc_schema_history</code>, <code>sluice_shard_consolidation_lease</code>) in this <em>unsharded</em> sidecar keyspace rather than the connection's default one. A sharded Vitess keyspace requires a primary vindex on every table and the control tables have none, so a sync against a sharded target otherwise dies with <code>VT09001: table sluice_cdc_state does not have a primary vindex</code>. Usually you can omit it: against a sharded target sluice auto-detects the sole unsharded sidecar and refuses loudly if there are zero or several candidates. On a sharded target the position write becomes a best-effort cross-keyspace commit — acceptable, since that apply is already cross-shard and resume is idempotent. Empty on an unsharded or non-Vitess target is unchanged behaviour; inert on non-MySQL targets. The same flag is accepted by <code>sync status</code> / <code>stop</code> / <code>health</code> / <code>decommission</code> and <a href="/docs/commands/#schema-add-table">schema add-table</a> (where it must match what the stream was started with), and by <a href="/docs/commands/#restore">restore</a> for a chain restore's incremental-replay leg.</td></tr>
+  <tr><td><code>--no-coordinate-live-ddl</code></td><td class="desc">Disable live cross-shard DDL coordination (ADR-0054). Coordination is <strong>on</strong> whenever <code>--inject-shard-column</code> is set: one shard's stream takes a lease, applies the DDL once on the consolidated target and records the schema version plus a DDL checksum; the peer shards verify the checksum, skip the apply, and keep streaming. This flag restores the pre-v0.73 drained model instead — you run <code>sync stop --wait</code> on every shard, migrate the schema once, then re-run <code>sync start</code> with each shard's same <code>--stream-id</code> (which warm-resumes) on every shard. A no-op when <code>--inject-shard-column</code> is unset.</td></tr>
+  <tr><td><code>--shard-coordination-lease-duration</code> / <code>--shard-coordination-renew-deadline</code> / <code>--shard-coordination-retry-period</code></td><td class="desc">Timings for that DDL-coordination lease (ADR-0054), consulted only when <code>--inject-shard-column</code> is set and <code>--no-coordinate-live-ddl</code> is absent. The holder writes <code>lease_expires_at = now + lease-duration</code> every <code>retry-period</code>; a stalled holder loses the lease after the duration and the takeover stream probes-and-records. Defaults <code>30s</code> / <code>20s</code> / <code>10s</code>, and the ordering <code>retry-period &lt; renew-deadline &lt; lease-duration</code> is enforced. Raise the lease to something like <code>300s</code> if you run <code>ALTER</code>s on tables large enough that the apply window exceeds 30s.</td></tr>
+  <tr><td><code>--backfill-added-column</code></td><td class="desc">After a forwarded <code>ADD COLUMN</code> lands, populate the <em>already-shipped</em> target rows with real source values instead of leaving them on the column's <code>DEFAULT</code> (<code>NULL</code> if none) — ADR-0058. The streamer issues a bounded PK-cursor <code>SELECT (pk, new_col)</code> against the source and emits synthetic UPDATE events. Off by default and knowingly opt-in: the cost is proportional to the table's source row count. Consulted whenever schema-change forwarding is active — i.e. under the default <code>--schema-changes=forward</code>; <code>--schema-changes=refuse</code> makes it moot, as do <code>--inject-shard-column</code> (whose own boundary router handles the shape) and multi-database streams (which don't forward DDL at all).</td></tr>
+  <tr><td><code>--auto-prune-change-log</code> / <code>--auto-prune-interval</code> / <code>--auto-prune-keep</code></td><td class="desc"><strong>Trigger-CDC sources only</strong> (<code>postgres-trigger</code> / <code>sqlite-trigger</code> / <code>d1-trigger</code>) — a no-op on every other engine, which has no change log. Reap consumed rows from the source's <code>sluice_change_log</code> in-stream so it can't grow unbounded on a continuous sync (ADR-0137): equivalent to cronning <a href="/docs/commands/#trigger"><code>sluice trigger prune</code></a>, without the cron. Off by default — auto-DELETEing rows on the <em>source</em> is an explicit opt-in. Only rows below the target's persisted CDC frontier (minus <code>--auto-prune-keep</code>, default <code>1000</code>) are removed, so warm-resume is never starved, and a prune failure is logged and swallowed. Multi-stream safe: every trigger-CDC sync records its applied frontier in the source's <code>sluice_change_log_consumers</code> table and the cut is taken at the <em>minimum</em> across registered consumers. Two caveats before enabling it on a shared source — a change log predating that registry is refused (nothing is pruned) until you re-run <code>sluice trigger setup</code> to migrate it, and a peer sync on an older sluice never registers at all, so upgrade every sync on the source first. Cadence via <code>--auto-prune-interval</code> (default <code>5m</code>).</td></tr>
+  <tr><td><code>--patroni-mode</code></td><td class="desc">Control the Patroni / HA-managed Postgres source detection. <code>auto</code> (default) runs the engine heuristics plus a DSN hostname-pattern check and warns if any signal fires; <code>on</code> skips the heuristics and forces the warning (for tenant-isolated managed PG the heuristics miss); <code>off</code> suppresses it entirely (you have confirmed a self-hosted single-node PG with no HA). Pair <code>--patroni-mode=on</code> with <code>--strict-preflight</code> to turn the warning into a hard refusal.</td></tr>
+  <tr><td><code>--notify-smtp-host</code> + family</td><td class="desc">Email sink for threshold alerts — one relay covers every transactional provider (SendGrid / Mailgun / SES / Postmark are all SMTP) and self-hosted relays. Opt-in: the sink is inert until <code>--notify-smtp-host</code> is set, and setting it makes <code>--notify-smtp-from</code> and at least one <code>--notify-smtp-to</code> (repeatable) required. <code>--notify-smtp-tls</code> picks the transport — <code>starttls</code> (default), <code>implicit</code> (TLS from connect), or <code>none</code> (cleartext, trusted local relay only) — and <code>--notify-smtp-port</code> defaults from it (587 for starttls/none, 465 for implicit). <code>--notify-smtp-auth</code> is <code>none</code> (default), <code>plain</code>, or <code>login</code>; the latter two need <code>--notify-smtp-username</code> (e.g. <code>apikey</code> for SendGrid) and the password, which is read <strong>only</strong> from the <code>SLUICE_NOTIFY_SMTP_PASSWORD</code> env var (<code>--notify-smtp-password</code> is never to be passed on the command line; it is masked in all logging). Advisory and failure-isolated like the other sinks — a dead relay is logged and swallowed. The identical set is accepted by <a href="/docs/commands/#metrics-watch">metrics-watch</a>.</td></tr>
+  <tr><td>Shared with <a href="/docs/commands/#migrate">migrate</a></td><td class="desc">The copy-phase flags documented under <code>migrate</code> apply to the cold-start here with the same meaning: <code>--upfront-indexes</code>, <code>--index-build-mem</code>, <code>--analyze-after</code>, <code>--skip-foreign-keys</code>, <code>--bulk-batch-size</code>, <code>--raw-copy-format</code>, <code>--reap-stale-backends</code>, <code>--planetscale-raise-query-timeout</code>, <code>--enable-pg-extension</code>, <code>--keyset-source</code>, <code>--redact</code>, <code>--type-override</code>, the view filters <code>--include-view</code> / <code>--exclude-view</code> / <code>--skip-views</code>, and <code>--diagnose-on-crash-dir</code> / <code>--diagnose-on-crash-privacy</code>. Only the cold-start is affected — steady-state CDC apply builds no indexes, creates no constraints, and replicates no views.</td></tr>
   </tbody></table>
   <div class="note warn"><strong>Source DDL auto-applies by default (v0.99.45, ADR-0091).</strong> A running stream now forwards unambiguous source schema changes onto the target automatically — including a <strong>destructive <code>DROP COLUMN</code></strong>, which drops the column (and its data) on the target. This keeps the sync online through routine schema evolution, but it means a source DDL change propagates without operator review. To gate DDL through a separate change-management process, start the stream with <code>--schema-changes=refuse</code> — any source DDL then surfaces loudly instead of applying. (The older <code>--forward-schema-add-column</code> flag is deprecated: it warns and still forwards, subsumed by the new default.)</div>
   <div class="note"><strong>Mid-stream reshard is followed automatically (v0.99.62, ADR-0094).</strong> A PlanetScale/Vitess source reshard (shard split/merge, <code>MoveTables</code>) used to halt the sync as a loud terminal error. The Streamer now reopens onto the new shard layout from the journal-stamped GTIDs and continues with no gap and no re-snapshot. (Not yet auto-followed when <code>--inject-shard-column</code> is engaged — that interplay keeps the prior loud-terminal behavior.)</div>
@@ -848,7 +889,7 @@ ${cmd(
   "sluice sync status · stop · health · decommission",
   "Inspect, gracefully stop, health-check, and retire a stream. All take --stream-id plus the target connection (decommission takes the source too).",
   `<ul>
-   <li><code>sync status</code> — show the stream's persisted position and phase.</li>
+   <li><code>sync status</code> — show the stream's persisted position and phase. <code>--watch DURATION</code> re-renders on that interval until interrupted (<code>--watch 2s</code> is the usual operator cadence; <code>0</code>, the default, prints once and exits). <code>--summary</code> prepends an aggregate header — stream count, oldest and most-recent ages — which is what makes a fleet listing skimmable rather than a wall of rows.</li>
    <li><code>sync stop</code> — request the stream to drain in-flight changes and exit cleanly. By default it just files the stop request and returns; pass <code>--wait</code> / <code>-w</code> to block until the running streamer drains and clears its stop signal (with <code>--timeout</code>, default <code>5m</code>; on timeout the CLI exits non-zero and the stop request remains in place). Use <code>--wait</code> to coordinate ALTER windows or scripted teardowns.</li>
    <li><code>sync health</code> — probe freshness against thresholds and return a cron-friendly exit code (non-zero when stale).</li>
    <li><code>sync decommission</code> — retire a <strong>finished</strong> stream's durable footprint in one gated command (v0.99.291): drops its replication slot on the source (a leftover slot pins WAL and, on Postgres, blocks later differently-scoped cold starts under the scope guard), drops its recorded per-stream publication (never the shared <code>sluice_pub</code>), then clears its control row <em>last</em> — so a partially-failed run keeps the record and an idempotent re-run finishes the job. Takes the cross-DSN <code>sync start</code> shape (<code>--source-driver/--source --target-driver/--target --stream-id</code>); refuses on a live stream (<code>SLUICE-E-DECOMMISSION-STREAM-ACTIVE</code> — run <code>sync stop --wait</code> first) and without <code>--yes</code>; <code>--dry-run</code> previews without touching anything. MySQL-family sources have no source-side objects (the binlog is the stream), so decommission clears the control row and says so; trigger-CDC change-log tables belong to <code>trigger prune</code>/<code>teardown</code>.</li>
@@ -949,8 +990,9 @@ ${cmd(
   "cutover-c",
   "sluice cutover",
   "Two-phase sequence priming at cutover: re-read source sequence / AUTO_INCREMENT state and apply it to the target with a safety margin, so the first post-cutover INSERT can't collide on the primary key.",
-  `${pre(`sluice cutover --config sluice.yaml --cutover-sequence-margin 1000`)}
-   <p>Run after the snapshot has caught up and just before switching application traffic to the target.</p>`
+  `${pre(`sluice cutover --config sluice.yaml --sequence-margin 1000`)}
+   <p>Run after the snapshot has caught up and just before switching application traffic to the target.</p>
+   <p><code>--sequence-margin</code> (default <code>1000</code>) is the headroom added on top of every source sequence value before it is applied — cover for in-flight source-side INSERTs between the read and the apply, and between the apply and the moment you actually flip traffic. The same margin doubles as the idempotency tolerance: a re-run within <code>margin</code> rows of the first does <em>not</em> refuse. (The older spelling <code>--cutover-sequence-margin</code> still works as a deprecated alias.)</p>`
 )}
 
 <h2 id="backup">backup</h2>
@@ -962,7 +1004,7 @@ ${cmd(
   <tr><td><code>backup full</code></td><td class="desc">Take a full snapshot (chain root).</td></tr>
   <tr><td><code>backup incremental</code></td><td class="desc">Append an incremental onto the existing chain.</td></tr>
   <tr><td><code>backup stream run</code> / <code>stop</code></td><td class="desc">Run as a long-lived process appending incrementals at a rolling cadence; <code>stop</code> drains the in-flight rollover and exits cleanly.</td></tr>
-  <tr><td><code>backup verify</code></td><td class="desc">Re-checksum every chunk in a chain and report mismatches.</td></tr>
+  <tr><td><code>backup verify</code></td><td class="desc">Read-only chain check. Re-checksums every chunk against the manifest and reports mismatches; <code>--depth read</code> additionally parses every chunk back through the reader <code>restore</code> uses.</td></tr>
   <tr><td><code>backup prune</code> / <code>compact</code></td><td class="desc">Retention: drop the oldest segments, or merge consecutive segments whose gaps fall within <code>--merge-window</code>. Compact splits a merge group at a rotation-boundary coverage gap instead of refusing the run (v0.99.41) — chains stopped while the source was idle stay compactable.</td></tr>
   <tr><td><code>backup keygen</code></td><td class="desc">Generate an Ed25519 signing keypair for <code>--sign-key</code> / <code>--verify-key</code> (ADR-0154 Phase 2): the private key (PKCS#8 PEM, written 0600) signs backups, the public key (SPKI PEM, distributable freely) verifies them. <code>--out-dir DIR</code> writes <code>sluice-sign-key.pem</code> + <code>sluice-verify-key.pem</code>, or name the paths with <code>--priv</code> + <code>--pub</code> (mutually exclusive with <code>--out-dir</code>); <code>--force</code> overwrites — by default keygen refuses to clobber an existing private key (losing/replacing it strands the signing of any chain it already signed).</td></tr>
   <tr><td><code>backup export-as-parquet</code></td><td class="desc">One-shot, read-only transcode of a backup's row chunks into Parquet for analytics — <a href="/docs/commands/#backup-export-parquet">own section below</a>.</td></tr>
@@ -980,6 +1022,23 @@ ${cmd(
   <tr><td><code>--sign-key</code></td><td class="desc">Sign with an Ed25519 <strong>private</strong> key (PKCS#8 PEM — generate a pair with <code>sluice backup keygen</code>), or via a cloud KMS signing key given as <code>kms://&lt;provider&gt;/&lt;key-ref&gt;</code> (<code>aws</code> / <code>gcp</code> / <code>azure</code> — the private key stays in the HSM). Selects the asymmetric scheme over the <code>--sign</code> HMAC default; works on <strong>both plaintext and encrypted</strong> backups. Accepts a file path, <code>env:VAR</code>, or <code>kms://...</code>; never logged.</td></tr>
   <tr><td><code>--verify-key</code></td><td class="desc">Read side (<code>restore</code> / <code>backup verify</code> / the broker / <code>export-as-parquet</code>): the <strong>public</strong> key that verifies an asymmetrically-signed chain — an SPKI PEM file (the offline DR path) or <code>kms://...</code> to fetch the trusted key online. <strong>Required</strong> for such a chain — the KEK does NOT verify an asymmetric signature, and the recorded manifest key reference is never trusted; verification anchors on the key <em>you</em> name. Absent it, the chain WARNs present-but-unverified and proceeds (DR-safe) unless <code>--require-signature</code>.</td></tr>
   <tr><td><code>--require-signature</code></td><td class="desc">Strict-always signature policy on restore/verify: a signed chain that <em>cannot be verified</em> (no matching key supplied) is refused rather than warned. An INVALID signature is always refused regardless of this flag. Leave off for the DR-safe default (never fail a restore for a signature it cannot check).</td></tr>
+  <tr><td><code>--encrypt-mode</code></td><td class="desc"><code>per-chain</code> (one content key for the whole chain — one KEK derive or KMS <code>Decrypt</code> per restore) or <code>per-chunk</code> (one content key per chunk — defence in depth, at the cost of a wrap per chunk). Omit it to <strong>inherit the chain's existing mode</strong>; a fresh full defaults to <code>per-chain</code>. Extending an encrypted chain with the wrong mode is refused, so in practice you set this once, on the chain root.</td></tr>
+  <tr><td><code>--kms-region</code> / <code>--azure-wrap-algorithm</code></td><td class="desc">Provider knobs for KMS mode. <code>--kms-region</code> overrides the AWS region for KMS calls (otherwise <code>AWS_REGION</code> or the SDK's own resolution). <code>--azure-wrap-algorithm</code> overrides the Azure Key Vault wrap algorithm, which defaults to <code>RSA-OAEP-256</code> and works for software-protected RSA keys — an <strong>HSM-backed AES key needs <code>A256KW</code></strong>. Both are accepted by every command that touches an encrypted chain (<code>backup full</code> / <code>incremental</code> / <code>stream run</code> / <code>verify</code> / <code>prune</code> / <code>compact</code> / <code>export-as-parquet</code>, <a href="/docs/commands/#restore">restore</a>, and the <a href="/docs/commands/#sync-from-backup">from-backup broker</a>).</td></tr>
+  <tr><td><code>--keyset-source</code></td><td class="desc">On <code>backup full</code>, the companion to <code>--redact</code> when a rule uses <code>hash:hmac-sha256</code> or <code>tokenize:dict</code> — same <code>file:</code> / <code>env:</code> / <code>db:</code> forms as <a href="/docs/commands/#migrate">migrate</a>'s. Redaction is applied at chunk-write time, so the chain rests PII-clean; a restore reproduces the redacted shape and never re-applies (or undoes) it.</td></tr>
+  <tr><td><code>--chunk-size</code></td><td class="desc">Maximum rows (on <code>full</code>) or changes (on <code>incremental</code> / <code>stream run</code>) per chunk file; the writer rolls over on reaching it. Default <code>100000</code>. Smaller chunks restore faster — the per-chunk SHA-256 verification fails fast on the smallest possible unit — but inflate the manifest.</td></tr>
+  <tr><td><code>--since</code></td><td class="desc">On <code>incremental</code> / <code>stream run</code>: the BackupID of the parent manifest this run chains off. Empty (default) picks the most recent manifest at the destination.</td></tr>
+  <tr><td><code>--window</code> / <code>--max-changes</code></td><td class="desc"><code>backup incremental</code>'s two window bounds. <code>--window</code> (default <code>5m</code>) is the wall-clock duration it streams CDC events for; <code>--max-changes</code> stops after N events, <code>0</code> (default) meaning time-bound only. Both are approximate in the same way: transaction framing counts as events (a one-row transaction is three), and the window always extends to the next <code>TxCommit</code> so a chain never ends mid-transaction — and never closes before it has passed the parent's end position.</td></tr>
+  <tr><td><code>--rollover-window</code> / <code>--rollover-max-changes</code> / <code>--rollover-max-bytes</code></td><td class="desc"><code>backup stream run</code>'s rollover thresholds — the long-lived process's equivalent of the above; whichever fires first commits the rollover. Defaults: <code>5m</code>, <code>100000</code> events, <code>64&nbsp;MiB</code> of buffered chunk bytes. The byte bound is checked at chunk-flush boundaries, so the buffer can transiently exceed it by up to one chunk.</td></tr>
+  <tr><td><code>--include-empty</code></td><td class="desc">On <code>backup stream run</code>: commit a manifest even for a rollover that captured zero changes. Off by default — an idle window adds nothing to the chain, and <code>stream_state.json</code> already covers liveness without polluting it.</td></tr>
+  <tr><td><code>--rollover-hook</code></td><td class="desc">Shell command run after each rollover commits successfully, with <code>SLUICE_ROLLOVER_MANIFEST_PATH</code>, <code>_PARENT_BACKUP_ID</code>, <code>_BACKUP_ID</code>, <code>_CHANGES</code>, <code>_BYTES</code>, and <code>_ELAPSED_MS</code> in the environment — the hook for driving downstream catalog updates or notifications. 30s timeout; a hook error is WARN-logged and never fails the stream.</td></tr>
+  <tr><td><code>--retain-rotate-at</code> / <code>--retain-rotate-at-chain-length</code></td><td class="desc">In-process segment rotation on <code>backup stream run</code> (ADR-0046): cap the open segment and start a fresh one over the <em>same</em> CDC handle once it reaches this age, or once this many incrementals have been committed to it — no operator wrapper, no stream exit. Either threshold firing wins; <code>0</code> disables each. Pair with <code>backup prune</code> to bound total disk.</td></tr>
+  <tr><td><code>--retry-attempts</code> / <code>--retry-backoff-base</code> / <code>--retry-backoff-cap</code></td><td class="desc"><code>backup stream run</code>'s retry budget for consecutive <em>retriable</em> rollover failures: how many it absorbs before giving up (default <code>8</code>; <code>1</code> disables retry), the base interval (default <code>100ms</code>, doubling), and the per-interval ceiling (default <code>30s</code>). Mirrors the sync stream's <code>--apply-retry-*</code> knobs, whose spellings are accepted here as aliases.</td></tr>
+  <tr><td><code>--keep-incrementals</code> / <code>--keep-duration</code></td><td class="desc"><code>backup prune</code>'s retention policy — keep at least the N most-recent incrementals, or keep those younger than a duration (<code>168h</code> = 7d, <code>720h</code> = 30d). Mutually exclusive. Both round <strong>up</strong> to a segment boundary, because prune retires only whole segments: you always keep more than you asked for, never fewer.</td></tr>
+  <tr><td><code>--smart-compaction</code> / <code>--smart-compaction-off</code> / <code>--compaction-pk-strategy</code></td><td class="desc"><code>backup compact</code>'s event-level collapse (ADR-0064): within each merge group's change-chunks, <code>INSERT</code>+<code>UPDATE</code> becomes an <code>INSERT</code>, <code>UPDATE</code>+<code>UPDATE</code> an <code>UPDATE</code>, <code>INSERT</code>+<code>DELETE</code> nothing, <code>UPDATE</code>+<code>DELETE</code> a <code>DELETE</code>. <strong>Off by default</strong> — opt in when an update-heavy workload makes the CPU cost worth the smaller chain; <code>--smart-compaction-off</code> states that default explicitly, as an audit trail or as the recovery flag after a refuse-loudly on a corrupt PK. The two are mutually exclusive. <code>--compaction-pk-strategy</code> picks the row identity the collapse keys on and has no effect without <code>--smart-compaction</code>: <code>pk</code> (default) uses the declared primary key, <code>replica-identity</code> is a PG-facing alias for <code>pk</code> today, and <code>none</code> disables per-row collapse (a debugging escape hatch).</td></tr>
+  <tr><td><code>--depth</code></td><td class="desc"><code>backup verify</code>'s two depths — <code>hash</code> (default) or <code>read</code>. <code>hash</code> re-hashes every chunk's stored bytes against the manifest SHA-256, plus (with <code>--encrypt</code> and the chain's key) the real authenticated open every encrypted chunk gets at restore. <code>read</code> additionally streams every chunk — data <em>and</em> change chunks — through its own real reader and discards the rows, which is <strong>the only evidence <code>verify</code> has that is not the artifact it is checking</strong>: it catches an over-long row line, a truncated stream, and a wrong recorded codec, all of which hash perfectly and then fail at restore (<code>SLUICE-E-BACKUP-CHUNK-UNREADABLE</code>, the Bug 226 shape). It subsumes the hash depth (the reader hashes as it goes and decrypts at open). It costs one full read + decompress + decrypt + decode per chunk, which is why the cheap depth stays the default for a cron probe against object storage. On an <strong>encrypted</strong> chain <code>read</code> <em>requires</em> <code>--encrypt</code> + key material and refuses up front without it — parsing is all it does, so it cannot degrade to the key-less depth the way <code>hash</code> can. A parse proves the chunk <strong>decodes</strong>, not that its values are correct: only <a href="/docs/commands/#verify"><code>sluice verify</code></a> against the source answers that, and only a test-restore proves the rows apply. Assert the reported <code>Chunks</code> / <code>Decrypted</code> / <code>Depth</code> fields rather than the exit status.</td></tr>
+  <tr><td><code>--dry-run</code>, <code>-n</code></td><td class="desc">On <code>backup prune</code> and <code>backup compact</code> — the two chain-hygiene verbs, which are the only <code>backup</code> subcommands that <strong>irreversibly</strong> drop history or rewrite the catalog. Prints the plan (which segments would be retired or merged) and exits without touching the chain. Run it first, read the plan, then run for real: prune's retention rounds <strong>up</strong> to a segment boundary, so the number of incrementals it actually retains is usually larger than the one you asked for, and the dry run is where you see that before it happens rather than after.</td></tr>
+  <tr><td><code>--rebuild-catalog</code></td><td class="desc"><code>backup verify</code> repair mode: rebuild <code>lineage.json</code> from scratch by walking the conventional one-segment layout (<code>manifest.json</code> + <code>manifests/incr-*.json</code>), then exit. For a single-segment backup that was manually mutated. The compression codec is sniffed from the chunk magic bytes; on an <strong>encrypted</strong> chain also pass <code>--encrypt</code> plus the passphrase / KMS reference, since the codec is sealed inside the envelope. It cannot repair a rotated, multi-segment chain: that sub-directory structure is not reconstructable from a bare walk — <code>lineage.json</code> <em>is</em> the structural record there.</td></tr>
+  <tr><td><code>--strict-float</code> / <code>--no-float-exact-reread</code> / <code>--float-reread-max-rows</code></td><td class="desc"><strong><code>backup full</code> from a VStream (PlanetScale / Vitess) source only.</strong> The same single-precision-FLOAT repair described under <a href="/docs/commands/#sync-start">sync start</a>: by default sluice re-reads FLOAT columns exactly from the source and patches the archived rows, so the backup stores exact float32. The cost is a bounded within-row temporal skew — the FLOAT reflects a read instant just after the snapshot VGTID; it is zero on a quiescent source, and it <em>self-heals</em> on a chain restore because incrementals replay from the full's position forward, so it persists only for a standalone-full restore of a source taking concurrent FLOAT writes. <code>--no-float-exact-reread</code> keeps the rounded-but-perfectly-consistent snapshot for operators who value within-row consistency over FLOAT precision. <code>--strict-float</code> refuses (<code>SLUICE-E-VSTREAM-FLOAT-LOSSY</code>, exit 3) instead of falling back to a WARN for any table that cannot be made exact. <code>--float-reread-max-rows</code> caps the per-table row buffer the repair uses so it stays bounded-memory — <code>0</code> (default) means 2,000,000 rows, a few hundred MB worst case; a larger FLOAT-bearing table falls back (WARN, or refusal under <code>--strict-float</code>) rather than buffering. A keyless table keeps the rounding regardless: there is no key to target the re-read.</td></tr>
   </tbody></table>
   ${pre(`sluice backup full --source-driver postgres --source ... --target s3://my-bucket/app-chain --chain-slot
 sluice backup incremental --source-driver postgres --source ... --target s3://my-bucket/app-chain
@@ -1031,6 +1090,7 @@ ${cmd(
   <tr><td><code>--planetscale-org</code></td><td class="desc">PlanetScale org slug, consumed by <strong>both</strong> optional PlanetScale integrations — each arms on its own token pair (v0.99.259): <strong>(1) target-health telemetry</strong> (ADR-0107/0115) clamping the AUTO restore-parallelism product by live headroom — all-or-nothing with the metrics-token pair (<code>--planetscale-metrics-token-id</code> / <code>--planetscale-metrics-token</code>, env-set); <strong>(2) the ADR-0148 deploy-request index-build fallback</strong> for restore's deferred index phase on a <code>planetscale</code> target — opportunistic, WARN-at-most, arming on the service-token pair (a fallback-only arming never trips the telemetry refusal). Control-plane only, distinct from the data-plane <code>--target</code> DSN; no ambient <code>PLANETSCALE_ORG</code> env binding on this command. Off when unset.</td></tr>
   <tr><td><code>--planetscale-database</code> / <code>--planetscale-branch</code> / <code>--planetscale-service-token-id</code> / <code>--planetscale-service-token</code> / <code>--planetscale-deploy-timeout</code></td><td class="desc">ADR-0148 index-build fallback inputs — same set and defaults as <a href="/docs/commands/#migrate">migrate</a>'s (database from the <code>--target</code> DSN, branch <code>main</code>, deadline <code>1h</code>; service token via env). Before v0.99.259 a restore's walled PlanetScale index build always ended at the <code>SLUICE-E-INDEX-*</code> hint even with credentials available. On timeout the deploy keeps running in PlanetScale and re-running the restore re-probes and rebuilds only what is still missing.</td></tr>
   <tr><td><code>--target-tls-ca</code></td><td class="desc">CA-pinned verify-ca TLS to a MySQL target (ADR-0158) — see the <a href="/docs/commands/#migrate">migrate</a> row.</td></tr>
+  <tr><td><code>--control-keyspace</code></td><td class="desc"><strong>MySQL / PlanetScale / Vitess target, chain restores only:</strong> the unsharded sidecar keyspace the incremental-replay leg's CDC control tables live in. That leg writes <code>sluice_cdc_state</code> / <code>sluice_cdc_schema_history</code> / <code>sluice_shard_consolidation_lease</code>, and a <em>sharded</em> target rejects those vindex-less tables — point this at a separate unsharded keyspace to unblock it. Omit to auto-detect the sole unsharded sidecar (a loud refusal if there are zero or several candidates). Inert on non-MySQL targets and on a single-full restore, which replays nothing. Full semantics under <a href="/docs/commands/#sync-start">sync start</a>.</td></tr>
   </tbody></table>
   ${pre(`sluice restore --from s3://my-bucket/app-chain \\
     --target-driver postgres --target ...`)}
@@ -1206,7 +1266,14 @@ ${cmd(
   "sluice schema preview · diff",
   "Inspect translation without moving data: print the target DDL sluice would emit, or diff a live target against what sluice would produce.",
   `${pre(`sluice schema preview --source-driver mysql --source ... --target-driver postgres
-sluice schema diff    --source-driver mysql --source ... --target-driver postgres --target ...`)}`
+sluice schema diff    --source-driver mysql --source ... --target-driver postgres --target ...`)}
+  <table><thead><tr><th>Flag</th><th>Purpose</th></tr></thead><tbody>
+  <tr><td><code>--include-view</code> / <code>--exclude-view</code> / <code>--skip-views</code></td><td class="desc">Scope which views are previewed / diffed (comma-separated, repeatable, glob-aware; include and exclude are mutually exclusive). <code>--skip-views</code> drops views from the comparison entirely — the flag for a target whose views are managed out-of-band, where view drift isn't sluice's concern. Same spellings as <a href="/docs/commands/#migrate">migrate</a>'s.</td></tr>
+  <tr><td><code>--ignore-charset-collation</code></td><td class="desc"><code>schema diff</code> only: suppress MySQL charset / collation differences, which operators often manage out-of-band via server defaults rather than per-column.</td></tr>
+  <tr><td><code>--ignore-extras</code></td><td class="desc"><code>schema diff</code> only: suppress "extra on target" findings — tables, columns, and indexes present on the target but absent from the source. Use it when the target legitimately hosts other applications' tables, so the diff reports only what sluice would have to change.</td></tr>
+  <tr><td><code>--enable-pg-extension</code></td><td class="desc">Same extension passthrough opt-in as <a href="/docs/commands/#migrate">migrate</a>'s (<code>vector</code>, <code>pg_trgm</code>, <code>hstore</code>, <code>citext</code>) — pass the same set you intend to migrate with, or the preview / diff will show the loud-failure default instead of the shape you'll actually get.</td></tr>
+  <tr><td><code>--redact</code> / <code>--keyset-source</code></td><td class="desc"><code>schema preview</code> only: annotate which columns your <code>--redact</code> rules would hit, so you can see the plan before committing to it. Each affected column's <code>CREATE TABLE</code> line gains a trailing <code>-- REDACTED via &lt;strategy&gt;</code> comment; the DDL itself is unchanged, since redaction transforms values, not types. <code>--keyset-source</code> takes the same forms as on <a href="/docs/commands/#migrate">migrate</a>.</td></tr>
+  </tbody></table>`
 )}
 
 <h2 id="verify">verify</h2>
@@ -1239,8 +1306,9 @@ ${cmd(
   "slot-c",
   "sluice slot list · drop",
   "Manage source-side Postgres replication slots — list sluice-created slots, or drop an orphaned one left by an interrupted stream.",
-  pre(`sluice slot list --source-driver postgres --source ...
-sluice slot drop --source-driver postgres --source ... --slot-name sluice_slot`)
+  `${pre(`sluice slot list --source-driver postgres --source ...
+sluice slot drop --source-driver postgres --source ... --slot-name sluice_slot --if-exists`)}
+   <p><code>slot drop --if-exists</code> treats a missing slot as success rather than an error — the form to use in teardown scripts and re-runnable playbooks, where the slot may already be gone.</p>`
 )}
 
 <h2 id="diagnose">diagnose</h2>
@@ -1249,6 +1317,7 @@ ${cmd(
   "sluice diagnose",
   "Assemble an operator bundle (source/target capability + role state, debug-zip shape) to attach when filing an issue.",
   `${pre(`sluice diagnose --source-driver mysql --source ... --target-driver postgres --target ... --out ./sluice-diagnose.zip`)}
+   <p><code>--privacy</code> decides what goes in the bundle, and ADR-0056 holds the full inclusion/exclusion contract. <code>basic</code> is state-table dumps only — no version, no DSN, no logs. <code>standard</code> (the default here) adds redacted CLI args, the sluice version, engine health probes, capabilities, and target-health telemetry. <code>verbose</code> adds a per-table <code>COUNT(*)</code> on the target — a slow path on large tables — plus the last 200 lines of the file named by <code>--log-file</code>. That log path is sluice's own slog output file; empty (the default) means no log is included at any level. Note the auto-on-crash form of this bundle (<a href="/docs/commands/#migrate"><code>--diagnose-on-crash-dir</code></a>) deliberately defaults to <code>basic</code> instead, because nobody is present to review what it wrote.</p>
    <p>Supply the five PlanetScale telemetry flags — <code>--planetscale-org</code>, <code>--planetscale-metrics-token-id</code> / <code>--planetscale-metrics-token</code> (env), <code>--planetscale-metrics-db</code> (defaults to the <code>--target</code> DSN's database), <code>--planetscale-metrics-branch</code> (default <code>main</code>) — to add a target-health metrics snapshot (CPU/mem/storage/lag) to the bundle. Control-plane credential, distinct from <code>--target</code>. See <a href="/docs/commands/#sync-start">sync start</a> for the same flag semantics.</p>`
 )}
 
@@ -1261,13 +1330,17 @@ ${cmd(
   <tr><td><code>--engine</code></td><td class="desc">Required: <code>mysql</code> | <code>postgres</code> | <code>planetscale</code> | <code>vitess</code> — picks the PlanetScale metric vocabulary for the watched database. No DB connection is opened.</td></tr>
   <tr><td><code>--planetscale-org</code></td><td class="desc">Required. Org slug whose metrics endpoint the watch reads. Control-plane only.</td></tr>
   <tr><td><code>--planetscale-metrics-token-id</code> / <code>--planetscale-metrics-token</code></td><td class="desc">Service-token (<code>read_metrics_endpoints</code>) ID + secret. Set via the env vars <code>PLANETSCALE_METRICS_TOKEN_ID</code> / <code>PLANETSCALE_METRICS_TOKEN</code> — never on the command line.</td></tr>
-  <tr><td><code>--planetscale-metrics-db</code></td><td class="desc">Required — the database to watch (there is no <code>--target</code> DSN to derive it from).</td></tr>
+  <tr><td><code>--planetscale-metrics-db</code></td><td class="desc">Required — the database to watch (there is no <code>--target</code> DSN to derive it from), unless <code>--fleet</code> replaces it.</td></tr>
+  <tr><td><code>--fleet</code> / <code>--fleet-concurrency</code></td><td class="desc">Watch the <strong>whole org</strong> instead of one database: every database + branch the org's metrics service discovery returns, fanned out on the same cadence. Mutually exclusive with <code>--planetscale-metrics-db</code>. <code>--fleet-concurrency</code> bounds how many per-branch scrapes run at once each poll (default <code>4</code>, max <code>16</code>) — the knob for keeping the fan-out's load on the PlanetScale metrics API in hand.</td></tr>
+  <tr><td><code>--include-database</code> / <code>--exclude-database</code></td><td class="desc"><strong><code>--fleet</code> mode only</strong> (ADR-0180) — scope the org-wide fan-out to a subset. Each takes a <strong>glob</strong> (comma-separated, repeatable), matched against both <code>database</code> and <code>database/branch</code>, so <code>--include-database 'app-*'</code> and <code>--exclude-database '*/dev'</code> both work. They combine, and <strong>exclude wins</strong> when a database matches both. Note the value domain differs from <a href="/docs/commands/#migrate"><code>migrate</code></a>'s same-named table filters: these are PlanetScale database/branch globs, not table names.</td></tr>
+  <tr><td><code>--sink-file</code> / <code>--sink-file-max-bytes</code> / <code>--sink-file-max-files</code></td><td class="desc">Append every polled sample to a rotating JSONL file, one record per line — opt-in durable storage for a portal or warehouse with no Prometheus involved. Rotation size defaults to 64&nbsp;MiB (<code>0</code> selects that default; a <em>negative</em> value disables rotation and you own the file's growth), keeping 5 generations by default (<code>PATH.1</code> … <code>PATH.N</code>). Advisory: a write failure is logged and swallowed, never stalling the poll.</td></tr>
+  <tr><td><code>--sink-http</code></td><td class="desc">POST each polled sample batch as JSON to an endpoint — the same record schema as <code>--sink-file</code>. Treated as a credential: set it via the <code>SLUICE_METRICS_SINK_HTTP</code> env var. Advisory and failure-isolated.</td></tr>
   <tr><td><code>--planetscale-metrics-branch</code></td><td class="desc">Branch to filter the series to (default <code>main</code>).</td></tr>
   <tr><td><code>--interval</code></td><td class="desc">Poll / print cadence (default <code>60s</code> — the PlanetScale metrics granularity).</td></tr>
   <tr><td><code>--once</code></td><td class="desc">Poll a single sample, print / evaluate it, and exit (the one-shot mode for scripts).</td></tr>
   <tr><td><code>--quiet</code></td><td class="desc">Suppress the per-poll live line; emit only threshold alerts (the alert-only-daemon shape).</td></tr>
   <tr><td><code>--metrics-listen</code></td><td class="desc">Also serve a Prometheus <code>/metrics</code> endpoint re-exporting the watched database's CPU/mem/storage/lag as the <code>sluice_target_*</code> gauge family — turning the daemon into a standalone PlanetScale-metrics exporter. Ignored with <code>--once</code>.</td></tr>
-  <tr><td><code>--notify-*</code></td><td class="desc">The telemetry-backed alerter set — <code>--notify-webhook</code> / <code>--notify-slack</code> sinks (env <code>SLUICE_NOTIFY_WEBHOOK</code> / <code>SLUICE_NOTIFY_SLACK</code>) and the <code>--notify-storage-util</code> / <code>--notify-cpu-util</code> / <code>--notify-mem-util</code> / <code>--notify-lag-seconds</code> / <code>--notify-storage-growth-per-min</code> thresholds + <code>--notify-cooldown</code> — identical semantics to <a href="/docs/commands/#sync-start">sync start</a>. (The target-probe rules — sync lag and the v0.99.288 vacuum advisories — live on <code>sync start</code> only; the daemon holds no database connection.)</td></tr>
+  <tr><td><code>--notify-*</code></td><td class="desc">The telemetry-backed alerter set — <code>--notify-webhook</code> / <code>--notify-slack</code> sinks (env <code>SLUICE_NOTIFY_WEBHOOK</code> / <code>SLUICE_NOTIFY_SLACK</code>) and the <code>--notify-storage-util</code> / <code>--notify-cpu-util</code> / <code>--notify-mem-util</code> / <code>--notify-lag-seconds</code> / <code>--notify-storage-growth-per-min</code> thresholds + <code>--notify-cooldown</code> — identical semantics to <a href="/docs/commands/#sync-start">sync start</a>, including the whole <code>--notify-smtp-*</code> email-relay family. (The target-probe rules — sync lag and the v0.99.288 vacuum advisories — live on <code>sync start</code> only; the daemon holds no database connection.)</td></tr>
   </tbody></table>
   <p><strong>Run as an alert-only daemon</strong> (tokens via env; fire on 85% storage):</p>
   ${pre(`export PLANETSCALE_METRICS_TOKEN_ID=...
@@ -1313,15 +1386,17 @@ const ERROR_CODE_ROWS = `
 <tr><td><code>SLUICE-E-COLDSTART-TARGET-NOT-EMPTY</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">Cold-start refused: a target table already contains data (usually a previous run died mid-copy).</td><td class="desc">Sync: re-run with <code>--reset-target-data --yes</code>. Migrate: use <code>--resume</code>. Either mode: <code>--force-cold-start</code> to copy into the populated table anyway (collides on PRIMARY KEY in most cases).</td></tr>
 <tr><td><code>SLUICE-E-TARGET-DEFERRABLE-KEY</code></td><td class="desc"><strong>refusal</strong></td><td class="desc"><code>sluice sync</code> (or any other idempotent apply/copy path) refused because a <strong>target</strong> table's primary key — or the only unique key sluice could key an upsert on — is <code>DEFERRABLE</code>. Postgres rejects a non-immediate index as an <code>ON CONFLICT</code> arbiter (<code>ON CONFLICT does not support deferrable unique constraints/exclusion constraints as arbiters</code>, SQLSTATE 55000), and every idempotent write sluice makes is an <code>ON CONFLICT (key) DO UPDATE</code> — the CDC applier's per-change upsert and the idempotent bulk-copy writer's batch upsert both need an arbiter. v0.103.1 made a Postgres target CARRY a source's <code>PRIMARY KEY … DEFERRABLE</code>, which is correct (dropping it landed a stricter constraint than the source's, aborting bulk key shifts that commit on the source) — and carrying it is what made the apply path illegal. Before this refusal existed the stream died on the first change to such a table with no retry, every warm resume died on the same change, and every other table in the same stream stalled behind it (Bug 211). sluice still carries the attribute faithfully; what it refuses is to keep streaming into a shape it cannot upsert into. The check runs at sync start once the target schema exists and before the first change is applied, and again on first sight of the table for the paths that have no preflight (broker replay, chain restore, <code>schema add-table</code>). <code>DEFERRABLE INITIALLY IMMEDIATE</code> is refused too: Postgres clears <code>pg_index.indimmediate</code> for any deferrable constraint, so it is equally unusable as an arbiter.</td><td class="desc">Recreate the target constraint as immediate — <code>ALTER TABLE t DROP CONSTRAINT t_pkey; ALTER TABLE t ADD CONSTRAINT t_pkey PRIMARY KEY (...);</code> (<code>NOT DEFERRABLE</code> is the default) — then re-run; the stream warm-resumes from where it refused. Or pre-create the target table with an immediate primary key before the first <code>sync start</code>, so the deferrable source shape is never carried onto it. Any immediate <code>NOT NULL UNIQUE</code> index on the target table also clears the refusal: sluice keys the upsert on that instead of the primary key. Otherwise take the table out of scope with <code>--exclude-table</code>. There is no flag to proceed anyway — a plain <code>INSERT</code> fallback would fail on the first replayed change, which is the wedge this refusal exists to prevent.</td></tr>
 <tr><td><code>SLUICE-E-TARGET-TABLE-SHAPE-MISMATCH</code></td><td class="desc">refusal</td><td class="desc"><code>migrate</code> refused before any data moved: a target table with the same name already exists but its <strong>column shape</strong> — names (order-insensitive), types, nullability — differs from what the migration would create. <code>migrate</code>'s table creation is <code>CREATE TABLE IF NOT EXISTS</code>, so before this gate a conflicting pre-existing table was silently tolerated and only failed mid-copy (an <code>Unknown column</code> error retried for the full transient-retry wall). A pre-existing table whose column shape MATCHES is skipped with an INFO instead (indexes/constraints/defaults are deliberately outside the compare — a pre-created table legitimately carries them; later phases create any missing ones idempotently). The message names the table and the first differing columns, expected vs actual.</td><td class="desc">Drop or rename the conflicting target table, exclude it with <code>--exclude-table</code>, or alter its shape to match <code>sluice schema preview</code>'s output; <code>--reset-target-data --yes</code> drops every in-scope target table first. On <code>--resume</code> the gate does not run (the prior attempt's own tables re-create idempotently).</td></tr>
+<tr><td><code>SLUICE-E-TARGET-PREEXISTING-FOREIGN-KEY</code></td><td class="desc">refusal</td><td class="desc"><code>migrate</code> or a <code>sync</code> cold start refused before any data moved: the <strong>target already carries a foreign key</strong> on a table this run copies into, and that constraint's <strong>parent table is copied by the same run</strong>. sluice's deferred-constraint discipline — create the tables bare, copy, then add indexes and constraints — governs only the constraints <strong>sluice creates</strong>. A target branched from an existing database arrives with its own, the bulk copy is not parent-first ordered (tables are copied in parallel), so a child row reaches the target before its parent and the constraint rejects it: MySQL <code>Error 1452 (23000): Cannot add or update a child row</code>, Postgres SQLSTATE <code>23503</code>. A field report died ~20 seconds into a cold start on exactly this, with nothing having warned first (roadmap item 140). A foreign key whose parent table is <strong>not</strong> in scope is NOT refused — the parent rows already on the target may well satisfy every child row — it gets a WARN naming the constraint instead. A SQLite target is never refused: every writable connection opens with <code>PRAGMA foreign_keys=0</code>, so its copy cannot fail this way, and the post-copy <code>PRAGMA foreign_key_check</code> still reports a genuine violation.</td><td class="desc">Drop the named foreign keys on the target for the duration of the copy and re-add them afterwards (<code>ALTER TABLE … DROP FOREIGN KEY …</code> on MySQL, <code>ALTER TABLE … DROP CONSTRAINT …</code> on Postgres), adding <code>--skip-foreign-keys</code> if you do not want sluice to re-create them at the end. Or take the child tables out of scope with <code>--exclude-table</code>. Or, only if the entire target dataset is disposable, <code>--reset-target-data</code> drops every in-scope target table and re-creates it WITHOUT constraints, so the copy runs unconstrained and the foreign keys are added back after it. Note that <code>--skip-foreign-keys</code> <strong>alone does not clear this</strong>: it governs only the constraints sluice would create, never one the target already has, so a run passing it would still die on the same rejection.</td></tr>
 <tr><td><code>SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED</code></td><td class="desc">refusal</td><td class="desc">A column's type is owned by a PostgreSQL extension the operator has not opted into.</td><td class="desc">Pass <code>--enable-pg-extension &lt;ext&gt;</code>; see <a href="/docs/type-mapping/">type-mapping</a>.</td></tr>
 <tr><td><code>SLUICE-E-VALUE-ZERO-DATE</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A MySQL zero/partial date (<code>0000-00-00 …</code>) has no valid calendar value the target can hold.</td><td class="desc">Pass <code>--zero-date=null</code> or <code>--zero-date=epoch</code> to carry it; see <a href="https://github.com/sluicesync/sluice/blob/main/docs/operator/migrating-legacy-mysql.md">migrating-legacy-mysql</a>.</td></tr>
 <tr><td><code>SLUICE-E-VALUE-NUL-BYTE</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A string value carries a NUL byte (0x00), which PostgreSQL text types cannot store.</td><td class="desc">Clean the source data, or map the column to bytea with <code>--type-override COL=bytea</code>.</td></tr>
+<tr><td><code>SLUICE-E-VALUE-BYTEA-TEXT-UNRECOGNIZED</code></td><td class="desc">refusal</td><td class="desc">A PostgreSQL <code>bytea</code> value arrived as a TEXT rendering sluice cannot read — not the <code>\\x</code>-prefixed, even-length hex form that <code>bytea_output = hex</code> (the PostgreSQL default) produces. Three paths carry PG's text spelling and can reach it: a pgoutput CDC tuple column, each element of a <code>bytea[]</code> array literal, and — cross-engine — a natively-binary column whose value arrived from the postgres-trigger capture as the <code>\\x</code>-hex JSON string, on its way into a MySQL <code>BLOB</code>/<code>VARBINARY</code>. The likely cause is a source running <code>bytea_output = escape</code>, whose <code>\\001\\002</code> rendering has no faithful reading here. Before this refusal existed the decoder decided hex-versus-raw by CONTENT and fell through to a verbatim copy, storing the ASCII bytes of the rendering as the value — and that same content sniffing silently SHRANK genuine binary values that happened to spell the hex form, on every cold-copy and backup lane: a 6-byte value spelling <code>\\xdead</code> decoded to 2 bytes, and the 2-byte value <code>\\x</code> decoded to zero bytes. Provenance now decides the reading, so a driver-decoded value is never sniffed and a text rendering is never guessed at.</td><td class="desc">Set the source's <code>bytea_output</code> back to the <code>hex</code> default (<code>ALTER DATABASE &lt;db&gt; SET bytea_output = 'hex'</code>) and re-run — sluice does not decode the <code>escape</code> rendering. If the source is already on <code>hex</code>, the value reached the decoder mangled: report it as a sluice bug, quoting the column named in the message.</td></tr>
 <tr><td><code>SLUICE-E-VALUE-UNREPRESENTABLE</code></td><td class="desc">refusal</td><td class="desc">A value no target column type can represent — e.g. a <code>NaN</code>/±<code>Infinity</code> float from a PostgreSQL <code>double precision</code> source into a MySQL <code>FLOAT</code>/<code>DOUBLE</code> (MySQL has no NaN/Infinity). Refused before the driver sees it so it fails loudly instead of corrupting the value or retry-looping on the server's misleading error.</td><td class="desc">Filter or transform the source value (e.g. <code>NULLIF</code> / <code>CASE</code> on the source query).</td></tr>
 <tr><td><code>SLUICE-E-EXPR-BACKSLASH-LITERAL</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A SQLite expression's string literal contains a backslash (or a double-quoted token), which MySQL would silently reinterpret under its default sql_mode.</td><td class="desc">Rewrite the expression on the SQLite source, or re-create it on the MySQL target post-migration.</td></tr>
 <tr><td><code>SLUICE-E-CONFIRMATION-REQUIRED</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A destructive command was run without <code>--yes</code>. sluice is non-interactive and never prompts, so it refuses loudly instead of blocking on a prompt (<code>slot drop</code> and <code>sync decommission</code> are the current callers; <code>sync decommission --dry-run</code> is exempt — it touches nothing).</td><td class="desc">Re-run with <code>--yes</code> (or <code>-y</code>) to confirm the destructive operation.</td></tr>
 <tr><td><code>SLUICE-E-DECOMMISSION-STREAM-ACTIVE</code></td><td class="desc"><strong>refusal</strong></td><td class="desc"><code>sync decommission</code> refused because the stream's replication slot is <strong>active</strong> on the source — a CDC consumer (walsender client) is attached, so the stream is live (or another consumer has hold of its slot). Decommissioning a running stream would yank the slot and publication out from under it mid-stream; the refusal fires before anything is touched, so a refused attempt changes nothing on either side.</td><td class="desc">Drain the stream first: <code>sluice sync stop --stream-id &lt;id&gt; --wait</code>, then re-run <code>sluice sync decommission</code>. If the slot stays active with no sluice process running, another consumer holds it — investigate with <code>sluice slot list</code> before removing anything.</td></tr>
-<tr><td><code>SLUICE-E-DRIVER-HOST-MISMATCH</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">The chosen driver cannot drive the DSN's host — today: the vanilla <code>mysql</code> driver pointed at a PlanetScale endpoint (<code>*.connect.psdb.cloud</code>), whose binlog CDC and <code>LOAD DATA</code> cold-copy Vitess blocks. Caught up front, before any connection.</td><td class="desc">Pass <code>--source-driver planetscale</code> / <code>--target-driver planetscale</code> for the PlanetScale endpoint.</td></tr>
-<tr><td><code>SLUICE-E-INDEX-MISSING</code></td><td class="desc">refusal</td><td class="desc">The post-copy verification found the target is missing one or more secondary indexes the migration was expected to build (named as <code>table.index</code> in the message) — a loud-failure safety net against a silent index-build no-op. sluice refuses to report a successful migration with an incomplete schema. The check runs on MySQL and PostgreSQL targets alike &lt;!-- index-verify-engines: mysql, postgres --&gt;; the PostgreSQL verifier additionally refuses when an index EXISTS under the expected name but is <strong>not UNIQUE</strong> where a UNIQUE index was requested, because a same-named non-unique index is exactly what a silently-no-op'd <code>CREATE UNIQUE INDEX IF NOT EXISTS</code> leaves behind — the target would accept duplicate rows the source rejects.</td><td class="desc">Re-run with <code>--resume</code> to rebuild the missing indexes; if it recurs, the target rejected the index DDL — check the target's DDL/online-migration policy and the logs for the underlying error. For the not-unique shape, look for a pre-existing index of that name on the target (or a name collision on the source, which sluice refuses up front as <code>SLUICE-E-SCHEMA-INDEX-NAME-COLLISION</code>) and drop it before re-running.</td></tr>
+<tr><td><code>SLUICE-E-DRIVER-HOST-MISMATCH</code></td><td class="desc">refusal</td><td class="desc">The chosen driver cannot drive the DSN's host — today: a non-VStream MySQL flavor (<code>mysql</code> or <code>mariadb</code>) pointed at a PlanetScale MySQL endpoint (<code>*.connect.psdb.cloud</code> / <code>*.private-connect.psdb.cloud</code>), whose binlog CDC and <code>LOAD DATA</code> cold-copy Vitess blocks. Decided from the DSN string alone, so it is caught up front, before any connection. <code>migrate</code> and <code>sync</code> are the commands that run this preflight; the schema-read and backup surfaces do not.</td><td class="desc">Pass <code>--source-driver planetscale</code> / <code>--target-driver planetscale</code> for the PlanetScale endpoint (or <code>vitess</code> for a self-hosted Vitess).</td></tr>
+<tr><td><code>SLUICE-E-INDEX-MISSING</code></td><td class="desc">refusal</td><td class="desc">The post-copy verification found the target is missing one or more secondary indexes the migration was expected to build (named as <code>table.index</code> in the message) — a loud-failure safety net against a silent index-build no-op. sluice refuses to report a successful migration with an incomplete schema. The check runs on every MySQL-family target (<code>mysql</code>, <code>mariadb</code>, <code>planetscale</code>, <code>vitess</code>) and on PostgreSQL alike; the PostgreSQL verifier additionally refuses when an index EXISTS under the expected name but is <strong>not UNIQUE</strong> where a UNIQUE index was requested, because a same-named non-unique index is exactly what a silently-no-op'd <code>CREATE UNIQUE INDEX IF NOT EXISTS</code> leaves behind — the target would accept duplicate rows the source rejects.</td><td class="desc">Re-run with <code>--resume</code> to rebuild the missing indexes; if it recurs, the target rejected the index DDL — check the target's DDL/online-migration policy and the logs for the underlying error. For the not-unique shape, look for a pre-existing index of that name on the target (or a name collision on the source, which sluice refuses up front as <code>SLUICE-E-SCHEMA-INDEX-NAME-COLLISION</code>) and drop it before re-running.</td></tr>
 <tr><td><code>SLUICE-E-VSTREAM-FLOAT-LOSSY</code></td><td class="desc">refusal</td><td class="desc"><code>backup full</code> or <code>sync start</code> on a PlanetScale/Vitess (VStream) source with <code>--strict-float</code>, when a single-precision <code>FLOAT</code> column cannot be re-read exactly. Both commands drive the same display-rounding VStream COPY reader and the same repairable/un-repairable classification. Shared cause: the table is <strong>keyless / float-PK-only</strong> (no primary key to target the exact re-read — refused upfront, before any row moves). <code>backup full</code> adds two of its own: the table is <strong>larger than <code>--float-reread-max-rows</code></strong> (too large for the bounded-memory exact re-read — refused when reached), or the exact re-read returned rows but <strong>not one streamed row's primary key matched</strong> (a systemic PK-rendering divergence — the exact map has rows yet every archived row would silently retain its display rounding; refused when the table finishes streaming). <code>sync start</code> adds one: <code>--strict-float</code> passed together with <code>--no-float-exact-reread</code>, which are contradictory (demand exact / disable the repair that produces it). vttablet's rowstreamer renders FLOAT at mysqld's 6-significant-digit display precision, and <code>--strict-float</code> demands exact-or-fail.</td><td class="desc">Add a primary key (or exclude the table), raise <code>--float-reread-max-rows</code> if it's a size cap on <code>backup full</code> and you have the headroom, pass exactly one of <code>--strict-float</code> / <code>--no-float-exact-reread</code>, or drop <code>--strict-float</code> (the default repairs exact where it can and retains the rounding — with a WARN — elsewhere). A target-side <code>--type-override</code> to DOUBLE does NOT help — the source value is already rounded on the wire.</td></tr>
 <tr><td><code>SLUICE-E-BACKUP-SIGNATURE-INVALID</code></td><td class="desc">refusal</td><td class="desc">A signed (FormatVersion 6, ADR-0154) backup manifest's detached signature failed verification — the manifest was tampered, rolled back to an older version, its change-list was truncated, the wrong key was supplied, or the signature scheme/algorithm was relabeled (a signature of one scheme presented as another, or a KMS algorithm downgraded). Applies to all three signing schemes: HMAC-off-KEK (<code>--sign</code>, Phase 1), Ed25519 (<code>--sign-key &lt;pem&gt;</code>/<code>--verify-key &lt;pem&gt;</code>, Phase 2), and KMS (<code>--sign-key kms://...</code>/<code>--verify-key</code>, Phase 3). sluice refuses to restore/verify it before any data lands.</td><td class="desc">Restore from an untampered copy of the backup; if the whole store is suspect, the signature caught exactly the substitution it exists to catch. Verify the key matches the chain — the chain's <code>--encrypt</code> passphrase for an HMAC-signed chain, the correct <code>--verify-key</code> (a public-key PEM for Ed25519 / KMS, or <code>kms://...</code> to fetch the trusted key) for an asymmetrically-signed chain (the KEK does NOT verify an asymmetric signature). The recorded manifest key reference is never trusted — verification anchors on the key you supply.</td></tr>
 <tr><td><code>SLUICE-E-BACKUP-SIGNATURE-MISSING</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A signed (FormatVersion 6) backup manifest asserts a detached signature but none is present (or the lineage catalog's signature is absent), OR <code>--require-signature</code> was set and the chain could not be verified with the supplied key material — the tamper signal for a dropped signature, a signed-chain manifest replaced without re-signing, or a signed chain restored without the matching verify key under strict policy.</td><td class="desc">Restore from a copy whose <code>.sig</code> objects are intact; supply the matching verify key (<code>--encrypt</code> passphrase for HMAC-off-KEK, <code>--verify-key</code> for Ed25519 / KMS); a maintenance run (compact/prune) that could not re-sign must be re-run with the chain's signing key material (<code>--encrypt</code> passphrase, <code>--sign-key &lt;pem&gt;</code>, or <code>--sign-key kms://...</code>).</td></tr>
@@ -1331,7 +1406,8 @@ const ERROR_CODE_ROWS = `
 <tr><td><code>SLUICE-E-BACKUP-CHUNK-AUTH-FAILED</code></td><td class="desc">refusal</td><td class="desc">An encrypted backup chunk failed its AES-GCM authenticated-decryption check during restore (or broker replay): the ciphertext or its bound additional-authenticated-data (AAD) does not match what was sealed — a tampered/corrupt chunk, or a spliced/reordered store where a chunk was moved between positions or between two same-column-set tables (the ADR-0152 position binding + ADR-0154 SEC-F1/SEC-1 parent-table binding, rendered with ADR-0181's injective length-prefixed encoding from <code>FormatVersion=9</code> so no delimiter embedded in a table name or chunk path can make two distinct parents seal alike). This is the loud, coded TWIN of <code>SLUICE-E-BACKUP-SIGNATURE-INVALID</code> for a backup that is ENCRYPTED but NOT SIGNED, and it refuses before any row lands. It also fires from <code>backup verify</code> when key material is supplied: verify performs the same authenticated open restore performs, so a swap/splice/wrong-key chunk is caught BEFORE a recovery rather than during one (previously verify was sha256-only in per-chain mode and reported such a chain healthy — Bug 215). By the time a chunk decrypts the chain key has already unwrapped (its wrap is itself authenticated), so this is never a wrong-passphrase error — a wrong key is caught earlier at the key unwrap.</td><td class="desc">Restore from an untampered copy of the backup; if the whole store is suspect, the AAD binding caught exactly the chunk substitution/splice it exists to catch. Run <code>backup verify</code> WITH <code>--encrypt</code> + the chain's key material to catch this class ahead of a restore (the key-less depth is sha256-only and cannot see it — check the reported <code>decrypted=</code> count, not just the exit status). Signing the chain (<code>--sign</code> / <code>--sign-key</code> + <code>--require-signature</code>) additionally covers manifest-level edits an authenticated open cannot see. Genuine bit-rot (not tampering) produces the same refusal; re-fetch the chunk object or restore from a healthy replica.</td></tr>
 <tr><td><code>SLUICE-E-BACKUP-CHUNK-CORRUPT</code></td><td class="desc">refusal</td><td class="desc">A backup chunk's STORED bytes do not hash to the SHA-256 recorded for it in the manifest, checked by rehashing the bytes during restore, broker replay, or <code>backup verify</code>. This is the byte-level integrity check that runs BEFORE decryption, so it fires on plaintext and encrypted chunks alike — the integrity TWIN of <code>SLUICE-E-BACKUP-CHUNK-AUTH-FAILED</code> (which is the AES-GCM authenticated-decryption check). It catches at-rest corruption / bit-rot and any tamper that altered a chunk's stored bytes (for an encrypted chunk a byte flip is caught here first, before the GCM tag). sluice refuses before any row lands, exit-3 Refusal class.</td><td class="desc">Restore from an untampered / healthy copy of the backup, or re-fetch the chunk object from the store (a bad upload or storage bit-rot produces the same refusal as a tamper). If you want tamper caught at <code>backup verify</code> time and covered by a manifest signature, sign the chain (<code>--sign</code> / <code>--sign-key</code> + <code>--require-signature</code>).</td></tr>
 <tr><td><code>SLUICE-E-BACKUP-CHAIN-CONFLICT</code></td><td class="desc">refusal</td><td class="desc">Two writers on one backup chain. <strong>Two shapes, same code.</strong> (1) <strong>Lost catalog write</strong> — another writer advanced this chain's lineage while this operation (a <code>backup full</code>/<code>backup incremental</code> finalize, a <code>backup stream</code> rollover, a rotation COMMIT, <code>backup compact</code>, <code>backup prune</code>, or <code>backup verify --rebuild-catalog</code>) was in flight. Every chain writer read-modify-writes the shared <code>lineage.json</code>; the catalog write is a compare-and-swap on the chain's write-generation (a conditional create of <code>lineage.gen/g-&lt;N&gt;</code> — local FS <code>O_EXCL</code>, object stores <code>If-None-Match</code>), so the losing writer refuses loudly and writes NO catalog change; the named marker records the other writer's host/pid/claim-time. Detection requires a store with conditional-write support (local <code>--output-dir</code>, S3, GCS, Azure; an S3-compatible endpoint that lacks conditional PUTs degrades to the old unguarded behavior with a WARN). (2) <strong>Chain fork refused</strong> (v0.104.7) — this run's <code>backup incremental</code>/<code>backup stream</code> rollover chains off a parent that is <strong>no longer the chain's tip</strong>, because another writer extended the chain while this run's CDC window was open. The parent is resolved BEFORE the window opens, so two overlapping <code>backup incremental</code> cron entries both resolve the SAME parent; committing the second one would put two incrementals under one parent — a FORK, which <code>backup verify</code> and <code>restore</code> then refuse <strong>permanently</strong> while the chain keeps accepting further incrementals off whichever sibling won the tail. The refusal fires before this run's manifest is written, so nothing durable is added. Note the CAS in (1) cannot catch (2): both writes are correctly serialised; what is wrong is the link, not the write.</td><td class="desc">Check for a duplicate cron/scheduler entry or a concurrent backup/compact/prune/stream against the same chain; let the other writer finish, then re-run — the re-run extends the real tip and captures the window the refused run gave up. The refused operation left the catalog untouched (for shape 1, a refused backup's own manifest may be durable; it is re-cataloged by the next writer or stream resume). If conflicts persist, inspect the newest <code>lineage.gen/</code> marker to identify the competing host/pid. Longer term: run one writer per chain — an overlapping cron is the shape both of these exist to catch.</td></tr>
-<tr><td><code>SLUICE-E-BACKUP-ENCRYPTION-MISMATCH</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">The supplied encryption configuration does not match the chain's recorded encryption metadata, refused at preflight before any chunk is read or written. Two shapes, on every chain-reading surface (<code>restore</code>, chain restore, <code>sync from-backup</code>, <code>backup export-as-parquet</code>, <code>backup verify</code>'s decrypt preflight, the catalog-rebuild codec probe) AND on the chain-EXTENDING writers (<code>backup incremental</code>, the <code>sync --backup-to</code> streaming rollover — both align against the parent chain's recorded shape before writing a single chunk): (1) the chain records <code>ChainEncryption</code> (it is encrypted) but no <code>--encrypt</code> + key material was supplied — the message names the chain's <code>algorithm</code>, <code>kek_mode</code>, and <code>kek_ref</code> so you know exactly what to bring; (2) key material WAS supplied but its KEK mode (passphrase vs a KMS provider) differs from the chain's recorded <code>kek_mode</code> — the wrong KIND of key, caught before an unwrap attempt could produce a confusing decrypt failure. (The inverse mismatch — a key supplied against a chain that CLAIMS plaintext — is the downgrade-tamper signal and stays <code>SLUICE-E-BACKUP-CHUNK-AUTH-FAILED</code>.)</td><td class="desc">Pass <code>--encrypt</code> with the key material the chain was written under: <code>--encryption-passphrase{,-env,-file}</code> for <code>kek_mode=passphrase-argon2id</code>, <code>--kms-key-arn</code> for <code>aws-kms</code>, <code>--gcp-kms-key-resource</code> for <code>gcp-kms</code>, <code>--azure-key-vault-id</code> for <code>azure-kms</code> — the refusal message names the recorded <code>kek_mode</code>/<code>kek_ref</code>. A wrong passphrase/key of the RIGHT mode fails later at the CEK unwrap instead ("wrong passphrase / KMS key?").</td></tr>
+<tr><td><code>SLUICE-E-BACKUP-ENCRYPTION-MISMATCH</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">The supplied encryption configuration does not match the chain's recorded encryption metadata, refused at preflight before any chunk is read or written. Two shapes, on every chain-reading surface (<code>restore</code>, chain restore, <code>sync from-backup</code>, <code>backup export-as-parquet</code>, <code>backup verify</code>'s decrypt preflight, the catalog-rebuild codec probe) AND on the chain-EXTENDING writers (<code>backup incremental</code>, the <code>backup stream run</code> streaming rollover — both align against the parent chain's recorded shape before writing a single chunk): (1) the chain records <code>ChainEncryption</code> (it is encrypted) but no <code>--encrypt</code> + key material was supplied — the message names the chain's <code>algorithm</code>, <code>kek_mode</code>, and <code>kek_ref</code> so you know exactly what to bring; (2) key material WAS supplied but its KEK mode (passphrase vs a KMS provider) differs from the chain's recorded <code>kek_mode</code> — the wrong KIND of key, caught before an unwrap attempt could produce a confusing decrypt failure. (The inverse mismatch — a key supplied against a chain that CLAIMS plaintext — is the downgrade-tamper signal and stays <code>SLUICE-E-BACKUP-CHUNK-AUTH-FAILED</code>.)</td><td class="desc">Pass <code>--encrypt</code> with the key material the chain was written under: <code>--encryption-passphrase{,-env,-file}</code> for <code>kek_mode=passphrase-argon2id</code>, <code>--kms-key-arn</code> for <code>aws-kms</code>, <code>--gcp-kms-key-resource</code> for <code>gcp-kms</code>, <code>--azure-key-vault-id</code> for <code>azure-kms</code> — the refusal message names the recorded <code>kek_mode</code>/<code>kek_ref</code>. A wrong passphrase/key of the RIGHT mode fails later at the CEK unwrap instead ("wrong passphrase / KMS key?").</td></tr>
+<tr><td><code>SLUICE-E-BACKUP-CHUNK-UNREADABLE</code></td><td class="desc">refusal</td><td class="desc">A backup chunk is byte-INTACT and still unreadable. Its stored bytes hash to the SHA-256 the manifest records, and — on an encrypted chain verified with key material — its ciphertext opens under the same CEK and AAD binding <code>restore</code> uses; the chunk's own reader then cannot decode what is inside. The shapes: a single row/change line longer than the format's 64 MiB per-line limit (an artifact written by a sluice at or below v0.111.1, whose writers had no such refusal — Bug 226); a codec stream truncated or re-compressed with a re-stamped SHA; a segment whose recorded codec is not the codec its chunks were actually written with; a row whose tagged-value envelope this build's decoder rejects. Raised ONLY by <code>sluice backup verify --depth read</code>, which streams every chunk through the real <code>ChunkReader</code>/<code>ChangeChunkReader</code> and discards the rows. The hash-only default depth cannot see this class at all, by construction: it re-hashes the same bytes it is checking, so it confirms the artifact is intact while saying nothing about whether it can be read back. A chunk raising this code will fail <code>restore</code> — this is the pre-emptive form of that failure, raised while you still have time to take another backup.</td><td class="desc">Take a fresh backup of the source with a current sluice: since v0.112.0 every write core REFUSES an over-long row at backup time rather than producing an artifact that verifies clean and never restores, so the re-taken backup either succeeds or names the offending table and row up front. If the source is gone and this chain is the only copy, the chunk named in the message is the whole loss — the other chunks are unaffected and <code>restore --include-table</code> can still recover the rest. A truncated/re-compressed chunk with a matching SHA is a store-side rewrite: re-fetch that object from a healthy replica, and sign the chain (<code>--sign</code> / <code>--sign-key</code> + <code>--require-signature</code>) so a manifest-level edit is caught too. Note the parse proves the chunk DECODES, not that its values are correct — <code>--depth read</code> is a readability check, not a content check.</td></tr>
 <tr><td><code>SLUICE-E-BACKUP-CHAIN-UNREADABLE</code></td><td class="desc">refusal</td><td class="desc"><code>sluice backup compact</code> or <code>sluice backup prune</code> re-read the chain the way a RESTORE would — once BEFORE its destructive delete pass and once AFTER it — and could not. One guard serves both, because both are chain-SHAPING operations whose delete pass reasoned locally that files the catalog no longer names are orphans; that reasoning is true of the BYTES and false of the chain's IDENTITY. The chain-root <code>manifest.json</code> is not a spare copy of segment 0's manifest: ADR-0152 binds the chain CEK's wrap to it, and for a passphrase chain the Argon2id salt the restore side re-derives its KEK from is recorded ONLY there, so deleting it revokes readability for EVERY segment — including ones the operation never touched. That is Bug 214, where <code>compact</code> exited 0 with <code>groups_merged=1 segments_removed=3</code> on a chain that then refused at <code>unwrap chain cek</code> holding a correct passphrase; <code>prune</code> deleted the same file whenever retention dropped segment 0, on a schedule rather than as occasional maintenance. The message names WHICH of the two stages refused and that distinction is the whole of what happens next: a <code>pre-swap</code>/<code>pre-sweep</code> refusal deleted NOTHING and leaves the chain exactly as restorable as it was, while a <code>post-sweep</code> refusal reports a chain the operation has already changed. The check is header-level and cheap — it walks the lineage, re-resolves the chain's identity and recorded key-derivation material, and (only when <code>--encrypt</code> supplied key material) performs the real chain-CEK unwrap; it never decrypts chunks, which stays <code>sluice backup verify</code>'s job. One shape carries its OWN message inside this code (roadmap item 100). Retention is SEGMENT-granular: <code>backup prune</code> rounds <code>--keep-incrementals</code> and <code>--keep-duration</code> UP to the nearest segment boundary so it retires only WHOLE leading segments — keeping more than asked, never fewer — because trimming LEADING incrementals INSIDE the floor segment severs the chain (the segment's full stays anchored where it is while the first surviving incremental starts later, so the events between them are gone and the walk refuses on the severed parent link). When the chain has no segment boundary at or above the requested retention, rounding up would retain the whole chain and the run would delete nothing, so prune refuses rather than report a prune that freed no space. A NON-rotated (single-segment) chain has no boundary at all, so every <code>--keep-incrementals</code> prune of one refuses. That refusal names the shape, states that nothing was deleted, and lists the <code>--keep-incrementals</code> counts (if any) that land on a segment boundary on this particular chain.</td><td class="desc">Read the stage in the message first. <code>pre-swap</code>/<code>pre-sweep</code>: nothing was deleted and no catalog was written — fix what the message names and re-run. <code>post-sweep</code>: the deletes already happened and re-running cannot undo them; apply the recovery the message names — for a missing chain-root manifest that is <code>cp &lt;chain&gt;/seg-merged-&lt;id&gt;/manifest.json &lt;chain&gt;/manifest.json</code>, and because every rotation-born segment full carries the same chain salt, any surviving segment's <code>manifest.json</code> restores the chain's identity byte-exactly — or restore from another copy of the chain. Do not take further backups against a chain in this state until it reads again. Pass <code>--encrypt</code> with the chain's key material to <code>compact</code>/<code>prune</code> so the gate proves the chain's key still UNWRAPS rather than only that its identity survived; without it the run WARNs that it verified identity only. For the item-100 refusal the remedy is a retention this chain's segment boundaries can actually express: use one of the boundary keep-counts the message lists, or a <code>--keep-duration</code> cutoff older than every incremental in the chain (they are all retired and the newest segment's full remains as a self-contained restore base). A never-rotated chain has no segment boundary at all, so <code>--keep-incrementals</code> cannot express retention there — use <code>--keep-duration</code>, or leave the chain unpruned until it rotates. Either way that refusal deleted nothing.</td></tr>
 <tr><td><code>SLUICE-E-BACKFILL-NO-PRIMARY-KEY</code></td><td class="desc">refusal</td><td class="desc"><code>sluice backfill</code> refused the table: it has no primary key, or a primary-key column is non-orderable (JSON/array/geometry) or exists only on sluice's target-planning schema — so the keyset walk that bounds each UPDATE to <code>--batch-size</code> rows has nothing safe to cursor on. An unbounded whole-table UPDATE is exactly the statement-time-wall / long-lock shape the command exists to avoid, so sluice refuses rather than degrade to it.</td><td class="desc">Add a primary key to the table (or fix the non-orderable key), then re-run. There is no flag to force an unbounded backfill — for a small table where a single UPDATE is fine, run it directly in your SQL client.</td></tr>
 <tr><td><code>SLUICE-E-BACKFILL-UNSUPPORTED-ENGINE</code></td><td class="desc">refusal</td><td class="desc">The <code>--driver</code> engine does not implement the in-place backfill surface. Backfill ships for MySQL (including the <code>planetscale</code> / <code>vitess</code> flavors, which ride the same bounded-UPDATE path) and Postgres; SQLite/D1 have no backfill executor yet.</td><td class="desc">Pass <code>--driver mysql</code>, <code>--driver planetscale</code>, <code>--driver vitess</code>, or <code>--driver postgres</code>. For SQLite/D1, run the transform directly — a single-file/edge database doesn't need the online-safety machinery.</td></tr>
@@ -1343,6 +1419,7 @@ const ERROR_CODE_ROWS = `
 <tr><td><code>SLUICE-E-PS-DEPLOY-REQUEST-FAILED</code></td><td class="desc">runtime</td><td class="desc">A PlanetScale deploy request driven by sluice (<code>sluice expand-contract</code>, <code>sluice deploy-ddl</code>, or <code>migrate</code>'s ADR-0148 index-build fallback) genuinely went wrong: it entered a terminal failure state (<code>error</code>, <code>complete_error</code>, <code>cancelled</code>, <code>complete_cancel</code>, <code>complete_revert</code>, <code>complete_revert_error</code>), was closed without deploying, computed an empty diff (<code>no_changes</code> — that leg's DDL is likely already deployed from an earlier run), or computed a diff touching an object the leg never intended (the ADR-0167 pre-deploy blast-radius check: a stranger table in the diff means the dev branch's base was stale or the branch was edited outside sluice — deploying would ship those changes; deploy-ddl carries no intended set, so this check applies to expand-contract and the index fallback). The message names the leg, the deploy-request number, the state it saw, and the deploy request's URL. A deploy sluice merely stopped <em>waiting</em> on — a healthy deploy that outran a timeout, or one parked on a human gate — is the separate, non-failure <code>SLUICE-E-PS-DEPLOY-REQUEST-INCOMPLETE</code>.</td><td class="desc">Inspect the deploy request at the URL in the message. A <code>no_changes</code> diff means that leg's DDL is already deployed: delete the leftover dev branch and resume past the leg. A stranger object in the diff means the dev branch's base moved — delete the branch and re-run so it is re-provisioned from current production. For <code>migrate</code>'s index-build fallback, recovery is always <code>--resume</code>: the index phase re-probes the target and rebuilds only what is still missing, so an index that did land is simply detected and skipped.</td></tr>
 <tr><td><code>SLUICE-E-PS-DEPLOY-REQUEST-INCOMPLETE</code></td><td class="desc">runtime</td><td class="desc">A PlanetScale deploy request sluice was waiting on did not reach a terminal state, and <strong>nothing failed</strong> — this code exists precisely so a healthy deploy is not reported as a failure. Three shapes: <strong>(a)</strong> a wall-clock bound was hit while the deploy was still running normally (the message carries the observed <code>deployment_state</code>, the progress percentage, PlanetScale's own ETA, and whether the operation has been throttled) — note that <code>migrate</code>'s index-build fallback defaults <code>--planetscale-deploy-timeout</code> to <strong>0, meaning wait indefinitely</strong>, so this shape only appears if you set a bound; <strong>(b)</strong> the request never became <em>deployable</em> within the deployable-wait bound, which on a database that requires administrator approval means it is waiting for a human (that wait is capped at 1 hour even when the deploy wait is unbounded — waiting forever on a person is indistinguishable from hanging); <strong>(c)</strong> the deployment is parked in <code>pending_cutover</code> with <code>auto_cutover</code> off — the schema build finished but PlanetScale will not apply it until a person confirms the cutover, and sluice never confirms one on your behalf. In every shape the deployment is still live in PlanetScale and <strong>its dev branch must be left alone</strong> until the deployment finishes: the running deployment depends on that branch (PlanetScale refuses the delete while it runs), and the recovery below needs the deployment to complete.</td><td class="desc">Watch the deploy request finish at the URL in the message — do <strong>not</strong> delete its dev branch until it has. For shape (a), continue afterwards with <code>--resume</code> (<code>migrate</code>) or <code>--resume-from</code> (<code>expand-contract</code>); to avoid the bound entirely, pass <code>--planetscale-deploy-timeout 0</code> (or <code>--deploy-timeout 0</code>) and sluice will wait for the deployment however long it takes, narrating progress, ETA and throttling as it goes. A large index build legitimately runs for hours and replication-lag throttling is normal — it shows up as an ETA that stops converging, not as a failure. For shape (b), approve the deploy request <strong>and</strong> deploy it from the PlanetScale UI (approval alone deploys nothing — sluice never enables auto-apply), then resume. For shape (c), confirm the cutover in the PlanetScale UI, then resume. Once the deployment is finished, delete the leftover dev branch with <code>pscale branch delete &lt;db&gt; &lt;branch&gt; --org &lt;org&gt;</code> as the message spells out.</td></tr>
 <tr><td><code>SLUICE-E-PS-BRANCH-STALE-BASE</code></td><td class="desc">runtime</td><td class="desc">A newly created PlanetScale dev branch's schema can lag the production branch it was created from (observed live: a branch created 14 minutes after a deploy still lacked the deployed column — the lag is intermittent and its timing undocumented). A deploy request from such a branch would silently <strong>revert</strong> the missing changes (on the contract leg, that would drop the freshly backfilled expand column). <code>sluice expand-contract</code>, <code>sluice deploy-ddl</code>, and <code>migrate</code>'s ADR-0148 index-build fallback compare every dev branch's schema against production before applying any DDL, self-heal a stale base once (delete the branch → take an on-demand backup → recreate), and raise this error only when the branch is <em>still</em> stale after the rebase, or the rebase backup itself failed / outran <code>--deploy-timeout</code>. The same code also fires from the ADR-0167 <strong>post-wait freshness recheck</strong>: when a deploy request sat in its deployable/review wait for more than ~2 minutes and production's schema CHANGED in that window, the request's diff was computed against the old schema, so deploying it could silently revert the newer change — sluice refuses right before the deploy call instead.</td><td class="desc">If the rebase backup was still running, let it finish in PlanetScale and re-run. Otherwise compare <code>pscale branch schema &lt;db&gt; &lt;branch&gt;</code> against the production branch to see what differs, take a fresh manual backup of production (<code>pscale backup create</code>), and re-run. For the post-wait recheck shape, simply re-run — the command re-provisions the dev branch from current production and recomputes the deploy request.</td></tr>
+<tr><td><code>SLUICE-E-PS-DEV-BRANCH-NOT-ADOPTABLE</code></td><td class="desc">refusal</td><td class="desc">A re-run found the dev branch an earlier attempt left behind — the branch name is derived deterministically from the leg's DDL, so finding one means a previous run intended byte-identical DDL — and could <strong>not adopt</strong> its deploy request. Adoption is the normal outcome and raises no error: a deploy request that is already <strong>deploying</strong> is joined by the same poller a fresh run uses (progress narration, fast-fail on a terminal state, keep-the-branch rule), and one that already <strong>deployed</strong> is finalized and the branch cleaned up. This code is the residue, and the message names which shape it hit: <strong>(a)</strong> the branch has no deploy request at all; <strong>(b)</strong> it has more than one, so sluice will not guess; <strong>(c)</strong> the deploy request merges into a different branch than this run targets; <strong>(d)</strong> the deploy request was never deployed — sluice adopts only an already-issued deploy, because the guarantees it makes <em>before</em> a deploy (that the dev branch's schema base still matches current production, and that the request's diff touches nothing outside the intended tables) cannot be re-established for a branch it did not provision in this run, and deploying from a stale base silently reverts newer production schema; <strong>(e)</strong> the deploy request ended in a terminal failure state; <strong>(f)</strong> the deploy request reports a <code>deployment_state</code> sluice does not recognize while PlanetScale still reports it deployable — an unknown state cannot tell sluice whether a deployment is running, so it refuses without claiming anything about what is. The message tells you to delete the dev branch <strong>only</strong> in the shapes where nothing is deploying — the unconditional "delete the branch and re-run" this refusal replaces would, followed mid-build, have discarded hours of completed index build.</td><td class="desc">Follow the shape the message names. For (a), (d) and (e) nothing is in flight, so the branch is safe to delete — the message spells out <code>pscale branch delete &lt;db&gt; &lt;branch&gt; --org &lt;org&gt;</code> — and re-running re-provisions it from current production. For (b), (c) and (f), open the deploy request(s) in PlanetScale and see what they are doing before touching the branch: close or delete the ones that do not belong to this run, then re-run. If the message instead says sluice could not <em>enumerate</em> the database's deploy requests, do <strong>not</strong> delete the branch: re-run once the control plane answers, because an un-enumerated deploy request may be deploying right now.</td></tr>
 <tr><td><code>SLUICE-E-PS-DIRECT-DDL-BLOCKED</code></td><td class="desc">refusal</td><td class="desc">The PlanetScale branch has safe migrations enabled, which refuses every direct DDL statement (Error 1105 "direct DDL is disabled") — and sluice needed one. Two cases, each named in the message: <strong>(a)</strong> creating (or column-migrating) one of sluice's own control tables — <code>sluice_migrate_state</code>, <code>sluice_cdc_state</code>, and siblings — where the ensure paths are detect-first, so this fires only when the DDL is genuinely needed and the message echoes the exact refused statement; <strong>(b)</strong> a <strong>user-table CREATE</strong> during <code>migrate</code>'s or sync cold-start's schema-apply phase — a fresh migrate into a safe-migrations branch always refuses here, before any data moves (the ADR-0148 index-build fallback engages later, at the index phase, and cannot help with table creation).</td><td class="desc">Case (a): bootstrap the control tables through the governed channel — <a href="/docs/commands/#control-tables"><code>sluice control-tables ddl</code></a> prints the exact CREATE statements, <code>sluice deploy-ddl --org &lt;org&gt; --database &lt;db&gt; --ddl '&lt;statement&gt;'</code> ships each one via a deploy request; then re-run (a column-migration ALTER ships the echoed statement the same way). Case (b): disable safe migrations on the branch for the migration window and re-enable it after, or pre-create the schema via deploy requests (<code>sluice schema preview</code> prints the target DDL, <a href="/docs/commands/#deploy-ddl"><code>sluice deploy-ddl</code></a> ships each statement) — a <strong>fresh</strong> re-run of <code>sluice migrate</code> then skips the pre-created tables whose column shape matches (ADR-0166), while a <code>--resume</code> re-run skips the create-tables phase outright once every in-scope table is recorded complete (the ADR-0166 shape gate deliberately does not run on resume), and a sync stream skips schema-apply with <code>sluice sync start --schema-already-applied</code>.</td></tr>
 <tr><td><code>SLUICE-E-SOURCE-FOREIGN-DUMP</code></td><td class="desc">refusal</td><td class="desc">The <code>--source</code> file is a plain mysqldump / pg_dump <code>.sql</code> dump or a pg_dump custom-format (<code>PGDMP</code>) archive — full-dialect / private formats sluice deliberately does not parse (the IR-first tenet; <code>docs/research/flat-file-sources.md</code>). Detected by content signature at open, on any file-reading source driver (<code>sqlite</code>, <code>mydumper</code>, <code>csv</code>/<code>tsv</code>/<code>ndjson</code>), before any data moves — previously the sqlite dump-materializer would die mid-stream on a confusing SQL error.</td><td class="desc">Restore the dump to a scratch server with its native tool and migrate live — the error message carries the exact three-command recipe (<code>docker run</code> a scratch MySQL/PostgreSQL, <code>mysql</code>/<code>psql</code>/<code>pg_restore</code> the dump into it, <code>sluice migrate</code> from the scratch server). A mydumper/<code>pscale database dump</code> DIRECTORY needs no scratch server: <code>--source-driver mydumper</code>.</td></tr>
 <tr><td><code>SLUICE-E-SOURCE-REPLICA-IDENTITY</code></td><td class="desc"><strong>refusal</strong></td><td class="desc">A Postgres-source <code>sluice sync</code> refused at cold start, before scoping its publication, because an in-scope <strong>source</strong> table has no usable replica identity. Three shapes fall out of one catalog read: the table's only key is a <code>DEFERRABLE</code> PRIMARY KEY (Postgres skips every non-immediate index when it resolves a replica identity — the same <code>pg_index.indimmediate</code> bit as <code>SLUICE-E-TARGET-DEFERRABLE-KEY</code>, at the other end of the pipeline); the table has no key at all under <code>REPLICA IDENTITY DEFAULT</code>, which resolves to the primary key and nothing else; or <code>REPLICA IDENTITY</code> is explicitly <code>NOTHING</code>. Adding such a table to a publication with <code>pubupdate</code>/<code>pubdelete</code> makes Postgres reject <strong>the source application's own</strong> writes to it — <code>ERROR: cannot update table "x" because it does not have a replica identity and publishes updates</code>, and the same for <code>DELETE</code>. <code>INSERT</code> keeps working, so the table looks healthy until the first update and the breakage surfaces in the application, where nothing points back at sluice. sluice refuses before the <code>CREATE</code>/<code>ALTER PUBLICATION</code> runs, so the source is left untouched. <code>REPLICA IDENTITY FULL</code> is never refused, including on a keyless table. Note the asymmetry with the target-side code: an immediate <code>UNIQUE</code> index alongside a deferrable primary key rescues the TARGET (<code>ON CONFLICT</code> can arbitrate on any unique index) but NOT the source, because <code>REPLICA IDENTITY DEFAULT</code> never looks past the primary key — the refusal names that index and the one-line <code>USING INDEX</code> fix.</td><td class="desc">Fix each named table on the SOURCE, then re-run. Either make its key immediate (<code>ALTER TABLE t DROP CONSTRAINT t_pkey; ALTER TABLE t ADD CONSTRAINT t_pkey PRIMARY KEY (...);</code> — <code>NOT DEFERRABLE</code> is the default), or give it a replica identity: <code>ALTER TABLE t REPLICA IDENTITY FULL;</code> always works (it publishes the whole old row, at the cost of WAL volume on every <code>UPDATE</code>/<code>DELETE</code>), and <code>ALTER TABLE t REPLICA IDENTITY USING INDEX idx;</code> is the narrower fix when the table already carries an immediate <code>NOT NULL UNIQUE</code> index — the refusal names it when one exists. Otherwise take the table out of scope with <code>--exclude-table</code>. There is no flag to proceed anyway: proceeding is what breaks the operator's own application.</td></tr>
@@ -1355,14 +1432,19 @@ const ERROR_CODE_ROWS = `
 <tr><td><code>SLUICE-E-WHERE-CDC-AFTER-IMAGE</code></td><td class="desc"><strong>refusal</strong></td><td class="desc"><code>sluice sync</code> with a <code>--where</code> filter stopped MID-STREAM because an <code>UPDATE</code> on a filtered table arrived with an AFTER-image missing a column the predicate references, so the row-move evaluation cannot decide whether the row left the filter's scope &mdash; evaluating over the missing column would read it as NULL and could emit a spurious <code>DELETE</code> for a row still in scope at the source (silent target-side loss). This is the after-image sibling of <code>SLUICE-E-WHERE-CDC-BEFORE-IMAGE</code> and exists as a belt for the unchanged-TOAST class (audit 2026-07-23 D0-1): pgoutput omits an out-of-line TOASTed column from the new tuple when a sibling column changed, and the Postgres reader backfills it from the <code>REPLICA IDENTITY FULL</code> before-image &mdash; so on a correctly configured source this code should be unreachable, and it firing means an unexpected partial after-image slipped past every reader-side guarantee.</td><td class="desc">Ensure the source delivers full row images for the filtered table (MySQL <code>binlog_row_image=FULL</code>, PG <code>REPLICA IDENTITY FULL</code>), then restart the sync. If the source is a Postgres logical stream and the images are configured FULL, this shape should be impossible &mdash; report it as a sluice bug with the logged table and column.</td></tr>
 <tr><td><code>SLUICE-E-WHERE-PUSHDOWN-DRIFT</code></td><td class="desc"><strong>refusal</strong></td><td class="desc"><code>sluice sync</code> refused a WARM RESUME because the current <code>--where</code> flags don't match the row-filter subset this stream pushed into its Postgres publication at cold start (ADR-0176; the pushed subset's canonical hash is recorded in the target's <code>sluice_cdc_state.row_filter_hash</code>, <code>publication_name</code>'s sibling). The publication row filter is DURABLE source-side catalog state that a warm resume deliberately never re-ensures &mdash; so resuming with a widened, changed, or removed <code>--where</code> would leave the SERVER silently filtering on the stale predicate: rows the new flags admit are never decoded or sent, the client-side evaluator can't see what the server withheld, and the stream under-delivers forever with <code>sync status</code> green (audit 2026-07-23 D0-2). The message names the stream, the recorded and current hashes, and the currently-pushed tables.</td><td class="desc">Three escapes: (1) re-run with the exact <code>--where</code> the stream was established with (the record then matches and the resume proceeds); (2) <code>--restart-from-scratch</code> to force a fresh cold start &mdash; it re-snapshots under the NEW predicate and re-ensures the publication filter (required for a widened filter anyway: rows the old filter excluded were never snapshotted); note that on a PG source the restart first hits the loud slot-exists refusal, which names its own remedy &mdash; drop the stream's replication slot (<code>SELECT pg_drop_replication_slot('sluice_…')</code>) and re-run; (3) <code>--reset-target-data</code> for the destructive variant that also clears the control row and target tables. A brand-new stream-id with its own <code>--publication-name</code> is always available for a side-by-side cutover.</td></tr>
 <tr><td><code>SLUICE-E-WHERE-FK-ORPHAN</code></td><td class="desc"><strong>refusal</strong></td><td class="desc"><code>sluice migrate</code> with a <code>--where TABLE=&lt;predicate&gt;</code> row filter (ADR-0173) refused at the constraints phase: the filter excluded rows of a PARENT table, orphaning rows on a child table that references it, so the deferred <code>ADD CONSTRAINT FOREIGN KEY</code> failed with SQLSTATE 23503 on the target. The message names the child table, the FK constraint, and the referenced parent (flagging which side carries a <code>--where</code>). This fires only when <code>--allow-degraded-fks</code> is NOT set — with that flag the FK is instead attached <code>NOT VALID</code> (a PG target) and no refusal is raised.</td><td class="desc">Filter consistently so the referenced parent's rows are also copied (a child <code>--where</code> must not out-scope its parent), or pass <code>--allow-degraded-fks</code> (PG target) to attach the FK as <code>NOT VALID</code> and validate later after reconciling the orphans. Referential-aware auto-inclusion of parent rows is a future enhancement (ADR-0173).</td></tr>
-<tr><td><code>SLUICE-E-WHERE-UNKNOWN-TABLE</code></td><td class="desc">refusal</td><td class="desc"><code>sluice migrate</code> or <code>sluice verify</code> with a <code>--where TABLE=&lt;predicate&gt;</code> row filter (ADR-0173) refused at start: the <code>TABLE</code> key names no table in the source schema (after <code>--include-table</code>/<code>--exclude-table</code> scoping). The readers look the predicate up by exact table name, so a typo (<code>--where user=...</code> missing the <code>s</code>) or a case-fold mismatch (<code>--where Users=...</code> against a lower-cased PG relname) would silently find no predicate, drop the <code>WHERE</code>, and copy/count the WHOLE table — an out-of-scope over-copy that <code>verify</code> (riding the same lookup) would then confirm as a false PASS. sluice refuses up front instead, matching <code>sync --where</code>'s existing sync-start refusal for the same class and <code>--map</code>'s unknown-table rejection. Matching is case-insensitive: a correctly-named key in any casing is accepted and canonicalized to the schema's own casing.</td><td class="desc">Correct the table name in the <code>--where</code> value (case does not matter; the name must exist in the source schema after any <code>--include-table</code>/<code>--exclude-table</code> scoping), or remove the entry. Pass the SAME corrected <code>--where</code> values to <code>migrate</code> and <code>verify</code>.</td></tr>
+<tr><td><code>SLUICE-E-WHERE-UNKNOWN-TABLE</code></td><td class="desc">refusal</td><td class="desc"><code>sluice migrate</code> or <code>sluice verify</code> with a <code>--where TABLE=&lt;predicate&gt;</code> row filter (ADR-0173) refused at start: the <code>TABLE</code> key names no table in the source schema (after <code>--include-table</code>/<code>--exclude-table</code> scoping). The readers look the predicate up by exact table name, so a typo (<code>--where user=...</code> missing the <code>s</code>) or a case-fold mismatch (<code>--where Users=...</code> against a lower-cased PG relname) would silently find no predicate, drop the <code>WHERE</code>, and copy/count the WHOLE table — an out-of-scope over-copy that <code>verify</code> (riding the same lookup) would then confirm as a false PASS. sluice refuses up front instead, matching <code>sync start --where</code>'s existing sync-start refusal for the same class and <code>--map</code>'s unknown-table rejection. Matching is case-insensitive: a correctly-named key in any casing is accepted and canonicalized to the schema's own casing.</td><td class="desc">Correct the table name in the <code>--where</code> value (case does not matter; the name must exist in the source schema after any <code>--include-table</code>/<code>--exclude-table</code> scoping), or remove the entry. Pass the SAME corrected <code>--where</code> values to <code>migrate</code> and <code>verify</code>.</td></tr>
 <tr><td><code>SLUICE-E-SCHEMA-IDENTIFIER-INVALID</code></td><td class="desc">refusal</td><td class="desc">A schema value bound for one of the DDL positions that take a BARE, unquotable identifier — an index access method (<code>USING &lt;am&gt;</code>), an index operator class, a sequence data type (<code>AS &lt;type&gt;</code>), an RLS policy command (<code>FOR &lt;command&gt;</code>), or a MySQL charset/collation — is not a bare identifier (or, for the keyword positions, not one of the accepted values). Everywhere else a name is quoted and a hostile value is inert; at these positions it is not, and because sluice runs DDL with no bind parameters the driver uses the simple protocol, where a <code>;</code> in the value starts a second statement. Real values (<code>btree</code>, <code>ivfflat</code>, <code>hnsw</code>, <code>gin_trgm_ops</code>, <code>utf8mb4_0900_ai_ci</code>) always pass, so this fires on a hand-edited schema, a foreign catalog, or a tampered backup manifest.</td><td class="desc">Correct the value at the named object in the source schema (or the backup manifest it was read from) and re-run; there is deliberately no flag to emit it anyway. If it came from a backup, treat the manifest as suspect — sign chains (<code>--sign</code>/<code>--sign-key</code> plus <code>--require-signature</code>) so a schema edit is caught at verify time rather than at DDL time.</td></tr>
 <tr><td><code>SLUICE-E-SCHEMA-IDENTIFIER-TOO-LONG</code></td><td class="desc">refusal</td><td class="desc">An identifier sluice would emit on the PostgreSQL target — a table, column, index, primary-key/foreign-key/check constraint name, or a synthesized <code>&lt;table&gt;_&lt;column&gt;_enum</code> type name — is longer than PostgreSQL's <code>NAMEDATALEN-1</code> ceiling of <strong>63 bytes</strong> (bytes, not runes: a multibyte name of 40 characters can exceed it). PostgreSQL does not reject an over-length identifier; it TRUNCATES it silently at CREATE time, so two names sharing their first 63 bytes become one catalog object. Because sluice emits the <code>IF NOT EXISTS</code> form for indexes and tables alike, that collision is a silent no-op rather than an error: for an index the target is left missing an index the source declared, and for a TABLE the second <code>CREATE TABLE</code> resolves onto the first relation and the bulk COPY that follows — whose target name truncates identically — lands the second table's rows INSIDE the first, exit 0. Sources with no length limit of their own (SQLite/D1) can hand the writer exactly that pair, so the refusal fires at emit time, before anything is created or copied. The message names the object kind, the offending name, its byte length, and the owning table.</td><td class="desc">Rename the source object so its emitted PostgreSQL name fits 63 bytes (for an index, note sluice may prepend <code>&lt;table&gt;_</code> for cross-table disambiguation, so the source name has less than 63 bytes of headroom). sluice deliberately does not auto-truncate or auto-rename — either would silently reshape the operator's schema.</td></tr>
-<tr><td><code>SLUICE-E-SCHEMA-INDEX-NAME-COLLISION</code></td><td class="desc">refusal</td><td class="desc">Two distinct source indexes resolve to the SAME PostgreSQL index identifier. PostgreSQL index names are schema-scoped while MySQL's are table-scoped, so sluice prefixes <code>&lt;table&gt;_</code> when a source index name is not already table-scoped — and that transformation is not injective: index <code>user_id</code> on table <code>posts</code> and index <code>posts_user_id</code> on the same table both render <code>posts_user_id</code>. MySQL auto-names a single-column index after its column, which makes the pair routine rather than exotic, and a PostgreSQL source reaches it too (table <code>a</code> index <code>b_c</code> versus table <code>a_b</code> index <code>c</code>). The index build emits <code>CREATE INDEX IF NOT EXISTS</code> — load-bearing for the whole-phase reparent retry — so the second build of a colliding name is a <strong>silent no-op</strong>: the target permanently keeps whichever index sorted first and loses the other. When the loser is the UNIQUE one, the target accepts duplicate rows the source rejects, with exit 0. Refused at schema-emit time, before any table is created or any row copied; the message names both source indexes, their tables, and the colliding effective name.</td><td class="desc">Rename one of the two source indexes so they no longer collapse to the same PostgreSQL name (e.g. <code>ALTER TABLE posts RENAME INDEX user_id TO posts_user_id_idx</code> on the source), then re-run. sluice will not auto-rename: an index whose name silently changed breaks <code>ON CONFLICT ON CONSTRAINT</code>, <code>pg_dump</code> diffs, and any application code naming it — and the operator needs to know the source carries two indexes sluice cannot tell apart on the target.</td></tr>
+<tr><td><code>SLUICE-E-SCHEMA-INDEX-NAME-COLLISION</code></td><td class="desc">refusal</td><td class="desc">Two distinct source indexes resolve to the SAME index identifier on a target whose index names are <strong>schema-scoped</strong> &mdash; PostgreSQL and SQLite. MySQL's are table-scoped, so a MySQL target cannot hit this and is not checked. On <strong>PostgreSQL</strong>, sluice prefixes <code>&lt;table&gt;_</code> when a source index name is not already table-scoped, and that transformation is not injective: index <code>user_id</code> on table <code>posts</code> and index <code>posts_user_id</code> on the same table both render <code>posts_user_id</code>. MySQL auto-names a single-column index after its column, which makes the pair routine rather than exotic, and a PostgreSQL source reaches it too (table <code>a</code> index <code>b_c</code> versus table <code>a_b</code> index <code>c</code>). On <strong>SQLite</strong> there is no transformation at all, so the collision is the plainer one PostgreSQL's prefix disambiguates &mdash; two tables carrying an index of the same name &mdash; and SQLite compares identifiers case-insensitively, so a pair differing only in ASCII case collides too. Either way the index build emits <code>CREATE INDEX IF NOT EXISTS</code> &mdash; load-bearing for PostgreSQL's whole-phase reparent retry and for idempotent <code>--resume</code> &mdash; so the second build of a colliding name is a <strong>silent no-op</strong>: the target permanently keeps whichever index sorted first and loses the other. When the loser is the UNIQUE one, the target accepts duplicate rows the source rejects, with exit 0. Refused at schema-emit time, before any table is created or any row copied; the message names both source indexes, their tables, and the colliding effective name.</td><td class="desc">Rename one of the two source indexes so they no longer resolve to the same target name (e.g. <code>ALTER TABLE posts RENAME INDEX user_id TO posts_user_id_idx</code> on the source), then re-run. sluice will not auto-rename: an index whose name silently changed breaks <code>ON CONFLICT ON CONSTRAINT</code>, <code>pg_dump</code> diffs, and any application code naming it &mdash; and the operator needs to know the source carries two indexes sluice cannot tell apart on the target.</td></tr>
+<tr><td><code>SLUICE-E-SCHEMA-VIEW-NAME-COLLISION</code></td><td class="desc">refusal</td><td class="desc">A source <strong>view</strong> resolves to a name a <strong>table</strong> — or an earlier view — already occupies on a <strong>SQLite</strong> target. SQLite keeps tables and views in ONE namespace and compares identifiers case-insensitively for ASCII even inside double quotes, and sluice emits <code>CREATE VIEW IF NOT EXISTS</code> (load-bearing for an idempotent <code>--resume</code>), whose IF-NOT-EXISTS test asks whether a table-or-view of that name exists. So the CREATE returns OK and creates <strong>nothing</strong>: the view the source declared is simply absent on the target, at exit 0. Note the asymmetry that hid this — the INDEX-versus-table pair is LOUD on the same engine (<code>there is already a table named a</code>, with or without IF NOT EXISTS), and so is a view colliding with an INDEX (<code>there is already an index named ix</code>), so an operator who has seen sluice refuse a name collision reasonably assumes the class is covered. Only the view-versus-table/view pair is silent. This is a separate code from <code>SLUICE-E-SCHEMA-INDEX-NAME-COLLISION</code> on purpose: the object lost is a view, the namespace is the table/view one, and the remedy renames a different object. PostgreSQL and MySQL targets cannot hit it — both emit <code>CREATE OR REPLACE VIEW</code>, which has no no-op branch and raises loudly when the name is held by a base table. Refused before any data moves (and again at the view phase for the paths that skip the create-tables phase); the message names the view, the object it collides with, and that object's kind.</td><td class="desc">Rename the source view — or the table it collides with — so the two no longer resolve to the same SQLite name, then re-run. Check for a case-only difference first (<code>Orders</code> versus <code>orders</code> are one name on SQLite and two on a PostgreSQL source). If the view is not needed on the target, drop it on the source or exclude it. sluice will not auto-rename: a view whose name silently changed breaks every query naming it, and the operator needs to know the source carries two objects SQLite cannot tell apart.</td></tr>
+<tr><td><code>SLUICE-E-SCHEMA-TABLE-NAME-COLLISION</code></td><td class="desc">refusal</td><td class="desc">Two distinct source <strong>tables</strong> resolve to ONE table identifier on a <strong>SQLite</strong> target. SQLite compares object names case-insensitively for ASCII even inside double quotes, and sluice emits <code>CREATE TABLE IF NOT EXISTS</code> with a bare, never-schema-qualified name (load-bearing for an idempotent <code>--resume</code>) — so a PostgreSQL source legitimately holding <code>public.orders</code> and <code>public."Orders"</code> hands SQLite one name twice, and the second CREATE returns OK and creates <strong>nothing</strong>. This is the worst member of the <code>IF NOT EXISTS</code> silent-no-op family, and the reason is what happens next: nothing goes missing. The copy INSERTs the second table's rows under a name that folds to the FIRST table, so both tables' rows end up in one table, the row count is right for the surviving name, the run exits 0 with no failing statement and no warning. A later <code>verify --depth count</code> WOULD flag it — it compares each SOURCE table against the target, so both collide with the merged count — but nothing during the migration itself says anything anywhere in the run. Measured on the driver this engine uses: <code>CREATE TABLE IF NOT EXISTS</code> against a table (or a view) of that name is the silent no-op, the same statement WITHOUT <code>IF NOT EXISTS</code> is a loud <code>table "a" already exists</code>, and against an INDEX name it is loud with or without — so only the table-versus-table/view pair is silent, and the check deliberately does not walk index names. A separate code from the index and view collisions on purpose: the thing lost is rows, not an object, and the remedy renames a different object. <strong>MySQL</strong> targets (<code>mysql</code>/<code>planetscale</code>/<code>vitess</code>/<code>mariadb</code>) reach the identical loss by a second route: the same bare <code>CREATE TABLE IF NOT EXISTS</code>, on a server initialized with <code>lower_case_table_names != 0</code> — the default on Windows and macOS servers, and a legitimate deliberate setting on Linux — where the second CREATE returns <strong>Note 1050, a warning</strong>, and creates nothing. Measured on real <code>mysql:8</code> and <code>mariadb:11.4</code>: one table survives, and a row written under each spelling leaves both in it. That route is a property of the SERVER rather than of the schema — on the stock Linux default (<code>lower_case_table_names=0</code>) the same pair is two ordinary tables and nothing is refused — so sluice reads <code>@@global.lower_case_table_names</code> at each copy entry point and refuses only when the server actually folds, naming the setting's value alongside both tables. PostgreSQL targets reach the same shape only by 63-byte truncation, which is <code>SLUICE-E-SCHEMA-IDENTIFIER-TOO-LONG</code>. Refused before any data moves, at every copy entry point (<code>migrate</code>, both <code>sync</code> cold-start paths, <code>add-table</code>, both restore paths), and on MySQL again in the create-tables phase itself; the message names both source tables and the target identifier they share.</td><td class="desc">Rename one of the two source tables so they no longer resolve to the same target name, then re-run. Check for a case-only difference first — <code>Orders</code> and <code>orders</code> are two tables on a PostgreSQL source, one name on SQLite, and one name on a MySQL server that folds. If only one of the two is wanted on the target, exclude the other with <code>--exclude-table</code>. On a MySQL target the other way out is a server initialized with <code>lower_case_table_names=0</code>, where the two names are two tables — that setting is fixed when the data directory is initialized and cannot be changed on a running server. sluice will not auto-rename: a table whose name silently changed breaks every query naming it, and the operator needs to know the source carries two tables the target cannot tell apart.</td></tr>
+<tr><td><code>SLUICE-E-CONFIG-MULTI-NAMESPACE-TARGET-FLAT</code></td><td class="desc">refusal</td><td class="desc">A multi-namespace fan-out — <code>--all-databases</code>, <code>--include-database</code>/<code>--include-schema</code>, or <code>--map-database</code>/<code>--map-schema</code>, on <code>migrate</code> or on <code>sync</code> cold start — selected two or more source namespaces and was aimed at a target engine with a <strong>flat</strong> namespace (today: <code>sqlite</code>, the only flat-namespace engine that can be a target at all — <code>d1</code> declares the same flat scope but is a migrate SOURCE only). Such a target can neither derive a per-namespace target DSN (<code>CREATE DATABASE</code> on MySQL, <code>CREATE SCHEMA</code> on PostgreSQL) nor accept a <code>--target-schema</code> override, so every selected source namespace would be written into ONE target namespace under bare, unqualified names. Two namespaces carrying a same-named table would SILENTLY MERGE — the second table's <code>CREATE TABLE IF NOT EXISTS</code> no-ops and its rows are INSERTed into the first table, at exit 0 — and even with no name collision at all the result cannot be routed back to a source namespace by <code>verify</code>, a later <code>add-table</code>, or CDC apply. sluice already refuses the explicit form of this (two <code>--map-database</code> sources aimed at one target name); a flat target is that same many-to-one for every namespace in scope. A fan-out that resolves to exactly ONE source namespace is allowed through — it is byte-identical to a plain single-namespace run — though a rename applied to it is cosmetic there, since a flat target carries no namespace name in any emitted identifier.</td><td class="desc">Run one source namespace per invocation, each with its own target (for a file target, its own file): <code>sluice migrate --include-database app --target ./app.db</code>, then <code>--include-database billing --target ./billing.db</code>. Or choose a target engine that namespaces — PostgreSQL (schemas) or MySQL (databases) — if the namespaces must land in one target server.</td></tr>
 <tr><td><code>SLUICE-E-VALUE-RAGGED-ARRAY</code></td><td class="desc">refusal</td><td class="desc">An array value bound for a PostgreSQL array column is <strong>not rectangular</strong> — some sub-array at a given nesting depth has a different length than its siblings (<code>[[1,2],[3,4,5]]</code>). PostgreSQL arrays are rectangular by definition: the wire form carries one length per dimension plus a flat row-major element list, so a jagged value has no faithful representation at all. Before this refusal existed the writer took every dimension's length from the FIRST sub-array at that depth and then appended every leaf it found, so a long row silently DROPPED its extra elements, a short first row silently dropped the tail of every later row, and a short TRAILING row panicked the writer with an index-out-of-range. The message names the column, the nesting depth, and the expected-vs-actual sub-array lengths. A Postgres source can never produce this (PG arrays are rectangular on the way out); the reachable producer is the pgtrigger change-payload path, whose <code>to_jsonb()</code> capture carries a JSON array that is under no rectangularity obligation.</td><td class="desc">Fix the source value so every sub-array at a given depth has the same length (pad the short rows, or model the column as <code>jsonb</code>, which stores jagged structure faithfully). If the value arrived through the trigger-CDC path from a genuinely rectangular source column, report it as a sluice bug with the logged column and depth.</td></tr>
 <tr><td><code>SLUICE-E-BACKUP-INTERRUPTED</code></td><td class="desc">refusal</td><td class="desc">A backup manifest records <code>partial_state: in_progress</code> — the <code>sluice backup full</code> run that wrote it was interrupted (killed, crashed, cancelled) or is still running right now, so its table list names only the tables that had finished at that moment. Refused before any data is read by <code>restore</code> (the single-manifest path and every link of the chain walk), by <code>backup verify</code>, and by <code>export-as-parquet</code>. Without the refusal each of those succeeded over a partial backup: a restore created every table in the manifest's embedded schema, loaded only the ones the manifest listed, logged the rest at INFO as <code>restore: table not in manifest; skipping bulk-copy</code>, and exited 0 — silent loss on the DR path — while <code>backup verify</code> rehashed every chunk the partial manifest listed, found them all intact, and reported the backup healthy. A manifest carrying NO <code>partial_state</code> at all is a Phase-1 (pre-v0.16.x) manifest rather than an interrupted one and is deliberately unaffected. Only <code>backup full</code> ever persists an in-progress manifest; incremental and <code>backup stream</code> rollover manifests are written only once complete, which is why this fires at a chain's root.</td><td class="desc">Finish the backup, then re-run the command: re-running the identical <code>sluice backup full</code> into the same destination RESUMES the interrupted run (tables already complete are kept, the rest re-stream) and flips the manifest to <code>partial_state: complete</code>. To abandon the partial run instead, <code>sluice backup full --force-overwrite</code> discards it and takes a fresh backup. There is no flag that restores a partial backup as though it were whole — the tables the run never reached are not in the store to restore, so the only honest outcomes are finishing it or restoring an older complete backup. <code>sluice backup incremental</code> already refuses to extend a chain off the same manifest, for the same reason.</td></tr>
-<tr><td><code>SLUICE-E-BACKUP-SCHEMA-DELTA-UNSUPPORTED</code></td><td class="desc">refusal</td><td class="desc">A chain restore or broker replay reached an <code>alter_table</code> schema delta whose shape has no faithful replay on the target. An incremental manifest records one delta per table whose shape changed during the window, and the replay side disposes of EVERY structural aspect of it: an added column, a column type change, a nullability change and an index create/drop/redefine are emitted through the engine's schema-delta surface; a column reorder and a <code>DEFAULT</code> change are proven not to need DDL and logged; a dropped column, a changed primary key, a column that gained or lost <code>GENERATED</code>, and a malformed entry (before/after shapes naming different tables) refuse with this code. Previously the replay looked ONLY for ADDED columns and skipped every other shape in silence, so a mid-window <code>ALTER TABLE orders ALTER COLUMN amount TYPE numeric(20,8)</code> restored the column at its pre-window <code>numeric(10,2)</code>, Postgres ROUNDED every replayed value on insert and returned success, and the restore exited 0 over silently truncated money.</td><td class="desc">Take a fresh full backup and start a new chain from it — the window's DDL has no faithful replay on the target, and refusing beats replaying values into a shape that disagrees with them. The message names the table and the aspect. For a dropped column specifically sluice deliberately does not auto-DROP on replay (the same window's change chunks can still carry pre-DDL events naming that column); apply the drop to the target yourself after restoring from a fresh chain if that is the intent.</td></tr>
+<tr><td><code>SLUICE-E-BACKUP-SCHEMA-DELTA-UNSUPPORTED</code></td><td class="desc">refusal</td><td class="desc">A chain restore or broker replay reached an <code>alter_table</code> schema delta whose shape has no faithful replay on the target. An incremental manifest records one delta per table whose shape changed during the window, and the replay side disposes of EVERY structural aspect of it: an added column, a column type change, a nullability change and an index create/drop/redefine are emitted through the engine's schema-delta surface; a column reorder and a <code>DEFAULT</code> change are proven not to need DDL and logged; a dropped column, a changed primary key, a column that gained or lost <code>GENERATED</code>, an ADDED or REDEFINED <code>CHECK</code> constraint, any foreign-key add/drop/redefine, and a malformed entry (before/after shapes naming different tables) refuse with this code. A DROPPED <code>CHECK</code> applies rather than refusing, because dropping a constraint only ever widens what is legal and so cannot reject a replayed event; adding one cannot be ordered faithfully at all, since the source's own <code>ADD CHECK</code> landed partway through the window and validated only the rows present at that instant. Previously the replay looked ONLY for ADDED columns and skipped every other shape in silence, so a mid-window <code>ALTER TABLE orders ALTER COLUMN amount TYPE numeric(20,8)</code> restored the column at its pre-window <code>numeric(10,2)</code>, Postgres ROUNDED every replayed value on insert and returned success, and the restore exited 0 over silently truncated money.</td><td class="desc">Take a fresh full backup and start a new chain from it &mdash; the window's DDL has no faithful replay on the target, and refusing beats replaying values into a shape that disagrees with them. The message names the table and the aspect. For a dropped column specifically sluice deliberately does not auto-DROP on replay (the same window's change chunks can still carry pre-DDL events naming that column); apply the drop to the target yourself after restoring from a fresh chain if that is the intent.</td></tr>
 <tr><td><code>SLUICE-E-BACKFILL-VERIFY-NO-EVIDENCE</code></td><td class="desc">refusal</td><td class="desc"><code>sluice backfill --verify</code> counted zero rows still matching the <code>--where</code> guard and refused to authorize the contract step anyway, because the run it verified did no work. <code>CountRemaining</code> renders the SAME verbatim <code>--where</code> the chunk UPDATE does, so a predicate that is valid SQL but semantically wrong — a mistyped column, a coercion matching no row — counts 0 before the walk, updates 0 rows, and counts 0 after: every step agrees with every other step and not one of them is evidence a backfill happened. Three shapes refuse — the guard matched nothing before a fresh walk started, rows matched at the start and the walk updated none of them, or the spec's stored state was already <code>complete</code> and its stored progress row records no rows updated. Re-running a spec this release completed is NOT one of them: the completed run's row count is persisted and carried into the no-op, so the identical command exits 0 the second time. The third shape has one benign producer worth knowing — a spec completed by a sluice at or below v0.108.0, whose migrate-state codec dropped the row count when it wrote the completed entry, so the count reads back as 0 however many rows moved. Current releases persist it, but the count cannot be recovered from a row already stored without it. <code>--verify-only</code> never raises this code: it runs no walk and reads no control table, so it reports the count as the bare fact it is and says explicitly that it does not show a backfill ever ran.</td><td class="desc">Check that the <code>--where</code> guard selects the un-backfilled rows — run the count yourself (<code>SELECT count(*) FROM &lt;table&gt; WHERE &lt;guard&gt;</code>) and confirm it is nonzero — then re-run with <code>--verify</code>. If the backfill genuinely ran earlier (by hand, in a run whose control-table state is gone, or in a spec a sluice at or below v0.108.0 marked <code>complete</code> without recording the count), use <code>--verify-only</code>, which reports the remaining count without claiming the work happened; <code>sluice expand-contract --resume-from contract</code> rides that same verify-only gate.</td></tr>
+<tr><td><code>SLUICE-E-COPY-RETRY-AMBIGUOUS-KEYLESS</code></td><td class="desc">refusal</td><td class="desc">A cold copy hit a classified TRANSIENT target error (a PlanetScale/Vitess primary reparent, a Postgres storage auto-grow, a dropped connection) part-way through writing a batch, and the table it was writing has no <code>PRIMARY KEY</code> and no <code>NOT NULL UNIQUE</code> index. Both engines normally RIDE such a transient by re-sending the same rows on a fresh connection, and that is safe on a keyed table because the two possible prior outcomes are distinguishable after the fact: an attempt that rolled back re-applies cleanly, while an attempt that COMMITTED and then lost its acknowledgement collides on the key (MySQL Error 1062 / Postgres SQLSTATE 23505). With no unique key there is nothing to collide on, both outcomes look identical, and re-sending would silently double every row in the batch. sluice refuses rather than retry. The message names the table, the batch's row count, and the underlying transient.</td><td class="desc">Add a <code>PRIMARY KEY</code> or a <code>NOT NULL UNIQUE</code> index to the source table and re-run &mdash; that is the durable fix, and it also lets the table use the idempotent copy path. Failing that, re-run this table's copy against an EMPTY target (drop/truncate the target table first) so a partial write cannot be compounded, and prefer a quieter window: the refusal only fires when the target is genuinely mid-transient.</td></tr>
+<tr><td><code>SLUICE-E-CDC-SCHEMA-REPLAY-MISMATCH</code></td><td class="desc">refusal</td><td class="desc">A MySQL/MariaDB binlog row event's <code>TABLE_MAP_EVENT</code> column-type vector &mdash; the shape the event was RECORDED under &mdash; disagrees with the table's CURRENT <code>information_schema</code> shape, which is what sluice decodes values against. At the binlog head this cannot happen (the server serialises DDL against DML on one table, so a schema re-read after a DDL always sees the matching shape), so it means the stream is REPLAYING history recorded before a DDL that ran while sluice was not consuming &mdash; typically a warm resume after downtime. A DDL that changes the column COUNT already fails loudly on arity; this refusal is for the one that does not: a type change (or a rename that also retypes) leaves the count intact and every replayed value is decoded against the wrong type &mdash; the right number of columns carrying the wrong meaning. The message names the schema-qualified table, the column, the recorded binlog type and the current declared type.</td><td class="desc">Re-snapshot the affected table: the buffered binlog history predates a schema change, so there is no position from which it can be replayed faithfully. Restart the sync with <code>--restart-from-scratch</code> (or take the table out of scope, re-run, and bring it back with a fresh cold start). If the sync is expected to carry DDL forward, run the schema change through <code>sluice deploy-ddl</code> / the schema-forward path while the stream is LIVE rather than during downtime &mdash; the reader then records the change at its binlog position instead of discovering it after the fact.</td></tr>
 `;
 
 write(
@@ -1533,7 +1615,8 @@ ${pre(`sluice migrate -c sluice.yaml --source-driver mysql --source ... --target
 <tr><td><code>--config</code>, <code>-c</code></td><td>—</td><td class="desc">Path to a YAML config file.</td></tr>
 <tr><td><code>--log-level</code>, <code>-l</code></td><td><code>info</code></td><td class="desc">Verbosity: <code>debug</code> / <code>info</code> / <code>warn</code> / <code>error</code>.</td></tr>
 <tr><td><code>--log-format</code></td><td><code>text</code></td><td class="desc"><code>text</code> or <code>json</code> — one JSON object per line, for Loki / Datadog / CloudWatch ingestion of a long-running <code>sync</code>. (v0.99.31)</td></tr>
-<tr><td><code>--pprof-listen</code></td><td>off</td><td class="desc">Bind net/http/pprof at an address to diagnose stalls (e.g. <code>:6060</code>).</td></tr>
+<tr><td><code>--no-progress</code></td><td>off</td><td class="desc">Force plain structured-log output even at an interactive terminal, disabling the pretty progress view. Set it when sluice's stdout is being captured by a log collector that renders the live view as noise.</td></tr>
+<tr><td><code>--pprof-listen</code></td><td>off</td><td class="desc">Bind net/http/pprof at an address to diagnose stalls (e.g. <code>:6060</code>). Fetch <code>/debug/pprof/goroutine?debug=2</code> to dump every goroutine's stack — the first move on a silent stall.</td></tr>
 <tr><td><code>--mysql-sql-mode</code></td><td>strict</td><td class="desc">Override sluice's forced strict <code>sql_mode</code>. Pass <code>''</code> (empty) to migrate legacy MySQL data with zero-dates.</td></tr>
 <tr><td><code>--zero-date</code></td><td><code>error</code></td><td class="desc">How to carry MySQL zero / partial dates (<code>0000-00-00</code>, <code>YYYY-00-DD</code>, <code>YYYY-MM-00</code>): <code>error</code> refuses loudly naming the column; <code>null</code> carries them as NULL (itself refused on a NOT NULL column); <code>epoch</code> substitutes <code>1970-01-01</code>. A silent-loss-class control — the default is the safe one.</td></tr>
 <tr><td><code>--sqlite-date-encoding</code></td><td><code>iso</code></td><td class="desc">How a SQLite / D1 source decodes columns <em>declared</em> date/time (SQLite has no native temporal storage): <code>iso</code> reads ISO-8601 TEXT; <code>unixepoch</code> / <code>unixmillis</code> read INTEGER/REAL unix seconds/milliseconds; <code>julian</code> reads a REAL/INTEGER Julian day. A value whose storage class doesn't match is refused loudly naming the row — never a silently-wrong date (use <code>--type-override &lt;col&gt;=text</code> to carry an outlier raw). Per-source override: <code>?sqlite_date_encoding=…</code> on the source DSN.</td></tr>
@@ -2755,8 +2838,8 @@ write(
 <p>When a change refuses, the error is deliberately greppable and names the specific offending object plus the operator action. It carries three parts: the classify error (which shape / how many changes), a structured drift diff that names the exact columns / indexes / constraints that differ, and a recovery hint. The hint spells out the drained model:</p>
 <ul>
   <li>Run <code>sluice sync stop --wait</code> to drain in-flight changes.</li>
-  <li>Apply the schema change on the target (manually, or via <code>sluice schema migrate</code>).</li>
-  <li>Resume with <code>sluice sync start --resume</code>.</li>
+  <li>Apply the schema change on the target — manually, or through a governed channel such as <a href="/docs/commands/#deploy-ddl"><code>sluice deploy-ddl</code></a> (PlanetScale deploy requests) or <a href="/docs/commands/#schema-add-table"><code>sluice schema add-table</code></a> when the change is a whole new table.</li>
+  <li>Resume by re-running <code>sluice sync start</code> with the same <code>--stream-id</code> — it warm-resumes from the persisted position.</li>
   <li>It also notes that <code>--schema-changes=refuse</code> keeps the drained model as the default for any subsequent source DDL.</li>
 </ul>
 
@@ -2771,19 +2854,19 @@ sluice sync stop --wait \\
 psql "$SOURCE_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
 psql "$TARGET_DSN" -c 'ALTER TABLE accounts RENAME COLUMN label TO name;'
 
-# 3. Resume from the persisted CDC position
-sluice sync start --resume \\
+# 3. Resume — the same --stream-id warm-resumes from the persisted CDC position
+sluice sync start \\
     --stream-id app-prod \\
     --source-driver mysql    --source 'root:rootpw@tcp(localhost:3306)/app' \\
     --target-driver postgres --target 'postgres://...target...'`)}
-<p>The <code>--resume</code> flag picks up the persisted CDC position (source LSN / GTID set / VStream cursor), so pre-stop events apply cleanly and the first event after resume sees the new shape on both sides. Without <code>--resume</code>, sluice refuses to bulk-copy into a populated target. The order "stop &rarr; ALTER source &rarr; ALTER target &rarr; start" is robust regardless of which side commits the DDL first, as long as both sides carry the new shape before resume.</p>
+<p>There is no resume flag to pass: re-invoking <code>sync start</code> with the same <code>--stream-id</code> finds that stream's persisted CDC position (source LSN / GTID set / VStream cursor) and continues from it, so pre-stop events apply cleanly and the first event after resume sees the new shape on both sides. It does not re-run the snapshot, and it never bulk-copies into the populated target. The order "stop &rarr; ALTER source &rarr; ALTER target &rarr; start" is robust regardless of which side commits the DDL first, as long as both sides carry the new shape before resume.</p>
 <div class="note"><strong>Plan the target-side change first.</strong> <code>sluice schema diff</code> runs the source schema through sluice's translation pipeline and reports drift against the target's actual schema — apply the ALTER on the source, run the diff, and it surfaces the missing-on-target columns / type mismatches with suggested <code>ALTER</code> statements as a starting point. It does not know your data volume or lock duration, so review them before running.</div>
 
 <h2 id="next">Next steps</h2>
 <ul>
   <li><a href="/docs/commands/#sync-start">sync start reference</a> — the <code>--schema-changes</code> row and the full sync flag set.</li>
   <li><a href="/docs/migrate-mysql-to-postgres/">Migrate MySQL to Postgres</a> — the one-shot migration the drained model resumes onto.</li>
-  <li><a href="/docs/commands/#schema">schema diff / schema migrate</a> — pre-flight drift and apply the target-side change.</li>
+  <li><a href="/docs/commands/#schema">schema preview / diff</a> — pre-flight the drift, then apply the target-side change yourself (or via <a href="/docs/commands/#deploy-ddl">deploy-ddl</a>).</li>
 </ul>
 `,
     prev: { href: "/docs/staged-wave-migration/", label: "Staged (wave) migration" },
@@ -4520,7 +4603,7 @@ ${pre(`sluice sync start --stream-id eu-split \\
 <div class="note warn"><strong>Filtered sync requires full row before-images, and refuses loudly without them.</strong> The move-in / move-out decision needs the <em>old</em> value of the region column, so each filtered table needs <strong>Postgres <code>REPLICA IDENTITY FULL</code></strong> (or <strong>MySQL <code>binlog_row_image=FULL</code></strong>). sluice preflights this at sync-start and refuses with <code>SLUICE-E-WHERE-CDC-BEFORE-IMAGE</code>, naming the table and the exact remedy, rather than run on a partial image it can't evaluate. Set it before you start:${pre(`ALTER TABLE users       REPLICA IDENTITY FULL;
 ALTER TABLE orders      REPLICA IDENTITY FULL;
 ALTER TABLE order_items REPLICA IDENTITY FULL;`)}</div>
-<div class="note"><strong>Continuous <code>sync --where</code> works across the whole matrix as of v0.99.282 — the one thing to set is full before-images.</strong> Postgres, self-hosted MySQL, and PlanetScale MySQL / Vitess all support continuous filtered sync:
+<div class="note"><strong>Continuous <code>sync --where</code> works across the whole matrix as of v0.99.282 — the one thing to set is full before-images.</strong> The sources that can run one are <strong>Postgres and the whole MySQL family</strong> — self-hosted MySQL, MariaDB, and PlanetScale MySQL / Vitess. (A filtered continuous sync needs the source's change stream to deliver full row before-images; the <code>sqlite</code>, <code>d1</code> and trigger-CDC engines cannot, so they refuse at preflight rather than filter approximately. <a href="#migrate"><code>migrate --where</code></a> is unaffected and works on every engine that supports <code>migrate</code>.)
 <ul>
 <li><strong>String filters evaluate under the column's real collation.</strong> A <code>region = 'EU'</code> filter on a case- or accent-insensitive column (MySQL's default) matches <code>eu</code>, <code>Eu</code>, and accented values exactly as the source would — sluice reproduces the source's own <code>=</code> using the source engine's collation comparator, so the client-side CDC classification can't diverge. Pass <code>--where-strict-collation</code> if you'd rather have the strict byte-exact behavior (refuse any non-byte-exact string comparison). Postgres's deterministic default collation was always fine. <strong>A MySQL <code>ENUM</code> filter is collation-aware too</strong> — <code>status = 'active'</code> on a case-insensitive <code>ENUM('Active','Inactive')</code> matches the stored <code>'Active'</code> the way the source's <code>=</code> does, not byte-exact (v0.99.283).</li>
 <li><strong>PlanetScale MySQL / Vitess pushes the filter server-side.</strong> The predicate becomes a VStream filter rule (<code>select * from t where (…)</code>), so Vitess filters both the cold-start copy and the stream; sluice classifies the row-moves client-side. Validated end-to-end on a real Vitess cluster — move-in → INSERT, move-out → DELETE, no leak. <em>PAD-SPACE collations (v0.99.283):</em> the VStream server-side filter is <strong>NO-PAD</strong> (it ignores a legacy collation's PAD-SPACE trailing-space semantics), so for a string filter on a PAD-SPACE collation such as <code>utf8mb4_general_ci</code> sluice streams that table <strong>unfiltered</strong> server-side and filters it <strong>client-side</strong> with the PAD-faithful comparator — the trailing-space <code>'EU '</code> a <code>region = 'EU'</code> filter should keep is kept, on both the copy and the stream. The only trade is more wire traffic for that one table. NO-PAD collations (the MySQL 8.0 default) are reduced at the source as usual. (v0.99.282 <em>refused</em> such a filter; v0.99.283 makes it work.) <em>Sharded keyspace, filtering on the shard's vindex column?</em> That's safe: Vitess refuses an in-place <code>UPDATE</code> of a primary vindex column (<code>VT12001</code>), so a row can't silently change shards under the filter and produce a missed move-out — verified on a real 2-shard cluster. <em>One edge that refuses:</em> a <strong>single-precision <code>FLOAT</code></strong> ordering term (<code>amount &gt; 0.1</code>) on a PAD-SPACE-forced table is refused (<code>SLUICE-E-WHERE-CDC-UNSUPPORTED-PREDICATE</code>) — the cold-start copy carries single-precision FLOAT display-rounded, so a boundary compare could drop an in-scope row; use <code>DOUBLE</code>, or filter on a non-FLOAT column.</li>
@@ -6515,7 +6598,7 @@ WHERE slot_type = 'logical';
 <ul>
   <li><strong>Keep the consumer active.</strong> sluice's PG CDC reader sends <code>pg_send_standby_status_update</code> every 10&nbsp;seconds whether or not events are flowing, so the slot reads as <code>active</code> from the primary's perspective and the standby's sync keeps pace. The operational rule: run <code>sync start</code> <em>continuously</em>, not as a one-shot during low-traffic windows.</li>
   <li><strong>Make a quiet source advance on purpose.</strong> For genuinely idle databases, inject WAL activity with <code>SELECT pg_logical_emit_message(false, 'sluice-heartbeat', '')</code> on a timer — it writes to WAL without modifying any user data (sluice's reader sees and discards it), guaranteeing the slot moves even if the active consumer briefly disconnects.</li>
-  <li><strong>Backstop.</strong> If the slot is lost regardless, <code>sync start --resume</code> detects it, drops it, and falls through to a fresh cold-start rather than silently stalling.</li>
+  <li><strong>Backstop.</strong> If the slot is lost regardless, re-running <code>sync start</code> with the same <code>--stream-id</code> — the ordinary warm-resume invocation — detects the loss, drops the stale slot, and falls through to a fresh cold-start rather than silently stalling.</li>
 </ul>
 
 <h2 id="lesson">The transferable lesson</h2>
@@ -10696,49 +10779,97 @@ function firstDivergence(a, b) {
   return `        at char ${i}\n          in-repo: ${clip(a)}\n          site   : ${clip(b)}`;
 }
 
-function errorCodeTextDrift(errorCodesMdPath) {
+// Parse the site's ERROR_CODE_ROWS into code -> [Class, Meaning, Remedy] plain
+// text. Shared by the row-SET check and the row-TEXT check so they can never
+// disagree about which rows the site carries.
+function parseSiteErrorCodeRows() {
+  const site = new Map();
+  const problems = [];
+  for (const rawLine of ERROR_CODE_ROWS.split("\n")) {
+    const line = rawLine.trim();
+    if (!line.startsWith("<tr>")) continue;
+    const cells = [...line.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]);
+    if (cells.length !== 4) {
+      problems.push(`  ERROR_CODE_ROWS row does not have 4 <td> cells: ${line.slice(0, 90)}`);
+      continue;
+    }
+    site.set(htmlCellToText(cells[0]), cells.slice(1).map(htmlCellToText));
+  }
+  return { site, problems };
+}
+
+// errorCodeTextDrift compares each row the site carries against the same row in
+// the in-repo table, and reports rows present on one side and absent on the
+// other. It returns problems rather than exiting, so a red row-SET check no
+// longer hides it (see driftCheck's note on accumulating).
+//
+// `releasedCodes` scopes the "in the repo table but NOT on the site" direction:
+// the site documents the SHIPPED product, so a code minted since the latest
+// release tag is legitimately absent and is reported as a notice instead. The
+// inverse — an UNRELEASED code published on the site — is always a problem.
+//
+// Note which side each half reads. WHICH codes must appear is taken from the
+// release TAG; what each row SAYS is taken from the WORKING checkout's
+// error-codes.md. That split is deliberate: a code's existence is release-gated,
+// but a prose correction is not, and pinning the text to the tag would hold a
+// known-false sentence on the site for a whole release cycle (it would have
+// blocked the `sync --backup-to` -> `backup stream run` fix, a flag that never
+// existed at any version). The cost is stated rather than implied: if a released
+// row's text is edited on main to describe UNRELEASED behaviour, this check will
+// ask the site to publish it. Nothing here can detect that — the reviewer of the
+// in-repo edit is the only guard.
+function errorCodeTextDrift(errorCodesMdPath, releasedCodes) {
   const md = readFileSync(errorCodesMdPath, "utf8");
 
+  const problems = [];
   const repo = new Map();
   for (const rawLine of md.split("\n")) {
     const line = rawLine.trim();
     if (!line.startsWith("| `SLUICE-E-")) continue;
     const cells = line.replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim());
     if (cells.length !== 4) {
-      console.error(`drift check FAILED: ${errorCodesMdPath} row does not split into 4 cells: ${line.slice(0, 90)}`);
-      process.exit(1);
+      problems.push(`  ${errorCodesMdPath} row does not split into 4 cells: ${line.slice(0, 90)}`);
+      continue;
     }
     repo.set(markdownCellToText(cells[0]), cells.slice(1).map(markdownCellToText));
   }
 
-  const site = new Map();
-  for (const rawLine of ERROR_CODE_ROWS.split("\n")) {
-    const line = rawLine.trim();
-    if (!line.startsWith("<tr>")) continue;
-    const cells = [...line.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]);
-    if (cells.length !== 4) {
-      console.error(`drift check FAILED: ERROR_CODE_ROWS row does not have 4 <td> cells: ${line.slice(0, 90)}`);
-      process.exit(1);
-    }
-    site.set(htmlCellToText(cells[0]), cells.slice(1).map(htmlCellToText));
-  }
+  const { site, problems: siteParseProblems } = parseSiteErrorCodeRows();
+  problems.push(...siteParseProblems);
 
   // Vacuous-green guard: if either parser stopped matching (a reshaped markdown
   // table, a re-formatted ERROR_CODE_ROWS), an empty comparison would pass
   // silently and this check would quietly stop existing.
   if (repo.size === 0 || site.size === 0) {
-    console.error(
-      `drift check FAILED: parsed ${repo.size} rows from ${errorCodesMdPath} and ${site.size} from ERROR_CODE_ROWS — ` +
-      `one of the two table shapes changed and the comparison would be vacuous. Fix the parser in errorCodeTextDrift().`
+    problems.push(
+      `  parsed ${repo.size} rows from ${errorCodesMdPath} and ${site.size} from ERROR_CODE_ROWS —\n` +
+      `      one of the two table shapes changed and the comparison would be vacuous.\n` +
+      `      Fix the parser in errorCodeTextDrift().`
     );
-    process.exit(1);
+    return { problems, comparedRows: 0, withheld: [] };
   }
 
   const COLUMNS = ["Class", "Meaning", "Remedy"];
-  const problems = [];
+  const withheld = [];
+  let comparedRows = 0;
   for (const [code, repoCells] of repo) {
     const siteCells = site.get(code);
-    if (!siteCells) { problems.push(`  ${code}\n      in docs/operator/error-codes.md but NOT in the site table`); continue; }
+    if (!siteCells) {
+      if (releasedCodes.has(code)) {
+        problems.push(`  ${code}\n      released, in docs/operator/error-codes.md, but NOT in the site table`);
+      } else {
+        withheld.push(code);
+      }
+      continue;
+    }
+    if (!releasedCodes.has(code)) {
+      problems.push(
+        `  ${code}\n      published on the site but NOT YET RELEASED — no shipped sluice emits it.\n` +
+        `      Remove the row until the release that ships it is tagged.`
+      );
+      continue;
+    }
+    comparedRows++;
     for (let i = 0; i < COLUMNS.length; i++) {
       if (repoCells[i] !== siteCells[i]) {
         problems.push(`  ${code} — ${COLUMNS[i]} differs\n${firstDivergence(repoCells[i], siteCells[i])}`);
@@ -10750,15 +10881,13 @@ function errorCodeTextDrift(errorCodesMdPath) {
   }
 
   if (problems.length) {
-    console.error(
-      `drift check FAILED: ${problems.length} error-code cell(s) no longer match the in-repo table.\n` +
+    problems.unshift(
+      `error-code rows no longer match the in-repo table.\n` +
       `docs/operator/error-codes.md is the source of truth (gated against the constants by sluicecode_test.go);\n` +
-      `re-port the rows below into ERROR_CODE_ROWS in build.mjs.\n\n` +
-      problems.join("\n\n") + "\n"
+      `re-port the rows below into ERROR_CODE_ROWS in build.mjs.`
     );
-    process.exit(1);
   }
-  return repo.size;
+  return { problems, comparedRows, withheld };
 }
 
 // When a sibling sluice checkout exists next to this repo, compare the site's
@@ -10769,113 +10898,143 @@ function errorCodeTextDrift(errorCodesMdPath) {
 // fails the build naming both counts, so a release that mints a code, rewords
 // one, or registers an engine can't leave this site silently stale. No sibling
 // checkout (e.g. CI for the site alone) skips with a notice. No new deps.
-// UNDOCUMENTED_FLAGS is the FROZEN debt: flags the binary accepts that the
-// published command reference does not document, measured when this check was
-// introduced. 91 of them.
+
+// UNDOCUMENTED_FLAGS is the escape hatch for a flag the reference does NOT
+// document. It is empty, and empty is the intended steady state.
 //
-// It is a debt list, not an allowlist. Every entry is a flag an operator can
-// pass and cannot look up — including ones other pages already link to
-// (--skip-foreign-keys is referenced by the region-move guide and appears
-// nowhere in the reference).
+// It was introduced holding 91 names — every flag the binary accepted that the
+// published reference had never mentioned, frozen rather than fixed so no NEW
+// flag could join the list silently while the backlog was burned down. The
+// backlog is burned down: all 91 were written up against the kong struct tags
+// and the implementation they cite, so the reference now covers the full flag
+// surface and this check holds it there.
 //
-// Frozen rather than fixed, deliberately. Failing on all 91 would mean either
-// blocking every site build until they are all written up, or disabling the
-// check — and the second always wins. Freezing means no NEW flag joins the
-// list silently, while the existing debt is explicit, counted, and burnable.
-// Delete a name once its reference row exists; the check then holds that flag
-// documented forever.
+// Adding a name back is a real decision, not a formality. Do it only for a
+// flag that is genuinely internal, and put the REASON on the entry — the fork
+// the failure message prescribes is document-it-or-justify-it, and an entry
+// with no reason is the debt this list was created to retire. Nothing has
+// qualified so far: the plausible candidates (--pprof-listen, the
+// --diagnose-on-crash-* pair) all turned out to be operator-facing enough to
+// describe in a sentence, which is cheaper than arguing they are exempt.
 const UNDOCUMENTED_FLAGS = new Set([
-  "--analyze-after",
-  "--apply-delay",
-  "--apply-tune-target-latency",
-  "--auto-prune-change-log",
-  "--auto-prune-interval",
-  "--auto-prune-keep",
-  "--azure-wrap-algorithm",
-  "--backfill-added-column",
-  "--bulk-batch-size",
-  "--chunk-size",
-  "--compaction-pk-strategy",
-  "--control-keyspace",
-  "--copy-table-parallelism",
-  "--diagnose-on-crash-dir",
-  "--diagnose-on-crash-privacy",
-  "--enable-pg-extension",
-  "--encrypt-mode",
-  "--exclude-view",
-  "--fleet",
-  "--fleet-concurrency",
-  "--float-reread-max-rows",
-  "--heartbeat-interval",
-  "--if-exists",
-  "--ignore-charset-collation",
-  "--ignore-extras",
-  "--include-empty",
-  "--include-view",
-  "--index-build-mem",
-  "--keep-duration",
-  "--keep-incrementals",
-  "--keyset-source",
-  "--kms-region",
-  "--log-file",
-  "--log-format",
-  "--max-changes",
-  "--max-memory",
-  "--migration-id",
-  "--mysql-sql-mode",
-  "--no-coordinate-live-ddl",
-  "--no-float-exact-reread",
-  "--no-intra-table-stealing",
-  "--no-progress",
-  "--no-source-heartbeat",
-  "--notify-smtp-auth",
-  "--notify-smtp-from",
-  "--notify-smtp-host",
-  "--notify-smtp-password",
-  "--notify-smtp-port",
-  "--notify-smtp-tls",
-  "--notify-smtp-to",
-  "--notify-smtp-username",
-  "--patroni-mode",
-  "--planetscale-raise-query-timeout",
-  "--pprof-listen",
-  "--privacy",
-  "--raw-copy-format",
-  "--reap-stale-backends",
-  "--rebuild-catalog",
-  "--retain-rotate-at",
-  "--retain-rotate-at-chain-length",
-  "--retry-attempts",
-  "--retry-backoff-base",
-  "--retry-backoff-cap",
-  "--rollover-hook",
-  "--rollover-max-bytes",
-  "--rollover-max-changes",
-  "--rollover-window",
-  "--sequence-margin",
-  "--shard-coordination-lease-duration",
-  "--shard-coordination-renew-deadline",
-  "--shard-coordination-retry-period",
-  "--since",
-  "--sink-file",
-  "--sink-file-max-bytes",
-  "--sink-file-max-files",
-  "--sink-http",
-  "--skip-foreign-keys",
-  "--skip-views",
-  "--smart-compaction",
-  "--smart-compaction-off",
-  "--source-heartbeat-prune-window",
-  "--source-heartbeat-table-name",
-  "--strict-float",
-  "--summary",
-  "--upfront-indexes",
-  "--version",
-  "--vstream-copy-table-parallelism",
-  "--vstream-preserve-skew",
-  "--watch",
-  "--window",
-  "--zero-date",
+  // (empty — every flag the binary accepts has a row in the reference)
+]);
+
+// SIBLING_SECTION_FLAGS is the frozen backlog for the per-command half of the
+// check below. Each entry is a "<top-level command> --flag" pair the binary
+// accepts whose flag is documented on the commands page but in a DIFFERENT
+// command's section — usually legitimately (restore's encryption flags are
+// described once under backup; cutover reuses migrate's connection flags).
+//
+// It is frozen, not fixed, for exactly the reason UNDOCUMENTED_FLAGS was: the
+// list was 111 pairs the moment the per-command comparison first ran, and
+// freezing it is what stops a NEW pair joining silently while the backlog is
+// burned down. An entry here is a claim that the flag means the SAME thing on
+// this command as it does in the section that documents it. When that is false,
+// the flag needs its own row — that is the whole defect this half exists to
+// catch, and the four pairs deliberately NOT frozen are the proof it works:
+// `backup verify --depth` (enum hash|read, versus `verify --depth`'s
+// count|sample), `backup prune --dry-run` / `backup compact --dry-run` (the only
+// guard against irreversibly dropping backup history), and
+// `metrics-watch --include-database` / `--exclude-database` (PlanetScale
+// database/branch GLOBS, versus migrate's literal table names).
+const SIBLING_SECTION_FLAGS = new Set([
+  "backup --bulk-parallel-min-rows",
+  "backup --bulk-parallelism",
+  "backup --format",
+  "backup --source-tls-ca",
+  "cutover --exclude-table",
+  "cutover --format",
+  "cutover --include-table",
+  "cutover --source",
+  "cutover --source-driver",
+  "cutover --target",
+  "cutover --target-driver",
+  "cutover --target-schema",
+  "diagnose --output",
+  "diagnose --slot-name",
+  "diagnose --stream-id",
+  "matview --format",
+  "metrics-watch --notify-smtp-auth",
+  "metrics-watch --notify-smtp-from",
+  "metrics-watch --notify-smtp-host",
+  "metrics-watch --notify-smtp-password",
+  "metrics-watch --notify-smtp-port",
+  "metrics-watch --notify-smtp-tls",
+  "metrics-watch --notify-smtp-to",
+  "metrics-watch --notify-smtp-username",
+  "migrate --force-cold-start",
+  "migrate --format",
+  "migrate --max-buffer-bytes",
+  "migrate --planetscale-deploy-timeout",
+  "migrate --planetscale-service-token",
+  "migrate --planetscale-service-token-id",
+  "restore --azure-key-vault-id",
+  "restore --azure-wrap-algorithm",
+  "restore --backup-endpoint",
+  "restore --backup-path-style",
+  "restore --backup-region",
+  "restore --encrypt-mode",
+  "restore --encryption-passphrase",
+  "restore --encryption-passphrase-env",
+  "restore --encryption-passphrase-file",
+  "restore --exclude-table",
+  "restore --format",
+  "restore --gcp-kms-key-resource",
+  "restore --include-table",
+  "restore --kms-key-arn",
+  "restore --kms-region",
+  "restore --max-buffer-bytes",
+  "restore --planetscale-metrics-branch",
+  "restore --planetscale-metrics-db",
+  "restore --sign",
+  "restore --sign-key",
+  "schema --control-keyspace",
+  "schema --exclude-table",
+  "schema --format",
+  "schema --include-table",
+  "schema --inject-shard-column",
+  "schema --output",
+  "schema --slot-name",
+  "slot --force",
+  "slot --yes",
+  "sync --all-databases",
+  "sync --all-schemas",
+  "sync --azure-key-vault-id",
+  "sync --azure-wrap-algorithm",
+  "sync --bulk-parallel-min-rows",
+  "sync --bulk-parallelism",
+  "sync --encrypt",
+  "sync --encrypt-mode",
+  "sync --encryption-passphrase",
+  "sync --encryption-passphrase-env",
+  "sync --encryption-passphrase-file",
+  "sync --exclude-database",
+  "sync --exclude-schema",
+  "sync --expr-override",
+  "sync --format",
+  "sync --gcp-kms-key-resource",
+  "sync --include-database",
+  "sync --include-orm-tables",
+  "sync --include-schema",
+  "sync --index-build-parallelism",
+  "sync --kms-key-arn",
+  "sync --kms-region",
+  "sync --map-database",
+  "sync --map-schema",
+  "sync --max-target-connections",
+  "sync --output",
+  "sync --require-signature",
+  "sync --sign",
+  "sync --sign-key",
+  "sync --skip-orm-tables",
+  "sync --target-schema",
+  "sync --verify-key",
+  "verify --exclude-table",
+  "verify --include-table",
+  "verify --source-tls-ca",
+  "verify --target-tls-ca",
+  "verify --where",
 ]);
 
 // cliFlagDrift compares every flag the sluice binary accepts against the flags
@@ -10888,53 +11047,173 @@ const UNDOCUMENTED_FLAGS = new Set([
 // Source of truth is docs/dev/cli-flags.txt in the sibling checkout, which
 // sluice generates from KONG OWN MODEL and gates with
 // cmd/sluice/cli_flag_manifest_test.go — so it cannot disagree with what the
-// binary accepts.
+// binary accepts. That file carries "<command path> --<flag>" per line, and the
+// command path is load-bearing here.
 //
-// Only the flag NAME is compared, not its prose. A flag whose description went
-// stale is a different problem, and claiming this catches it would be worse
-// than not claiming it.
+// TWO comparisons, and the second is the one that took a while to exist:
+//
+//   1. Does the reference mention this flag AT ALL? (UNDOCUMENTED_FLAGS is the
+//      escape hatch.)
+//   2. Does the reference mention it in THIS COMMAND's section?
+//
+// (2) exists because (1) alone is blind to a flag NAME that two commands share
+// with different value sets. `backup verify --depth` takes hash|read; `verify
+// --depth` takes count|sample; a page-wide set of flag names finds "--depth" and
+// reports the reference complete while `--depth read` is undocumented. That was
+// a real, live hole (audit backlog, 2026-08-05) and it is the shape a name-only
+// comparison can never see.
+//
+// STATED SCOPE, so nobody reads this as broader than it is:
+//   - Sections are keyed on the TOP-LEVEL command (`backup`), not the full
+//     subcommand path (`backup verify`), because the commands page is organised
+//     that way. Two flags sharing a name under one top-level command would be
+//     indistinguishable here. None exist today.
+//   - Only the flag NAME is compared, never its prose or its value set. A flag
+//     whose description went stale is a different problem, and claiming this
+//     catches it would be worse than not claiming it. What this half proves is
+//     narrower: that SOMEONE wrote about this flag in the section an operator
+//     reading about this command would actually be looking at.
 const LF = String.fromCharCode(10);
 
 function cliFlagDrift(manifestPath) {
+  const problems = [];
   if (!existsSync(manifestPath)) {
     console.log("drift check: no " + manifestPath + " — CLI flag comparison skipped");
-    return;
+    return problems;
   }
+  // "<command path> --<flag>"; an empty path means a global flag.
   const inBinary = new Set();
-  for (const line of readFileSync(manifestPath, "utf8").split(String.fromCharCode(10))) {
-    if (!line.trim() || line.startsWith("#")) continue;
-    const m = line.match(/--([a-z0-9][a-z0-9-]*)$/);
-    if (m) inBinary.add("--" + m[1]);
+  const pairs = [];
+  for (const line of readFileSync(manifestPath, "utf8").split(LF)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const m = t.match(/^(.*?)\s*--([a-z0-9][a-z0-9-]*)$/);
+    if (!m) continue;
+    const flag = "--" + m[2];
+    inBinary.add(flag);
+    const path = m[1].trim();
+    if (path) pairs.push({ path, cmd: path.split(/\s+/)[0], flag });
   }
-  if (inBinary.size === 0) {
-    console.error("drift check FAILED: " + manifestPath + " yielded no flags — an empty set agrees with any reference");
-    process.exit(1);
+  if (inBinary.size === 0 || pairs.length === 0) {
+    problems.push(
+      manifestPath + " yielded " + inBinary.size + " flags and " + pairs.length + " (command, flag) pairs — " +
+      "an empty set agrees with any reference"
+    );
+    return problems;
   }
   const commandsPage = join(ROOT, "docs", "commands", "index.md");
   if (!existsSync(commandsPage)) {
-    console.error("drift check FAILED: " + commandsPage + " not found — cannot compare CLI flags");
-    process.exit(1);
+    problems.push(commandsPage + " not found — cannot compare CLI flags");
+    return problems;
   }
-  const documented = new Set(readFileSync(commandsPage, "utf8").match(/--[a-z0-9][a-z0-9-]*/g) || []);
+  const pageText = readFileSync(commandsPage, "utf8");
+  const documented = new Set(pageText.match(/--[a-z0-9][a-z0-9-]*/g) || []);
+
+  // Split the page on its `## ` headings and key each section's flags by the
+  // heading's first word — "backup export-as-parquet" and "sync status / stop /
+  // health / decommission" both fold onto their top-level command.
+  const byCommand = new Map();
+  {
+    let head = null;
+    let body = [];
+    const flush = () => {
+      if (head === null) return;
+      const cmd = head.split(/[\s/]+/)[0];
+      if (!byCommand.has(cmd)) byCommand.set(cmd, new Set());
+      for (const f of body.join(LF).match(/--[a-z0-9][a-z0-9-]*/g) || []) byCommand.get(cmd).add(f);
+    };
+    for (const line of pageText.split(LF)) {
+      if (line.startsWith("## ")) { flush(); head = line.slice(3).trim(); body = []; } else body.push(line);
+    }
+    flush();
+  }
+  if (byCommand.size === 0) {
+    problems.push(
+      commandsPage + " yielded no `## ` command sections — the per-command comparison would be vacuous. " +
+      "Fix the section parser in cliFlagDrift()."
+    );
+    return problems;
+  }
+
+  // (1) documented anywhere at all?
   const missing = [...inBinary].filter((f) => !documented.has(f) && !UNDOCUMENTED_FLAGS.has(f)).sort();
   const paid = [...UNDOCUMENTED_FLAGS].filter((f) => documented.has(f) || !inBinary.has(f)).sort();
   if (missing.length) {
-    console.error(
-      "drift check FAILED: " + missing.length + " CLI flag(s) are accepted by sluice but absent from " +
-      "the command reference:" + LF + "  " + missing.join(LF + "  ") +
+    problems.push(
+      missing.length + " CLI flag(s) are accepted by sluice but absent from the command reference:" +
+      LF + "  " + missing.join(LF + "  ") +
       LF + "Add a row for each to the commands page, or — if one is genuinely internal — add it to " +
       "UNDOCUMENTED_FLAGS with a reason."
     );
-    process.exit(1);
   }
   if (paid.length) {
-    console.error(
-      "drift check FAILED: " + paid.length + " flag(s) in UNDOCUMENTED_FLAGS are now documented or gone; " +
+    problems.push(
+      paid.length + " flag(s) in UNDOCUMENTED_FLAGS are now documented or gone; " +
       "remove them from that list so the check keeps holding them:" + LF + "  " + paid.join(LF + "  ")
     );
-    process.exit(1);
   }
-  console.log("drift check: " + inBinary.size + " CLI flags, " + UNDOCUMENTED_FLAGS.size + " still undocumented (frozen debt)");
+
+  // (2) documented in THIS command's section?
+  const key = (p) => p.cmd + " " + p.flag;
+  const offSection = [];
+  const seenFrozen = new Set();
+  for (const p of pairs) {
+    if (UNDOCUMENTED_FLAGS.has(p.flag)) continue;
+    if (byCommand.get(p.cmd)?.has(p.flag)) continue;
+    if (SIBLING_SECTION_FLAGS.has(key(p))) { seenFrozen.add(key(p)); continue; }
+    offSection.push(`  sluice ${p.path} ${p.flag}` + (documented.has(p.flag) ? "   (documented, but in another command's section)" : "   (undocumented anywhere)"));
+  }
+  if (offSection.length) {
+    problems.push(
+      offSection.length + " (command, flag) pair(s) are accepted by sluice but not documented in that " +
+      "command's own section of the reference:" + LF + [...new Set(offSection)].sort().join(LF) +
+      LF + "Document each in its command's section — this is the half that catches a flag NAME two commands " +
+      "share with different value sets — or, if it genuinely means the same thing as the section that does " +
+      "document it, add \"<top-level command> --flag\" to SIBLING_SECTION_FLAGS."
+    );
+  }
+  const stale = [...SIBLING_SECTION_FLAGS].filter((k) => !seenFrozen.has(k)).sort();
+  if (stale.length) {
+    problems.push(
+      stale.length + " entr(ies) in SIBLING_SECTION_FLAGS are now documented in their own section or no " +
+      "longer exist; remove them so the list keeps holding the rest:" + LF + "  " + stale.join(LF + "  ")
+    );
+  }
+
+  if (!problems.length) {
+    console.log(
+      "drift check: " + inBinary.size + " CLI flags / " + pairs.length + " (command, flag) pairs, " +
+      "all documented in the command reference" +
+      (UNDOCUMENTED_FLAGS.size ? "; " + UNDOCUMENTED_FLAGS.size + " deliberately exempt" : "") +
+      (SIBLING_SECTION_FLAGS.size ? "; " + SIBLING_SECTION_FLAGS.size + " frozen as documented-in-a-sibling-section" : "")
+    );
+  }
+  return problems;
+}
+
+// The set of SLUICE-E-* codes a SHIPPED sluice can emit — read from the latest
+// release tag, not from the working checkout.
+//
+// This is what makes the row check satisfiable at all. The site documents the
+// released product, `main` routinely carries codes no tagged binary emits (four
+// on the day this was written), and the old check compared the site's row count
+// against the WORKING registry — so its only green state would have been to
+// publish codes that do not exist for any user. There is no honest count to hit
+// there; the fix is to compare against the right registry.
+//
+// A git failure is a hard failure, never a silent skip: falling back to the
+// working checkout would quietly restore the unsatisfiable comparison, and
+// falling back to "assume everything is released" would publish unreleased
+// codes. Both are worse than saying so.
+function releasedErrorCodes(sluiceRoot) {
+  const git = (...args) =>
+    execFileSync("git", ["-C", sluiceRoot, ...args], { encoding: "utf8", maxBuffer: 1 << 26 });
+  const tag = git("describe", "--tags", "--abbrev=0").trim();
+  if (!tag) throw new Error("git describe returned no tag");
+  const src = git("show", tag + ":internal/sluicecode/sluicecode.go");
+  const codes = new Set((src.match(/Code = "(SLUICE-E-[A-Z0-9-]+)"/g) || []).map((m) => m.slice(8, -1)));
+  if (codes.size === 0) throw new Error("no SLUICE-E-* constants found in " + tag + ":internal/sluicecode/sluicecode.go");
+  return { tag, codes };
 }
 
 function driftCheck() {
@@ -10945,30 +11224,81 @@ function driftCheck() {
     return;
   }
 
-  // (d) CLI flags: every flag the binary accepts vs the published command
-  // reference. Runs FIRST so it reports even while (a) is red for unrelated
-  // reasons — a check masked by a neighbour failure is a check nobody sees.
-  cliFlagDrift(join(sluiceRoot, "docs", "dev", "cli-flags.txt"));
+  // Every sub-check appends here and the build exits ONCE, at the end.
+  //
+  // It used to exit on the first failure, which meant (b), (c) and (d) never
+  // ran while (a) was red — and (a) was red for months, so the row-TEXT check
+  // that would have caught two stale rows never got to speak. A check that only
+  // runs when its neighbours are green is a check nobody sees. (This is why (d)
+  // was hoisted to the front in 1308904; hoisting fixes one check's visibility,
+  // accumulating fixes all of them.)
+  const failures = [];
+  const notices = [];
 
-  // (a) error-code rows vs the registered code constants.
-  const registered = (readFileSync(registryPath, "utf8").match(/Code = "SLUICE-E-/g) || []).length;
-  const siteRows = (ERROR_CODE_ROWS.match(/<tr><td><code>SLUICE-E-/g) || []).length;
-  if (registered !== siteRows) {
-    console.error(
-      `drift check FAILED: sluice registers ${registered} SLUICE-E-* codes (internal/sluicecode/sluicecode.go) ` +
-      `but the site's error-codes table has ${siteRows} rows — port the missing rows from docs/operator/error-codes.md`
+  // (d) CLI flags: every flag the binary accepts vs the published command
+  // reference, both page-wide and per-command.
+  failures.push(...cliFlagDrift(join(sluiceRoot, "docs", "dev", "cli-flags.txt")));
+
+  // (a) error-code rows vs the codes a RELEASED sluice registers.
+  let released;
+  try {
+    released = releasedErrorCodes(sluiceRoot);
+  } catch (err) {
+    failures.push(
+      "cannot read the released error-code registry from " + sluiceRoot + ": " + err.message + LF +
+      "The row check compares against the latest release TAG, not the working checkout, because `main` " +
+      "carries codes no shipped binary emits. Without git there is no honest set to compare against, so " +
+      "this fails rather than silently comparing against the wrong one."
     );
-    process.exit(1);
   }
 
-  // (b) each row's text vs the in-repo table it mirrors. Counting rows cannot
-  // see a row whose Meaning/Remedy was reworded in-repo after it was ported.
-  const errorCodesMd = join(sluiceRoot, "docs", "operator", "error-codes.md");
   let comparedRows = 0;
-  if (existsSync(errorCodesMd)) {
-    comparedRows = errorCodeTextDrift(errorCodesMd);
-  } else {
-    console.log("drift check: no docs/operator/error-codes.md at " + errorCodesMd + " — row-text comparison skipped");
+  const errorCodesMd = join(sluiceRoot, "docs", "operator", "error-codes.md");
+  if (released) {
+    const working = new Set((readFileSync(registryPath, "utf8").match(/Code = "(SLUICE-E-[A-Z0-9-]+)"/g) || []).map((m) => m.slice(8, -1)));
+    const { site } = parseSiteErrorCodeRows();
+    const unreleased = [...working].filter((c) => !released.codes.has(c)).sort();
+    const missing = [...released.codes].filter((c) => !site.has(c)).sort();
+    const unknown = [...site.keys()].filter((c) => !working.has(c)).sort();
+    const premature = [...site.keys()].filter((c) => !released.codes.has(c) && working.has(c)).sort();
+
+    if (missing.length) {
+      failures.push(
+        missing.length + " error code(s) shipped in " + released.tag + " have no row in the site's table:" +
+        LF + "  " + missing.join(LF + "  ") +
+        LF + "Port each from docs/operator/error-codes.md (the authoritative text — sluicecode_test.go pins it " +
+        "to the constants in both directions)."
+      );
+    }
+    if (premature.length) {
+      failures.push(
+        premature.length + " error code(s) on the site are registered on main but NOT in " + released.tag +
+        " — no shipped sluice emits them:" + LF + "  " + premature.join(LF + "  ") +
+        LF + "Remove the row until the release that ships it is tagged."
+      );
+    }
+    if (unknown.length) {
+      failures.push(
+        unknown.length + " error code(s) on the site are not in the registry at all:" +
+        LF + "  " + unknown.join(LF + "  ")
+      );
+    }
+    if (unreleased.length) {
+      notices.push(
+        unreleased.length + " code(s) registered on main and deliberately WITHHELD from the site until they " +
+        "ship (" + released.tag + " is the latest tag): " + unreleased.join(", ")
+      );
+    }
+
+    // (b) each row's text vs the in-repo table it mirrors. Counting rows cannot
+    // see a row whose Meaning/Remedy was reworded in-repo after it was ported.
+    if (existsSync(errorCodesMd)) {
+      const r = errorCodeTextDrift(errorCodesMd, released.codes);
+      failures.push(...r.problems);
+      comparedRows = r.comparedRows;
+    } else {
+      notices.push("no docs/operator/error-codes.md at " + errorCodesMd + " — row-text comparison skipped");
+    }
   }
 
   // (c) stated engine count vs engines.Register(...) calls (non-test files).
@@ -10987,15 +11317,23 @@ function driftCheck() {
   };
   walk(join(sluiceRoot, "internal", "engines"));
   if (registerCalls !== ENGINE_COUNT) {
-    console.error(
-      `drift check FAILED: sluice has ${registerCalls} engines.Register(...) calls (internal/engines) ` +
+    failures.push(
+      `sluice has ${registerCalls} engines.Register(...) calls (internal/engines) ` +
       `but the site says ${ENGINE_COUNT} engines — update ENGINE_COUNT and the engines/supported-directions pages`
+    );
+  }
+
+  for (const n of notices) console.log("drift check: " + n);
+  if (failures.length) {
+    console.error(
+      LF + "drift check FAILED — " + failures.length + " problem(s):" + LF + LF +
+      failures.join(LF + LF) + LF
     );
     process.exit(1);
   }
 
   console.log(
-    `drift check OK: ${registered} error codes` +
+    `drift check OK: ${released ? released.codes.size : "?"} error codes released in ${released ? released.tag : "?"}` +
     (comparedRows ? ` (${comparedRows} rows text-compared against docs/operator/error-codes.md)` : " (row text NOT compared)") +
     `, ${registerCalls} engines — site matches the sibling sluice checkout`
   );

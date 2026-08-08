@@ -82,7 +82,9 @@ Flag · Default · Purpose ·
 
 --log-format · text · text or json — one JSON object per line, for Loki / Datadog / CloudWatch ingestion of a long-running sync. (v0.99.31) ·
 
---pprof-listen · off · Bind net/http/pprof at an address to diagnose stalls (e.g. :6060). ·
+--no-progress · off · Force plain structured-log output even at an interactive terminal, disabling the pretty progress view. Set it when sluice's stdout is being captured by a log collector that renders the live view as noise. ·
+
+--pprof-listen · off · Bind net/http/pprof at an address to diagnose stalls (e.g. :6060). Fetch /debug/pprof/goroutine?debug=2 to dump every goroutine's stack — the first move on a silent stall. ·
 
 --mysql-sql-mode · strict · Override sluice's forced strict sql_mode. Pass '' (empty) to migrate legacy MySQL data with zero-dates. ·
 

@@ -90,7 +90,7 @@ Filtered sync requires full row before-images, and refuses loudly without them. 
     ALTER TABLE orders      REPLICA IDENTITY FULL;
     ALTER TABLE order_items REPLICA IDENTITY FULL;
 
-Continuous sync --where works across the whole matrix as of v0.99.282 — the one thing to set is full before-images. Postgres, self-hosted MySQL, and PlanetScale MySQL / Vitess all support continuous filtered sync:
+Continuous sync --where works across the whole matrix as of v0.99.282 — the one thing to set is full before-images. The sources that can run one are Postgres and the whole MySQL family — self-hosted MySQL, MariaDB, and PlanetScale MySQL / Vitess. (A filtered continuous sync needs the source's change stream to deliver full row before-images; the sqlite, d1 and trigger-CDC engines cannot, so they refuse at preflight rather than filter approximately. migrate --where is unaffected and works on every engine that supports migrate.)
 
 - String filters evaluate under the column's real collation. A region = 'EU' filter on a case- or accent-insensitive column (MySQL's default) matches eu, Eu, and accented values exactly as the source would — sluice reproduces the source's own = using the source engine's collation comparator, so the client-side CDC classification can't diverge. Pass --where-strict-collation if you'd rather have the strict byte-exact behavior (refuse any non-byte-exact string comparison). Postgres's deterministic default collation was always fine. A MySQL ENUM filter is collation-aware too — status = 'active' on a case-insensitive ENUM('Active','Inactive') matches the stored 'Active' the way the source's = does, not byte-exact (v0.99.283).
 
