@@ -186,7 +186,7 @@ sluice is a single Go binary. Every command is non-interactive (flags, environme
 ## Source-repo markdown (best for LLMs)
 
 - [README](https://raw.githubusercontent.com/sluicesync/sluice/main/README.md): project overview, quick start, engine list, CLI command table
-- [Architecture](https://raw.githubusercontent.com/sluicesync/sluice/main/docs/architecture.md): the typed IR, engine pattern, orchestrator, capability model
+- [Architecture](https://raw.githubusercontent.com/sluicesync/sluice/main/docs/architecture.md): the typed IR, engine pattern, orchestrator, engine strategy capabilities
 - [Type mapping](https://raw.githubusercontent.com/sluicesync/sluice/main/docs/type-mapping.md): cross-engine type translation policies, extension types, override tokens
 - [Value types](https://raw.githubusercontent.com/sluicesync/sluice/main/docs/value-types.md): the runtime row-value contract (what each IR type holds at copy time)
 - [Cookbook](https://github.com/sluicesync/sluice/tree/main/docs/cookbook): task-shaped recipes (one-shot migrate, zero-downtime cutover, encrypted backup chains, PII redaction)

@@ -82,7 +82,7 @@ Flag · Purpose ·
 
   WAN-fast MySQL CDC apply (ADR-0139/0140). Against a MySQL / PlanetScale-MySQL target, consecutive same-shape INSERTs fold into one multi-row INSERT … ON DUPLICATE KEY UPDATE, UPDATEs apply as that same keyed upsert, and DELETEs coalesce into one DELETE … WHERE pk IN (…) — turning N round trips into one so high-latency / cross-region apply keeps up. A rate-limited INFO line (rows_per_stmt) reports the coalescing ratio so you can see whether it's helping.
 
-  Rich types over continuous CDC. Continuous sync now carries the types that earlier only cold-started: PostgreSQL arrays (int4[], text[], numeric[], …, multi-dimensional preserved), MySQL ENUM and SET, MySQL→PG and PG→PG ENUM, and PostGIS geometry (every subtype/dimension, SRID preserved) — all over the CDC apply path, in both source directions (v0.99.50–v0.99.60). PostGIS geography, arrays of geometry (geometry[]), and arrays of enum (enum[]) remain loudly refused over CDC — no silent loss.
+  Rich types over continuous CDC. Continuous sync now carries the types that earlier only cold-started: PostgreSQL arrays (int4[], text[], numeric[], …, multi-dimensional preserved), MySQL ENUM and SET, MySQL→PG and PG→PG ENUM, and PostGIS geometry (every subtype/dimension, SRID preserved) — all over the CDC apply path, in both source directions (v0.99.50–v0.99.60). Arrays of geometry (geometry[]) and arrays of enum (enum[]) remain loudly refused over CDC — no silent loss. PostGIS geography is not yet carried on the parameter-binding write paths: as of v0.119.0 it also fails loudly there, though with PostgreSQL's own parse error - invalid geometry rather than a named sluice refusal (known and filed in the v0.119.0 notes).
 
 ## migrate
 

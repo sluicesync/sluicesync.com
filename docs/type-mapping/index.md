@@ -10,9 +10,9 @@ The IR type system is a two-tier hierarchy, and the tier decides what happens on
 
 - Core types — integers, decimal, float, boolean, char/varchar/text, binary/blob, date/time/datetime/timestamp, JSON — are the types every relational engine has in some form. Every engine reads and writes them; they are the lingua franca.
 
-- Extension types — ENUM, SET, UUID, arrays, PostGIS geometry, and the Postgres network types (inet/cidr/macaddr) — are types only some engines support natively. Each engine declares which it handles; an engine that lacks one either applies a documented degradation (e.g. Postgres array → MySQL JSON) or refuses loudly. Postgres extension types (hstore, citext, pgvector, PostGIS) are opt-in via --enable-pg-extension EXT and refuse loudly at schema-read if the flag is absent (SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED) — never silently dropped.
+- Extension types — ENUM, SET, UUID, arrays, PostGIS geometry, and the Postgres network types (inet/cidr/macaddr) — are types only some engines support natively. Each engine's own reader/writer type dispatch decides what it handles; an engine that lacks one either applies a documented degradation (e.g. Postgres array → MySQL JSON) or refuses loudly. Postgres extension types (hstore, citext, pgvector, PostGIS) are opt-in via --enable-pg-extension EXT and refuse loudly at schema-read if the flag is absent (SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED) — never silently dropped.
 
-Adding a new engine never amends the core; it declares which extension types it supports and provides the reader/writer code. The orchestrator never asks "are you MySQL?" — it asks "do you support arrays?"
+Adding a new engine never amends the core; it provides the reader/writer code, and its own type dispatch IS the declaration — a missing arm refuses loudly rather than degrading silently. The orchestrator's capability questions are strategy questions (which bulk-load method, which CDC transport, which schema scope). And since v0.119.0 the target engine is asked to dry-run its own column-type emit before any data moves, so an unrenderable column is refused up front — naming the table, column and type — instead of surfacing mid-run from the target's CREATE TABLE.
 
 ## MySQL ↔ Postgres
 
@@ -44,7 +44,7 @@ JSON · jsonb (default) / json · MySQL JSON and PG jsonb both validate + normal
 
 (no MySQL type) · uuid · PG uuid → MySQL CHAR(36) / BINARY(16). ·
 
-JSON (degraded) · T[] (array) · MySQL has no array type: a PG array → MySQL JSON (empty {}→[], NULL element→JSON null, nested preserved). Override array_strategy: concat for simple scalar arrays. Multi-dimensional arrays are pinned per element family — see the field note on the pgx codec that silently flattened numeric[][]. ·
+JSON (degraded) · T[] (array) · MySQL has no array type: a PG array → MySQL JSON (empty {}→[], NULL element→JSON null, nested preserved). No array-specific override exists: to land a column as parseable text instead, force it with --type-override TABLE.COL=text. Multi-dimensional arrays are pinned per element family — see the field note on the pgx codec that silently flattened numeric[][]. ·
 
 VARCHAR(45/30) · inet / cidr / macaddr · PG network types have no MySQL native form: inet/cidr→VARCHAR(45), macaddr→VARCHAR(30) (auto-shaped since v0.7.0; overridable). ·
 
@@ -78,7 +78,7 @@ The default policies cover the common case; override per column in YAML (mapping
 
 - --enable-pg-extension EXT — opt into a Postgres extension type (hstore, citext, vector, PostGIS) so its columns pass through instead of refusing.
 
-- YAML mappings: entries also carry enum_strategy, array_strategy, on_zero_date, and per-column target_type options.
+- YAML mappings: entries take table:, column:, target_type:, and free-form target_type_options: (e.g. binary: true) — the file form of --type-override. Zero-date policy is the process-global --zero-date error|null|epoch flag (per-sync via the sync run fleet config's zero-date key), not a per-column mapping.
 
 Run sluice schema preview first to see the exact target DDL sluice would emit, including every widening/narrowing advisory and any untranslatable-expression refusal — before touching the target.
 
