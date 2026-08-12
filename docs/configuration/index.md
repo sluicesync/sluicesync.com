@@ -47,19 +47,25 @@ precedence over config values. Common keys:
 
     # force target column types (CLI: --type-override)
     mappings:
-      - column: products.attrs
-        type: jsonb
-        binary: true
+      - table: products
+        column: attrs
+        target_type: jsonb
+        target_type_options:
+          binary: true
 
     # replace generated-column bodies verbatim (CLI: --expr-override)
     expression_mappings:
-      - column: orders.total_cents
+      - table: orders
+        column: total_cents
         expression: "(price_cents * qty)"
 
-    # PII redaction (CLI: --redact)
+    # PII redaction (CLI: --redact TABLE.COLUMN=STRATEGY[:options])
     redactions:
-      - rule: users.email=hash:sha256
-      - rule: users.ssn=mask:ssn
+      - table: users.email          # [schema.]table.column
+        strategy: hash
+        algo: sha256
+      - table: users.middle_name
+        strategy: "null"            # quoted; bare null is YAML's null literal
 
     # dictionaries referenced by tokenize:dict / randomize:dict strategies
     dictionaries:

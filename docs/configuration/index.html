@@ -67,19 +67,25 @@ exclude_tables: ["app_audit"]
 
 <span class="c"># force target column types (CLI: --type-override)</span>
 mappings:
-  - column: products.attrs
-    type: jsonb
-    binary: true
+  - table: products
+    column: attrs
+    target_type: jsonb
+    target_type_options:
+      binary: true
 
 <span class="c"># replace generated-column bodies verbatim (CLI: --expr-override)</span>
 expression_mappings:
-  - column: orders.total_cents
+  - table: orders
+    column: total_cents
     expression: "(price_cents * qty)"
 
-<span class="c"># PII redaction (CLI: --redact)</span>
+<span class="c"># PII redaction (CLI: --redact TABLE.COLUMN=STRATEGY[:options])</span>
 redactions:
-  - rule: users.email=hash:sha256
-  - rule: users.ssn=mask:ssn
+  - table: users.email          # [schema.]table.column
+    strategy: hash
+    algo: sha256
+  - table: users.middle_name
+    strategy: "null"            # quoted; bare null is YAML's null literal
 
 <span class="c"># dictionaries referenced by tokenize:dict / randomize:dict strategies</span>
 dictionaries:
