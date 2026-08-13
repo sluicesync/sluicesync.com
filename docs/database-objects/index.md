@@ -52,6 +52,8 @@ Object · Kind · Why ·
 
 sluice_change_log + sluice_change_log_meta · tables (+ indexes) · Append-only captured-change log (txid, op, PK + before/after JSONB) and a singleton schema-version pin. ·
 
+sluice_change_log_consumers · table · Per-stream applied-frontier registry (roadmap item 115) — every sync records how far it has consumed the shared change log, so the auto-prune / trigger prune cut is taken at the minimum across registered consumers. ·
+
 sluice_capture_change(), sluice_capture_truncate_fn(), sluice_capture_ddl() · functions · Row-capture (payload mode set by --capture-payload), TRUNCATE companion, and the DDL event-trigger handler. ·
 
 sluice_capture, sluice_capture_truncate (per table); sluice_capture_ddl_trg · triggers · One combined AFTER INSERT/UPDATE/DELETE trigger and a TRUNCATE trigger per table, plus one cluster DDL event trigger. ·
@@ -61,6 +63,8 @@ sluice_capture, sluice_capture_truncate (per table); sluice_capture_ddl_trg · t
 Object · Kind · Why ·
 
 sluice_change_log + sluice_change_log_meta · tables · Captured-change log with a monotonic id watermark, and a schema-version pin. ·
+
+sluice_change_log_consumers · table · Per-stream applied-frontier registry (roadmap item 115) — every sync records how far it has consumed the shared change log, so the auto-prune / trigger prune cut is taken at the minimum across registered consumers and no stream is ever starved of its resume window. ·
 
 sluice_change_log_columns · table · Captured-column fingerprint — since SQLite/D1 have no DDL triggers, a source ALTER is caught here and sync start refuses loudly rather than dropping a new column silently. ·
 
