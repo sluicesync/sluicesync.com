@@ -117,7 +117,7 @@ Threshold · Fires when… ·
 
 --notify-storage-util / --notify-cpu-util / --notify-mem-util · Target utilisation (0–1 fraction) is at or above the given level. Requires PlanetScale telemetry. ·
 
---notify-storage-growth-per-min · Storage is climbing at or above N fraction-of-capacity per minute — a pre-grow early warning. Requires telemetry. ·
+--notify-storage-growth-per-min · Storage is climbing at or above N fraction-of-capacity per minute — a pre-grow early warning. A value outside 0–1 refuses at start (since v0.124.0, same as the util fractions). Requires telemetry. ·
 
 notify-dead-tuple-ratio / notify-xid-age · Postgres-target autovacuum advisories (v0.99.288): the worst user table's dead-tuple ratio, and the database's age(datfrozenxid) wraparound headroom. Ungated — probed from the target's own catalog; Postgres targets only. ·
 

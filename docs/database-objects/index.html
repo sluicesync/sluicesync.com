@@ -63,6 +63,7 @@
 <h3 id="pgtrigger">Postgres trigger engine (<code>postgres-trigger</code>, ADR-0066) <a class="hlink" href="#pgtrigger" aria-label="Permalink to this section">#</a></h3>
 <div class="table-scroll"><table><thead><tr><th>Object</th><th>Kind</th><th>Why</th></tr></thead><tbody>
 <tr><td><code>sluice_change_log</code> + <code>sluice_change_log_meta</code></td><td class="desc">tables (+ indexes)</td><td class="desc">Append-only captured-change log (txid, op, PK + before/after JSONB) and a singleton schema-version pin.</td></tr>
+<tr><td><code>sluice_change_log_consumers</code></td><td class="desc">table</td><td class="desc">Per-stream applied-frontier registry (roadmap item 115) — every sync records how far it has consumed the shared change log, so the auto-prune / <code>trigger prune</code> cut is taken at the <em>minimum</em> across registered consumers.</td></tr>
 <tr><td><code>sluice_capture_change()</code>, <code>sluice_capture_truncate_fn()</code>, <code>sluice_capture_ddl()</code></td><td class="desc">functions</td><td class="desc">Row-capture (payload mode set by <code>--capture-payload</code>), TRUNCATE companion, and the DDL event-trigger handler.</td></tr>
 <tr><td><code>sluice_capture</code>, <code>sluice_capture_truncate</code> (per table); <code>sluice_capture_ddl_trg</code></td><td class="desc">triggers</td><td class="desc">One combined <code>AFTER INSERT/UPDATE/DELETE</code> trigger and a TRUNCATE trigger per table, plus one cluster DDL event trigger.</td></tr>
 </tbody></table></div>
@@ -70,6 +71,7 @@
 <h3 id="sqlitetrigger">SQLite / Cloudflare-D1 trigger engines (<code>sqlite-trigger</code> / <code>d1-trigger</code>, ADR-0135/0136) <a class="hlink" href="#sqlitetrigger" aria-label="Permalink to this section">#</a></h3>
 <div class="table-scroll"><table><thead><tr><th>Object</th><th>Kind</th><th>Why</th></tr></thead><tbody>
 <tr><td><code>sluice_change_log</code> + <code>sluice_change_log_meta</code></td><td class="desc">tables</td><td class="desc">Captured-change log with a monotonic <code>id</code> watermark, and a schema-version pin.</td></tr>
+<tr><td><code>sluice_change_log_consumers</code></td><td class="desc">table</td><td class="desc">Per-stream applied-frontier registry (roadmap item 115) — every sync records how far it has consumed the shared change log, so the auto-prune / <code>trigger prune</code> cut is taken at the <em>minimum</em> across registered consumers and no stream is ever starved of its resume window.</td></tr>
 <tr><td><code>sluice_change_log_columns</code></td><td class="desc">table</td><td class="desc">Captured-column fingerprint — since SQLite/D1 have no DDL triggers, a source <code>ALTER</code> is caught here and <code>sync start</code> refuses loudly rather than dropping a new column silently.</td></tr>
 <tr><td><code>sluice_capture_&lt;table&gt;_&lt;ins|upd|del&gt;</code></td><td class="desc">triggers</td><td class="desc">Three per table (SQLite has no combined-event trigger form), each writing into the change-log.</td></tr>
 </tbody></table></div>

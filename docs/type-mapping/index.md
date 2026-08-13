@@ -48,7 +48,7 @@ JSON (degraded) · T[] (array) · MySQL has no array type: a PG array → MySQL 
 
 VARCHAR(45/30) · inet / cidr / macaddr · PG network types have no MySQL native form: inet/cidr→VARCHAR(45), macaddr→VARCHAR(30) (auto-shaped since v0.7.0; overridable). ·
 
-spatial types · geometry (PostGIS) · Requires PostGIS on the target via --enable-pg-extension; carried as WKB. Every subtype/SRID preserved. ·
+spatial types · geometry (PostGIS) · Requires PostGIS on the target via --enable-pg-extension; carried as WKB. Every subtype/SRID preserved. Toward MySQL: a Z/M-dimensional column refuses at preflight since v0.124.0 (MySQL 8 has no Z/M geometry — previously the copy aborted mid-run on the server's raw 1416), a 2D geography lands as planar geometry (bytes + SRID exact) with the geodesic→planar flatten surfaced as a schema preview note, and a value with NaN/Inf coordinates (incl. POINT EMPTY) refuses with SLUICE-E-VALUE-UNREPRESENTABLE. ·
 
 ## SQLite & Cloudflare D1
 
