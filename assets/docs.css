@@ -113,3 +113,15 @@ main.content h2,main.content h3{scroll-margin-top:72px}
 a.hlink{opacity:0;margin-left:.35em;color:var(--muted);font-weight:400;text-decoration:none}
 main.content h2:hover a.hlink,main.content h3:hover a.hlink,a.hlink:focus{opacity:1}
 a.hlink:hover{text-decoration:underline}
+
+/* Field-note depth marks + flagship star (build.mjs fnDepth/star).
+   Depth is a reading-commitment hint (quick note / field note / deep
+   dive), never a quality ranking; the star is the sparing flagship
+   marker. Sidebar shows glyphs only; the listing shows the labeled pill. */
+.fn-depth{font-size:11px;font-weight:700;color:#a8b3b9;letter-spacing:1px}
+.fn-star{font-size:11px;color:var(--orange-dk)}
+.sidebar a .fn-depth,.sidebar a .fn-star{font-size:10px;margin-left:5px}
+.sidebar a.active .fn-depth{color:var(--orange-dk)}
+.fn-badge{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7a82;background:#eef2f4;border-radius:5px;padding:2px 7px;white-space:nowrap}
+.fn-badge-deep{color:#354a56;background:#e2ebf0}
+.fn-badge-quick{color:#8a969c;background:#f3f5f6}
