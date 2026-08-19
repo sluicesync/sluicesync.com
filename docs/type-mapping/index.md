@@ -22,7 +22,7 @@ MariaDB reads and writes through this same MySQL mapping. As a MySQL-family flav
 
 MySQL · Postgres · Notes ·
 
-TINYINT(1) · boolean · The MySQL boolean convention. A value outside {0,1} collapses to true; sluice WARNs loudly once per column and names the row. Override with --type-override col=smallint to keep the integer (smallint is the safe floor — a tinyint override could round-trip back to a boolean). ·
+TINYINT(1) · boolean · The MySQL boolean convention. A value outside {0,1} would collapse to true, so sluice REFUSES loudly (SLUICE-E-VALUE-TINYINT1-RANGE) at the first such value — a fail-fast preflight catches it before the copy — rather than silently carrying it. Remedy: change the source column type away from TINYINT(1) (e.g. MODIFY … SMALLINT), which works on every source; or, for a non-Vitess MySQL bulk migrate, --type-override col=smallint to keep the integer (smallint is the safe floor — a tinyint override could round-trip back to a boolean). The override does not apply on a PlanetScale/Vitess source, whose type comes from the replication wire. ·
 
 TINYINT / SMALLINT / MEDIUMINT / INT / BIGINT · smallint / smallint / integer / integer / bigint · MEDIUMINT widens to integer on PG (no 3-byte int). Signed ranks map straight across. ·
 
