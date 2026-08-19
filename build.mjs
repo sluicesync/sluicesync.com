@@ -286,6 +286,8 @@ const FIELD_NOTES = [
   { slug: "goaway-said-reconnect", date: "2026-07-26", engine: "MySQL & Vitess", label: "The transport said “please reconnect”; the driver reported “your request is malformed”", dek: "HTTP/2's polite drain &mdash; <code>GOAWAY</code> with <code>ErrCode=NO_ERROR</code> &mdash; arrives through gRPC as <code>codes.InvalidArgument</code>, because the code describes the envelope-parse failure rather than your request. A classifier that correctly treats <code>InvalidArgument</code> as terminal therefore kills an unattended stream on routine platform maintenance." },
   { slug: "alerts-that-could-never-fire", date: "2026-07-26", engine: "Postgres", label: "Three alerts that could never fire, and nobody noticed because no wrong number was ever reported", dek: "A per-pod metric fan where Postgres carries only <code>planetscale_role</code> &mdash; no <code>tablet_type</code>, no <code>container</code> &mdash; so the selection cascade honestly refused, and a storage alert sat permanently inert. Replica lag was worse: <em>neither</em> engine emits a primary series, because a primary has no lag." },
   { slug: "free-usage-is-invisible", date: "2026-07-26", engine: "Cross-cutting", label: "Your usage is invisible in the API for exactly as long as it's free", dek: "The billing API omits every <code>$0.00</code> line item, so a metered-but-unbilled resource returns nothing &mdash; and the metrics endpoint's per-pod counters rotate away underneath you, where the textbook <code>increase()</code> rule reads routine backend skew as counter resets and over-counts by 2.2&times;." },
+  { slug: "scan-once-walls-you", date: "2026-08-19", engine: "MySQL & Vitess", label: "The scan-once index build that walls you, and the resume that re-issues it forever", dek: "Collapsing a table's index builds into one <code>ALTER</code> so InnoDB scans once is a real win &mdash; until a per-statement time limit. On PlanetScale a 12.8&nbsp;GB table's four-index <code>ALTER</code> hit the ~900&nbsp;s wall at 900,004&nbsp;ms, and <code>--resume</code> re-issued the identical statement, so the build could never converge. The very property that makes the optimization efficient &mdash; one big statement &mdash; is what the wall kills; the fix splits it into one <code>ALTER</code> per index." },
+  { slug: "stats-lag-the-bulk-load", date: "2026-08-19", engine: "MySQL & Vitess", label: "A freshly copied table reports 16 KB, so the size gate sizes itself out", dek: "Right after a bulk <code>COPY</code>, a 36&nbsp;MB PlanetScale table reported <code>DATA_LENGTH = 16384</code> (16&nbsp;KB) and <code>TABLE_ROWS = 5,925</code> &mdash; the catalog statistics hadn't caught up. A size gate keyed off the just-copied target read three orders of magnitude low and never fired, so the safeguard was absent on exactly the platform it protects. Nothing errored; the threshold just never tripped. Size off the long-lived source, not the freshly-loaded target." },
 ];
 
 // Newest-first, indexed by full "field-notes/<slug>".
@@ -10667,6 +10669,87 @@ d1cdc-pg         0.075 MB/h    0.168  (2.24×)         0.082  (1.09×)`)}</code>
 <ul>
   <li>Prometheus &mdash; <a href="https://prometheus.io/docs/concepts/metric_types/#counter">counter semantics</a> and <a href="https://prometheus.io/docs/prometheus/latest/querying/functions/#increase">increase()</a>, including its reset handling.</li>
   <li>PlanetScale <a href="https://planetscale.com/docs/api/reference/get_invoice_line_items">invoice line items API</a> (requires the <code>read_invoices</code> scope) and the <a href="https://planetscale.com/pricing">pricing dimensions</a> that list egress for Postgres.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: the scan-once index build that walls you ---------------
+write(
+  "field-notes/scan-once-walls-you",
+  page({
+    slug: "field-notes/scan-once-walls-you",
+    title: "The scan-once optimization that walls you",
+    subtitle:
+      "Collapsing a table's index builds into one ALTER so InnoDB scans once is a real win — until a per-statement time limit. On PlanetScale a 12.8 GB table's four-index ALTER hit the ~900 s wall at 900,004 ms, and --resume re-issued the identical statement, so the build could never converge. The very property that makes the optimization efficient — one big statement — is what the wall kills.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; a real 30&nbsp;GB PlanetScale us-east-1 &rarr; us-east-2 region move (7&ndash;8 hours, 4&ndash;5 restarts). Fixed in sluice v0.129.0 (ADR-0184); the combined-<code>ALTER</code> it conditionally splits is ADR-0080.</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>sluice builds a table's secondary indexes in a deferred post-copy phase, and &mdash; following a standard MySQL optimization &mdash; emits the <em>minimum</em> set of statements: all of a table's combinable indexes collapse into one <code>ALTER TABLE t ADD UNIQUE KEY &hellip;, ADD KEY &hellip;, ADD KEY &hellip;</code> so InnoDB scans and rebuilds the table once instead of once per index. On an ordinary table that is a real, measured win.</p>
+<p>On a large table on PlanetScale it was the opposite. The 12.8&nbsp;GB <code>audio_plays_daily</code> table's four-index combined <code>ALTER</code> ran for exactly 900,004&nbsp;milliseconds and was killed by the platform's statement-time limit (errno 3024) &mdash; four milliseconds over the ~900&nbsp;s ceiling. And because <code>--resume</code> re-issued the <em>same</em> combined statement, every restart hit the same wall at the same place. The build could not converge; the operator restarted from scratch, re-copying 30&nbsp;GB each time. That non-convergence was much of a 7&ndash;8 hour, 4&ndash;5 restart ordeal.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>Two facts combined into a trap. First, the &ldquo;scan once&rdquo; optimization concentrates all of the work into a <em>single statement</em>, and a single statement is precisely the unit the wall measures. The very property that makes the combined <code>ALTER</code> efficient &mdash; one big statement instead of several &mdash; is what makes it un-survivable under a per-statement time limit: you cannot get under the wall by being efficient <em>inside</em> one statement; you have to have <em>fewer things in</em> the statement.</p>
+<p>Second, a resume that re-issues the identical failing statement is non-convergent by construction. sluice's resume already skips indexes that are already present &mdash; but the combined <code>ALTER</code> is one atomic statement that builds all four indexes or none, so after it is killed, zero indexes are present, and resume re-issues all four again. There is no state in which it makes progress.</p>
+
+<h2 id="fix">What sluice does about it</h2>
+<p>On a statement-time-limited target (the PlanetScale/Vitess flavor) and a table large enough to risk the wall, sluice now splits the deferred build into <strong>one <code>ALTER</code> per index</strong> instead of the combined form. Measured locally on an 8.4M-row table in the same shape: the combined build's longest statement was 220&nbsp;s; per-index, the longest was 64&nbsp;s, at the same 191&nbsp;s total when the table fit in the buffer pool (roughly <code>1/N</code> per statement, no total-time penalty; a table that doesn't fit in memory pays extra scans &mdash; the correct trade when the alternative is a hard failure). Each per-index <code>ALTER</code> stays well under the wall.</p>
+<p>And because each index is now its own statement, resume works: the indexes that landed before the failure are present, resume skips them, and it finishes only the ones still missing instead of re-hitting a monolith. Every other target, and every ordinary table, keeps the combined <code>ALTER</code> unchanged &mdash; its single-scan win is real where the wall doesn't apply.</p>
+<p>One elegant alternative didn't survive contact with the schema. Building each partition's shard separately and swapping them in with <code>EXCHANGE PARTITION &hellip; WITHOUT VALIDATION</code> recombines in 0.6&nbsp;s, metadata-only &mdash; but MySQL requires <em>every</em> unique key to contain the partition column, which a table with a surrogate <code>id</code> primary key and an independent business <code>UNIQUE(date, seller_id, pack_id, sample_id)</code> cannot satisfy (ERROR 1503). And <code>WITHOUT VALIDATION</code> silently misplaces any out-of-range row &mdash; our own experiment lost ~458,000 high-<code>id</code> rows to a fixed-range assumption. The per-index split gets most of the benefit with none of those constraints.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Under a per-statement time limit, a scan-minimizing &ldquo;do it all in one statement&rdquo; optimization is a liability, not a win. The efficiency you gained by consolidating work into one statement is invisible to a wall that only sees the statement &mdash; and a resume that re-issues the failing statement can never converge. When a platform caps statement time, the unit of progress has to be smaller than the cap, and the resume has to advance one small statement at a time.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice ADR-0184 &mdash; per-index <code>ALTER</code> splitting for large index builds on a statement-time-limited target: the experiment table, the 900,004&nbsp;ms measurement, and the <code>EXCHANGE PARTITION</code> alternative.</li>
+  <li>sluice ADR-0080 &mdash; the combined-<code>ALTER</code> single-table-scan optimization this conditionally splits.</li>
+  <li>PlanetScale &mdash; <a href="https://planetscale.com/docs/reference/planetscale-system-limits">system limits</a>: the ~900&nbsp;s statement-execution timeout that surfaces as errno 3024.</li>
+  <li>Companion note: <a href="/field-notes/stats-lag-the-bulk-load/">The catalog stats that lag your bulk load</a> &mdash; the size gate that decides when this split engages, and how it first read the wrong stats.</li>
+</ul>
+`,
+  })
+);
+
+// ---- Field Notes: catalog stats lag the bulk load ------------------------
+write(
+  "field-notes/stats-lag-the-bulk-load",
+  page({
+    slug: "field-notes/stats-lag-the-bulk-load",
+    title: "The catalog stats that lag your bulk load",
+    subtitle:
+      "Right after a bulk COPY, a 36 MB PlanetScale table reported DATA_LENGTH = 16384 (16 KB) and TABLE_ROWS = 5,925 — the catalog statistics hadn't caught up. A size gate keyed off the just-copied target read three orders of magnitude low and never fired, so the safeguard was absent on exactly the platform it protects. Nothing errored; the threshold just never tripped.",
+    body: `
+<p class="fn-meta"><strong>Observed</strong> &mdash; bulk migrate into PlanetScale (Vitess) MySQL, reading the freshly-copied target's own <code>information_schema</code>. The gate this defeated is sluice's ADR-0184 per-index index-split; the fix moved its sizing to the source (fixed v0.129.0).</p>
+
+<h2 id="what-happened">What happened</h2>
+<p>sluice defers a large table's secondary-index build to a post-copy phase, and on PlanetScale it splits that build into one <code>ALTER</code> per index once the table is big enough to risk the platform's statement-time wall (see the <a href="/field-notes/scan-once-walls-you/">companion note</a>). &ldquo;Big enough&rdquo; was a threshold on the table's <code>DATA_LENGTH</code>, read from <code>information_schema.tables</code> right after the bulk copy finished.</p>
+<p>On a real PlanetScale branch the split never engaged. The table it should have protected was 36&nbsp;MB with 524,000 rows &mdash; comfortably into the range the split exists for &mdash; yet the gate read its size as 16&nbsp;KB and its row count as 5,925, and concluded it was small. The optimization was inert on the one platform whose wall it was built to dodge. Every local test had passed, because local MySQL doesn't behave this way.</p>
+
+<h2 id="why">Why (the mechanism)</h2>
+<p>The numbers the gate trusted were stale. A managed, replicated MySQL like Vitess/PlanetScale does not populate a table's <code>information_schema</code> statistics synchronously with a bulk load: immediately after the <code>COPY</code> that filled it, the catalog still reported near-initial values &mdash; <code>DATA_LENGTH</code> off by three orders of magnitude, <code>TABLE_ROWS</code> off by two. The statistics converge later, on the engine's own schedule; the window right after a load is exactly when they are least trustworthy, and exactly when a post-copy phase wants to read them.</p>
+<p>The precise server-side cause &mdash; InnoDB persistent-stats sampling not yet run, versus a Vitess catalog layer that hadn't refreshed &mdash; we did not isolate. The finding is the black-box measurement: 36&nbsp;MB reads back as 16&nbsp;KB.</p>
+<p>Local MySQL updates these stats promptly, which is why the whole thing was invisible in testing. Every unit test and the local scale experiment sized their gate off a table whose stats were fresh, so the gate tripped correctly and the tests were green &mdash; while the same gate, on the same code, was dead on the real platform.</p>
+
+<h2 id="repro">The repro</h2>
+<p>Bulk-load a table into a PlanetScale (or self-hosted Vitess) keyspace and, immediately after the copy completes, read it back:</p>
+<pre><code>${esc(`SELECT DATA_LENGTH, TABLE_ROWS
+FROM information_schema.tables
+WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?;`)}</code></pre>
+<p>The values sit far below the real size until the engine's statistics catch up. On local MySQL the same query returns the true size at once &mdash; which is the trap: the behavior you test against is not the behavior you ship onto.</p>
+
+<h2 id="fix">What sluice does about it</h2>
+<p>The gate now sizes off the long-lived <strong>source</strong> table, not the freshly-copied target. A source table that has existed for a while has accurate statistics, because it wasn't just written; only the target is stale right after a copy. The threshold, the byte semantics, and the flavor gate are all unchanged &mdash; only the <em>data source</em> moved, from the stale target to the accurate source. An anti-regression pin now drives the exact PlanetScale shape (source large while the target reports the stale 16&nbsp;KB) and asserts the split still engages, plus the converse, so a change that re-couples the decision to the target's post-copy stats fails the build.</p>
+
+<h2 id="lesson">The transferable lesson</h2>
+<p>Do not make a decision from a freshly-loaded table's own catalog statistics on a managed or replicated engine. The stats a table reports about itself right after a bulk load are stale, sometimes by orders of magnitude, and any threshold keyed off them silently doesn't trip &mdash; the worst failure shape, because nothing is wrong with a <em>value</em> in a <em>row</em>: the safeguard simply never runs, and it never runs precisely where you needed it. Size off the long-lived source instead, or run an explicit <code>ANALYZE TABLE</code> first and pay its cost. What you cannot do is trust a just-copied table to tell you how big it is.</p>
+
+<h2 id="sources">Primary sources</h2>
+<ul>
+  <li>sluice ADR-0184 &mdash; per-index <code>ALTER</code> splitting for large index builds; the &ldquo;PlanetScale leg&rdquo; amendment records the 16&nbsp;KB / 36&nbsp;MB measurement and the source-sizing fix.</li>
+  <li>MySQL reference &mdash; <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-persistent-stats.html">InnoDB persistent statistics</a>: <code>information_schema.tables</code> cardinality and size are estimates the engine maintains lazily.</li>
+  <li>Companion note: <a href="/field-notes/scan-once-walls-you/">The scan-once optimization that walls you</a> &mdash; why the gate this defeated exists at all.</li>
 </ul>
 `,
   })
