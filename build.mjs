@@ -782,7 +782,7 @@ configuration page: <code>--config</code>/<code>-c</code> and <code>--log-level<
 the legacy-MySQL controls <code>--mysql-sql-mode</code> and <code>--zero-date</code>;
 the SQLite/D1 <code>--sqlite-date-encoding</code>;
 the flat-file declarations <code>--csv-header</code> / <code>--csv-no-header</code> / <code>--csv-null</code> / <code>--csv-delimiter</code>;
-and <code>--version</code>/<code>-V</code>.</p>
+<code>--version</code>/<code>-V</code>; and <code>--skill</code> (print an installable agent skill file and exit &mdash; see <a href="#agent-guide">agent-guide</a> below).</p>
 
 <div class="note"><strong>Parallelism flags mean different things per command.</strong> The same flag name maps to a different axis depending on the verb — read this row before tuning.
 <table><thead><tr><th>Flag</th><th>What it controls</th></tr></thead><tbody>
@@ -824,6 +824,16 @@ ${cmd(
   Plain mysqldump / pg_dump <code>.sql</code> dumps and <code>pg_dump -Fc</code> archives are deliberately <strong>not parsed</strong> by any driver — they refuse with <code>SLUICE-E-SOURCE-FOREIGN-DUMP</code> and the message carries the exact scratch-server-replay recipe; a recognisable format handed to the wrong driver (a mydumper directory to <code>csv</code>, a <code>.tsv</code> through the comma lexer, a gzip'd or UTF-16 file) refuses with <code>SLUICE-E-SOURCE-WRONG-DRIVER</code> naming the right driver or preparation step.</div>
   <div class="note"><strong>WAN-fast MySQL CDC apply (ADR-0139/0140).</strong> Against a MySQL / PlanetScale-MySQL target, consecutive same-shape INSERTs fold into one multi-row <code>INSERT … ON DUPLICATE KEY UPDATE</code>, UPDATEs apply as that same keyed upsert, and DELETEs coalesce into one <code>DELETE … WHERE pk IN (…)</code> — turning N round trips into one so high-latency / cross-region apply keeps up. A rate-limited INFO line (<code>rows_per_stmt</code>) reports the coalescing ratio so you can see whether it's helping.</div>
   <div class="note"><strong>Rich types over continuous CDC.</strong> Continuous sync now carries the types that earlier only cold-started: PostgreSQL arrays (<code>int4[]</code>, <code>text[]</code>, <code>numeric[]</code>, …, multi-dimensional preserved), MySQL <code>ENUM</code> and <code>SET</code>, MySQL→PG and PG→PG <code>ENUM</code>, and PostGIS <code>geometry</code> (every subtype/dimension, SRID preserved) — all over the CDC apply path, in both source directions (v0.99.50–v0.99.60). Arrays of geometry (<code>geometry[]</code>) and arrays of enum (<code>enum[]</code>) remain <strong>loudly refused</strong> over CDC — no silent loss. PostGIS <code>geography</code> is carried first-class since v0.120.0 — registered on both spatial type OIDs across every write path, byte-exact with the SRID held by the per-row guard; toward a MySQL-family target a 2D geography lands as planar geometry (bytes + SRID exact) with the geodesic→planar semantic flatten surfaced as a <code>schema preview</code> note since v0.124.0, and Z/M-dimensional spatial columns toward MySQL refuse at preflight (MySQL 8 has no Z/M geometry).</div>`
+)}
+
+<h2 id="agent-guide">agent-guide</h2>
+${cmd(
+  "agent-guide",
+  "sluice agent-guide",
+  "Print sluice's AI-agent operating guide (the embedded <code>AGENTS.md</code>) &mdash; the command taxonomy (read-only vs state-changing vs production-mutating vs destructive), the standard workflow, and the flags that require explicit human approval. Built for driving sluice from an agent with no repo or docs-site access.",
+  `${pre(`sluice agent-guide                  # the bare guide
+sluice --skill > sluice.skill.md    # an installable agent skill file`)}
+  <p><code>sluice --skill</code> (a global flag) and <code>sluice agent-guide --skill</code> emit the guide as an installable <strong>agent skill file</strong>: YAML frontmatter (<code>name</code> + <code>description</code>, for trigger-based loading) followed by the full guide &mdash; write it into a skills directory so a skill-aware assistant cold-starts on how to drive sluice, without the repo or the docs site. See the <a href="/docs/agent-skills/">agent skills guide</a> for the task-scoped playbooks sluice ships alongside it.</p>`
 )}
 
 <h2 id="migrate">migrate</h2>
@@ -1730,6 +1740,7 @@ ${pre(`sluice migrate -c sluice.yaml --source-driver mysql --source ... --target
 <tr><td><code>--stage-dir</code></td><td>system temp</td><td class="desc">Directory for sluice's large scratch files: the csv/tsv/ndjson staged SQLite copy (roughly the source file's size), the D1 <code>--stage-local</code> replica, and the <code>backup export-as-parquet</code> per-table scratch. Override on hosts whose <code>/tmp</code> is a small tmpfs — the ADR-0145 hazard class. The directory must already exist (a missing path is refused loudly). Env: <code>SLUICE_STAGE_DIR</code>. (The sqlite <code>.sql</code>-dump materialize path does not honor it yet.) (v0.99.259)</td></tr>
 <tr><td><code>--max-memory</code></td><td>off</td><td class="desc">Soft ceiling on the Go heap (e.g. <code>2GiB</code>, <code>512MiB</code>), applied via <code>SetMemoryLimit</code> at startup to bound RSS. Unlike <code>--max-buffer-bytes</code> (raw buffered bytes only), this bounds the whole heap. Honors the <code>GOMEMLIMIT</code> env var when unset. (v0.99.10)</td></tr>
 <tr><td><code>--version</code>, <code>-V</code></td><td>—</td><td class="desc">Print version and exit.</td></tr>
+<tr><td><code>--skill</code></td><td>&mdash;</td><td class="desc">Print an installable agent skill file (YAML frontmatter + the <code>AGENTS.md</code> agent guide) and exit &mdash; write it into a skills directory for trigger-based loading. <code>sluice agent-guide</code> prints the bare guide.</td></tr>
 </tbody>
 </table>
 
