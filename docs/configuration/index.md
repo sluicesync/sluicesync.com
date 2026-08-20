@@ -104,6 +104,8 @@ Flag · Default · Purpose ·
 
 --version, -V · — · Print version and exit. ·
 
+--skill · &mdash; · Print an installable agent skill file (YAML frontmatter + the AGENTS.md agent guide) and exit &mdash; write it into a skills directory for trigger-based loading. sluice agent-guide prints the bare guide. ·
+
 Migrating legacy MySQL data? sluice forces a strict sql_mode on every MySQL connection to close the silent-clamp / silent-zero-date class. Data that was only accepted under a relaxed mode (pre-5.7 zero-dates, silently-truncated values) will refuse loudly — pass --mysql-sql-mode='' to fall through to the server default. Zero / partial dates specifically are governed by --zero-date (default error): use --zero-date=null to carry them as NULL or --zero-date=epoch to substitute 1970-01-01 rather than refusing.
 
 ## Source-DSN tuning parameters

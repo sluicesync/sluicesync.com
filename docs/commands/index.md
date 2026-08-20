@@ -15,7 +15,7 @@ configuration page: --config/-c and --log-level/-l;
 the legacy-MySQL controls --mysql-sql-mode and --zero-date;
 the SQLite/D1 --sqlite-date-encoding;
 the flat-file declarations --csv-header / --csv-no-header / --csv-null / --csv-delimiter;
-and --version/-V.
+--version/-V; and --skill (print an installable agent skill file and exit &mdash; see agent-guide below).
 
 Parallelism flags mean different things per command. The same flag name maps to a different axis depending on the verb — read this row before tuning.
 
@@ -83,6 +83,16 @@ Flag · Purpose ·
   WAN-fast MySQL CDC apply (ADR-0139/0140). Against a MySQL / PlanetScale-MySQL target, consecutive same-shape INSERTs fold into one multi-row INSERT … ON DUPLICATE KEY UPDATE, UPDATEs apply as that same keyed upsert, and DELETEs coalesce into one DELETE … WHERE pk IN (…) — turning N round trips into one so high-latency / cross-region apply keeps up. A rate-limited INFO line (rows_per_stmt) reports the coalescing ratio so you can see whether it's helping.
 
   Rich types over continuous CDC. Continuous sync now carries the types that earlier only cold-started: PostgreSQL arrays (int4[], text[], numeric[], …, multi-dimensional preserved), MySQL ENUM and SET, MySQL→PG and PG→PG ENUM, and PostGIS geometry (every subtype/dimension, SRID preserved) — all over the CDC apply path, in both source directions (v0.99.50–v0.99.60). Arrays of geometry (geometry[]) and arrays of enum (enum[]) remain loudly refused over CDC — no silent loss. PostGIS geography is carried first-class since v0.120.0 — registered on both spatial type OIDs across every write path, byte-exact with the SRID held by the per-row guard; toward a MySQL-family target a 2D geography lands as planar geometry (bytes + SRID exact) with the geodesic→planar semantic flatten surfaced as a schema preview note since v0.124.0, and Z/M-dimensional spatial columns toward MySQL refuse at preflight (MySQL 8 has no Z/M geometry).
+
+## agent-guide
+
+### sluice agent-guide
+Print sluice's AI-agent operating guide (the embedded AGENTS.md) &mdash; the command taxonomy (read-only vs state-changing vs production-mutating vs destructive), the standard workflow, and the flags that require explicit human approval. Built for driving sluice from an agent with no repo or docs-site access.
+
+    sluice agent-guide                  # the bare guide
+    sluice --skill > sluice.skill.md    # an installable agent skill file
+
+  sluice --skill (a global flag) and sluice agent-guide --skill emit the guide as an installable agent skill file: YAML frontmatter (name + description, for trigger-based loading) followed by the full guide &mdash; write it into a skills directory so a skill-aware assistant cold-starts on how to drive sluice, without the repo or the docs site. See the agent skills guide for the task-scoped playbooks sluice ships alongside it.
 
 ## migrate
 

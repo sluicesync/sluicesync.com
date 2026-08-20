@@ -110,6 +110,7 @@ dictionaries:
 <tr><td><code>--stage-dir</code></td><td>system temp</td><td class="desc">Directory for sluice's large scratch files: the csv/tsv/ndjson staged SQLite copy (roughly the source file's size), the D1 <code>--stage-local</code> replica, and the <code>backup export-as-parquet</code> per-table scratch. Override on hosts whose <code>/tmp</code> is a small tmpfs — the ADR-0145 hazard class. The directory must already exist (a missing path is refused loudly). Env: <code>SLUICE_STAGE_DIR</code>. (The sqlite <code>.sql</code>-dump materialize path does not honor it yet.) (v0.99.259)</td></tr>
 <tr><td><code>--max-memory</code></td><td>off</td><td class="desc">Soft ceiling on the Go heap (e.g. <code>2GiB</code>, <code>512MiB</code>), applied via <code>SetMemoryLimit</code> at startup to bound RSS. Unlike <code>--max-buffer-bytes</code> (raw buffered bytes only), this bounds the whole heap. Honors the <code>GOMEMLIMIT</code> env var when unset. (v0.99.10)</td></tr>
 <tr><td><code>--version</code>, <code>-V</code></td><td>—</td><td class="desc">Print version and exit.</td></tr>
+<tr><td><code>--skill</code></td><td>&mdash;</td><td class="desc">Print an installable agent skill file (YAML frontmatter + the <code>AGENTS.md</code> agent guide) and exit &mdash; write it into a skills directory for trigger-based loading. <code>sluice agent-guide</code> prints the bare guide.</td></tr>
 </tbody>
 </table></div>
 
