@@ -75,7 +75,7 @@
         {
           "file": "verify-end.png",
           "step": "Clean",
-          "caption": "Tables checked / clean / mismatched / skipped."
+          "caption": "Tables checked / clean / mismatched / unverified."
         }
       ]
     },
