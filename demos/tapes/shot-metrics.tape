@@ -2,6 +2,11 @@
 # The metrics token is passed to VHS via `docker run -e` at capture time, never
 # hardcoded here (the CLI reads PLANETSCALE_METRICS_TOKEN_ID/_TOKEN from env).
 # capture.sh sources those from the machine-local metrics-token file.
+#
+# The watched database is a small THROWAWAY PlanetScale DB spun up just for the
+# capture (a little load is run so the metrics aren't idle) and torn down right
+# after — see demos/scenarios/README.md ("metrics-watch"). When re-shooting,
+# create a fresh DB and update the --planetscale-metrics-db name below.
 Output shot-metrics.gif
 Output shot-metrics.mp4
 Output shot-metrics.webm
@@ -24,7 +29,7 @@ Enter
 Show
 
 Sleep 700ms
-Type "sluice metrics-watch --engine planetscale --planetscale-org sluicesync --planetscale-metrics-db soak-mysql231 --interval 4s"
+Type "sluice metrics-watch --engine planetscale --planetscale-org sluicesync --planetscale-metrics-db fleet-metrics-demo --interval 4s"
 Sleep 300ms
 Enter
 Sleep 15s
