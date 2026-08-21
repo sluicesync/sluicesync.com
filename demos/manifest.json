@@ -195,6 +195,26 @@
       ]
     },
     {
+      "id": "backfill",
+      "command": "backfill",
+      "kind": "duo",
+      "tape": "tapes/shot-backfill.tape",
+      "scenario": "scenarios/backfill.sh",
+      "tagline": "The expand-contract 'migrate' step — a same-database, keyset-chunked, resumable UPDATE that backfills a new column in place, with --verify as the scriptable safe-to-drop-the-old-column gate.",
+      "frames": [
+        {
+          "file": "backfill-mid.png",
+          "step": "Backfilling",
+          "caption": "The per-table bar tracks the keyset walk — rows updated against the estimated match count."
+        },
+        {
+          "file": "backfill-end.png",
+          "step": "Complete",
+          "caption": "Table, rows updated, chunks, verified, and duration."
+        }
+      ]
+    },
+    {
       "id": "cutover",
       "command": "cutover",
       "kind": "single",

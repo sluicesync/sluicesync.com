@@ -138,6 +138,10 @@ copy_frames() {
     shot-matview)
       cp_if shot-matview-s4.png     matview.png
       ;;
+    shot-backfill)
+      cp_if shot-backfill-s4.png    backfill-mid.png
+      cp_if shot-backfill-s6.png    backfill-end.png
+      ;;
     shot-trigger)
       cp_if shot-trigger-s4.png     trigger.png
       ;;

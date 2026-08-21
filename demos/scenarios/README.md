@@ -22,6 +22,7 @@ DSNs are supplied via the named variables in `demo/env.sh` (gitignored; copy fro
 | `shot-restore` | The `/demo/bkup` chain from `shot-backup` present under `demo/bkup`. Target `restoredb` on `pg-dst` (`PG_RESTOREDB`) — `capture.sh` DROP/CREATEs it fresh each run. |
 | `shot-cutover` | MySQL `shop.orders` (`MYSQL_SHOP`) migrated into Postgres `cutdb` on `pg-dst` (`PG_CUTDB`) with sequences to prime. |
 | `shot-matview` | Postgres `migdb` (`PG_MIGDB`) containing at least one materialized view to refresh. |
+| `shot-backfill` | MySQL `shop.catalog_items` (`MYSQL_SHOP`) — run `./scenarios/backfill.sh` first: it (re)seeds 120,000 rows with `price_tier` NULL, the "expand" step already applied by hand. The tape's `sluice backfill` command passes `--restart`, so re-running the scenario script before every capture is enough to make it repeatable (no leftover `sluice_migrate_state` row turns the live run into a no-op). |
 | `shot-trigger` | Postgres `postgres` DB on `pg-src` (`PG_SLOTS`, reused as `PG_DSN`) with a `customers` table; trigger-CDC objects get installed on it. |
 | `shot-slot` / `shot-slot-wide` | Postgres `postgres` DB on `pg-src` (`PG_SLOTS`) with a few logical-replication slots (e.g. `demo_stream_main`, `demo_stream_orders`) so the table has rows. |
 | `shot-health` | Fleet DBs: `fleet_users` on `pg-src` (`PG_FLEET_USERS`) → `fleet_analytics` on `pg-dst` (`PG_FLEET_ANALYTICS`), and a MySQL→PG `orders-to-warehouse` stream to `fleet_warehouse` (`PG_FLEET_WAREHOUSE`), each with recorded stream state so `sync health` has freshness/lag to report. |
