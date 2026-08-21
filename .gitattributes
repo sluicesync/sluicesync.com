@@ -1,0 +1,27 @@
+# sluicesync.com line-ending policy.
+#
+# The whole site is GENERATED: `node build.mjs` (and `demos/build-page.mjs`)
+# writes every docs/*/index.html, docs/*/index.md, field-notes/*, the root
+# landing page, screenshots/index.html, and llms.txt / llms-full.txt with LF
+# line endings. The committed blobs are already uniformly LF. Under a
+# contributor's `core.autocrlf=true`, checkout smudges some of those files to
+# CRLF in the working tree, so the next `node build.mjs` rewrites them back to
+# LF and they surface as phantom, line-ending-only diffs.
+#
+# Pinning the WORKING TREE to LF (eol=lf) makes the generator's output match
+# what git expects on disk, so a rebuild produces no spurious changes. Because
+# the index is already LF, this reconciles the working tree without rewriting
+# any committed content.
+* text=auto eol=lf
+
+# Binary assets — never apply text/eol filtering.
+*.png   binary
+*.gif   binary
+*.ico   binary
+*.mp4   binary
+*.webm  binary
+*.jpg   binary
+*.jpeg  binary
+*.pdf   binary
+*.woff  binary
+*.woff2 binary
