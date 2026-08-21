@@ -101,6 +101,7 @@ const NAV = [
       { slug: "foreign-keys-vitess", label: "Foreign keys on Vitess" },
       { slug: "planetscale-schema-changes", label: "Online schema changes" },
       { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
+      { slug: "planetscale-mysql-to-postgres", label: "PlanetScale MySQL → Postgres" },
       { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
       { slug: "planetscale-postgres-analytics-replica", label: "PlanetScale Postgres analytics replica" },
       { slug: "planetscale-region-move", label: "Move PlanetScale regions" },
@@ -4901,6 +4902,120 @@ sluice verify \\
     next: { href: "/docs/planetscale-postgres-upgrade/", label: "Upgrade PlanetScale Postgres" },
   })
 );
+
+// nav-label: PlanetScale MySQL -> Postgres
+write(
+  "planetscale-mysql-to-postgres",
+  page({
+    slug: "planetscale-mysql-to-postgres",
+    title: "Migrate PlanetScale MySQL to PlanetScale Postgres",
+    subtitle: "PlanetScale now offers managed Postgres alongside its Vitess/MySQL product. Moving between them is a CROSS-ENGINE migration — MySQL to Postgres — so type translation applies; sluice does it zero-downtime or in one shot.",
+    body: `
+<p>PlanetScale ships two products: the original <strong>Vitess/MySQL</strong> platform and, newer, <strong>managed Postgres</strong>. Moving a database from one to the other is not a region move or a version upgrade &mdash; it crosses an <em>engine</em> boundary, MySQL&nbsp;&rarr;&nbsp;Postgres, so sluice's cross-engine <strong>type translation</strong> is doing real work (a MySQL <code>TINYINT(1)</code> becomes a Postgres <code>boolean</code>, <code>ENUM</code> becomes a native PG enum, <code>AUTO_INCREMENT</code> becomes an identity sequence, and so on). Both a zero-downtime <a href="#sync">continuous sync</a> and a one-shot <a href="#migrate">migrate</a> work end to end. The two ends connect very differently &mdash; the source is PlanetScale MySQL (the <code>planetscale</code> driver, VStream CDC), the target is PlanetScale Postgres (the ordinary <code>postgres</code> driver, native <code>COPY</code>) &mdash; so read <a href="#connect">Provision &amp; connect</a> carefully, then pick your flow.</p>
+
+<div class="note"><strong>How this differs from the PlanetScale guides next door.</strong> The <a href="/docs/planetscale-region-move/">region move</a> is MySQL&nbsp;&rarr;&nbsp;MySQL (same engine, no type translation) and the <a href="/docs/planetscale-postgres-upgrade/">Postgres upgrade</a> is Postgres&nbsp;&rarr;&nbsp;Postgres. This one is the cross-engine case, so the <a href="#preview">preview-the-translation</a> step below matters more here than in either of those.</p></div>
+
+<h2 id="before">Before you start</h2>
+<ul>
+  <li><strong>The drivers are different on each end.</strong> The source is <code>--source-driver planetscale</code> (PlanetScale MySQL speaks VStream, and the <code>mysql</code> driver's <code>LOAD DATA</code> cold-copy is blocked by Vitess). The target is <code>--target-driver postgres</code> &mdash; PlanetScale Postgres is <em>managed PostgreSQL</em>, not Vitess, so it is driven by sluice's ordinary Postgres engine, not the <code>planetscale</code> one.</li>
+  <li><strong>Foreign keys are simpler than a MySQL target.</strong> Postgres has native foreign keys, so there is <em>none</em> of the "Allow foreign key constraints" enablement dance a PlanetScale <em>MySQL</em> target needs (<a href="/docs/foreign-keys-vitess/">that guide</a>). Whatever foreign keys your source schema actually declares are emitted on the Postgres target and enforced normally. (PlanetScale MySQL ships with foreign-key support off by default, so many source schemas carry none to begin with &mdash; each column's covering index still comes across regardless.)</li>
+  <li><strong>The Vitess-target tuning does NOT apply.</strong> Because the target is Postgres, not Vitess, you do <em>not</em> need the region-move guide's <code>--apply-batch-size 25&ndash;50</code> clamp (that exists to dodge Vitess's 20-second transaction killer) nor <code>--upfront-indexes</code> / <code>--planetscale-raise-query-timeout</code> (those dodge Vitess's per-statement time limit on a deferred <code>ADD INDEX</code>). A Postgres target builds indexes with an ordinary <code>CREATE INDEX</code> and has no such wall. Leave those flags off.</li>
+  <li><strong>Preview the type translation.</strong> This is the cross-engine step. Run <a href="/docs/preview-and-validate/">schema preview</a> to see the exact Postgres DDL column by column and steer any type you disagree with using <code>--type-override</code> <em>before</em> any data moves &mdash; see <a href="#preview">below</a>.</li>
+</ul>
+
+<h2 id="connect">Provision &amp; connect</h2>
+<p><strong>Source (PlanetScale MySQL).</strong> This is your existing database. Mint a read password and build a standard go-sql-driver DSN &mdash; <code>?tls=true</code> is required. <code>USERNAME</code> is the generated <code>username</code> field <code>pscale password create</code> returns, not the label you pass it:</p>
+${pre(`pscale password create app main mover --role reader   # -> username + plain_text
+
+# SLUICE_SOURCE (CDC read):
+USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app?tls=true`)}
+<p><strong>Target (PlanetScale Postgres).</strong> Create a Postgres database (<code>--engine postgresql</code> selects managed Postgres rather than Vitess) and take the target DSN from a Postgres <strong>role</strong> &mdash; <code>pscale connect</code> is Vitess-only and refuses a Postgres database. Connect as the <strong>Default <code>postgres</code> role</strong> so the tables it creates get a durable owner (a fresh <code>pscale_api_*</code> role is ephemeral, and migrate WARNs when the target tables would land owned by one):</p>
+${pre(`pscale database create app-pg --engine postgresql --region <region> --replicas 0 --wait
+pscale role reset-default app-pg main --format json      # -> database_url
+
+# SLUICE_TARGET (write): that database_url, of the form
+postgresql://<user>:<pass>@<region>.pg.psdb.cloud:5432/postgres?sslmode=verify-full`)}
+<p>Prefer environment variables (<code>SLUICE_SOURCE</code> / <code>SLUICE_TARGET</code>) over putting either DSN in argv, so credentials don't land in your shell history or process list.</p>
+<div class="note"><strong>Keep the target's <code>sslmode=verify-full</code>.</strong> The <code>database_url</code> PlanetScale emits already carries it, and it works out of the box: PlanetScale Postgres presents a public <strong>Let's Encrypt</strong> certificate that sluice's pgx driver validates against your system trust store on Windows, macOS, and a standard Linux host. The only place it needs help is a minimal Linux container with no <code>ca-certificates</code> package (the stock <code>postgres</code> image) &mdash; install the package rather than weakening TLS. Full detail in the <a href="/docs/planetscale-postgres/#connect">PlanetScale Postgres guide</a>.</div>
+<div class="note warn"><strong>The target role only needs write + DDL &mdash; NOT <code>REPLICATION</code>.</strong> The Postgres side here is a write <em>target</em>, so it does not create a replication slot; the <code>REPLICATION</code>-role requirement in the <a href="/docs/planetscale-postgres/#sync">PlanetScale Postgres sync guide</a> applies only when PlanetScale Postgres is the CDC <em>source</em>. Here the change stream is read from the MySQL side over VStream, and the Postgres role just needs to create tables and write rows &mdash; the Default <code>postgres</code> role covers that.</div>
+
+<h2 id="preview">Preview the translation, then steer it</h2>
+<p>Because this crosses engines, look at the target DDL before you move data. A <a href="/docs/commands/#migrate">dry run</a> prints the plan and row estimates; <a href="/docs/preview-and-validate/">schema preview</a> prints the exact per-column Postgres DDL with translation notes, which is where you catch a type you want to steer:</p>
+${pre(`sluice schema preview \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"`)}
+<p>An explicit <code>--type-override &lt;table&gt;.&lt;col&gt;=&lt;pgtype&gt;</code> always wins over sluice's default choice &mdash; reach for it when a column's default translation isn't what you want (see the <a href="#types">translation notes</a> below for the cases worth checking).</p>
+
+<h2 id="sync">Zero-downtime sync + cutover</h2>
+<p>A continuous sync snapshots and bulk-copies the source, then tails live CDC &mdash; so the PlanetScale MySQL source stays <strong>writable the whole time</strong> and you flip traffic in a brief, controlled window. Dry-run first, then launch the long-lived stream:</p>
+${pre(`# review the plan
+sluice sync start --stream-id ps-my2pg \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --dry-run --format json
+
+# launch (snapshot -> bulk copy -> live CDC apply into Postgres)
+sluice sync start --stream-id ps-my2pg \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"`)}
+<p>Watch it catch up from another shell and gate cutover on freshness, then prime sequences, stop, and verify:</p>
+${pre(`sluice sync status --stream-id ps-my2pg \\
+    --target-driver postgres --target "$SLUICE_TARGET"
+
+sluice sync health --stream-id ps-my2pg \\
+    --target-driver postgres --target "$SLUICE_TARGET" --max-stale-seconds 30
+
+# prime the Postgres identity sequences past the source's AUTO_INCREMENT
+sluice cutover \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"
+
+sluice sync stop --stream-id ps-my2pg \\
+    --target-driver postgres --target "$SLUICE_TARGET" --wait`)}
+<div class="note"><strong>Wait for caught-up before cutover.</strong> A trickle of changes can take tens of seconds to appear on the target &mdash; that latency is PlanetScale VStream's roughly 60-second server-side delivery cadence on the <em>source</em>, not sluice (the applier commits within seconds of receiving an event). Gate cutover on <code>sync health</code> / <code>verify</code> reporting caught-up, not a fixed timer. On VStream teardown, <code>sync stop --wait</code> may print a "did not complete drain within&hellip;" message even though the stream drained and exited cleanly &mdash; confirm the process actually exited rather than treating that line alone as a failure.</div>
+
+<h2 id="migrate">One-shot migrate</h2>
+<p>If you can take a short write-freeze on the source, a one-shot migrate is simpler &mdash; one command, no control tables left behind, and it auto-primes the target sequences so there is no separate cutover step:</p>
+${pre(`sluice migrate \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" --dry-run
+
+sluice migrate \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET"`)}
+<p>sluice creates the tables, bulk-copies rows, then builds indexes and constraints in deferred phases. Interrupted? Re-run the identical command with <code>--resume</code> and it continues from the last per-table checkpoint. It refuses to copy into a non-empty target by default (a primary-key-collision safety net) &mdash; start from an empty target, or use <code>--reset-target-data</code> to drop-and-recopy.</p>
+
+<h2 id="verify">Verify</h2>
+<p>Confirm source and target agree &mdash; count parity by default, escalating to sampled content hashes:</p>
+${pre(`sluice verify \\
+    --source-driver planetscale --source "$SLUICE_SOURCE" \\
+    --target-driver postgres --target "$SLUICE_TARGET" \\
+    --depth count`)}
+<p><code>--depth sample</code> adds per-table sampled-row content hashing (~99% confidence on a 5%+ corruption rate); see the <a href="/docs/preview-and-validate/#verify">validate guide</a> for the full depth ladder.</p>
+
+<h2 id="types">Translation notes worth checking</h2>
+<p>Postgres value fidelity is high, but a few MySQL&nbsp;&rarr;&nbsp;Postgres translations are worth a look in <a href="#preview">preview</a>:</p>
+<ul>
+  <li><strong><code>TINYINT(1)</code> becomes <code>boolean</code>.</strong> MySQL aliases <code>BOOL</code>/<code>BOOLEAN</code> to <code>TINYINT(1)</code>, so sluice reads a <code>TINYINT(1)</code> column as a boolean &mdash; correct for the overwhelmingly common case. But <code>(1)</code> is only a display width; the column physically stores the full 8-bit range. If a legacy column declared <code>TINYINT(1)</code> is actually used as a small integer holding values outside <code>{0,1}</code>, sluice <strong>refuses loudly</strong> (<code>SLUICE-E-VALUE-TINYINT1-RANGE</code>) rather than collapsing every non-zero value to <code>true</code> &mdash; a silent-loss class it will not commit. <strong>On a PlanetScale (VStream) source specifically, the fix is to change the source column's type</strong> (e.g. <code>ALTER TABLE t MODIFY col SMALLINT</code>): the boolean decision there comes from the replication wire's own column type, so <code>--type-override</code> does not re-type it on this path (it does on a non-Vitess MySQL bulk source). A column that genuinely holds only <code>0</code>/<code>1</code> is a clean <code>boolean</code> and needs nothing.</li>
+  <li><strong><code>ENUM</code> / <code>SET</code>.</strong> A MySQL <code>ENUM</code> maps to a native Postgres <code>enum</code> type; <code>SET</code> (which Postgres has no native equivalent for) is carried faithfully as text. Both cold-copy and CDC.</li>
+  <li><strong><code>AUTO_INCREMENT</code> becomes an identity sequence,</strong> and <code>cutover</code> (sync) or the migrate's own priming (one-shot) advances it past the source's current value with a safety margin, so the application can write to Postgres without primary-key collisions.</li>
+  <li><strong>Unsigned integers widen.</strong> Postgres has no unsigned types, so an <code>INT UNSIGNED</code> promotes to a wider signed Postgres type that covers its range &mdash; no truncation, visible in preview.</li>
+  <li><strong>Legacy MySQL data.</strong> sluice forces a strict <code>sql_mode</code> on the MySQL source, so pre-5.7 zero-dates (<code>0000-00-00</code>) and silently-truncated values <em>refuse loudly</em> rather than land subtly wrong. Carry them deliberately with <code>--zero-date=null</code> / <code>--zero-date=epoch</code>, or fall through to the server default with <code>--mysql-sql-mode=''</code> (both <a href="/docs/configuration/#global-flags">global flags</a>).</li>
+</ul>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/preview-and-validate/">Preview &amp; validate</a> &mdash; the schema-preview / <code>--type-override</code> / verify loop, in full.</li>
+  <li><a href="/docs/planetscale-postgres/">PlanetScale Postgres</a> &mdash; the target platform's own guide (roles, TLS, and syncing <em>from</em> PS Postgres).</li>
+  <li><a href="/docs/type-mapping/">Type mapping</a> &mdash; the MySQL &harr; Postgres type-translation contract, column by column.</li>
+  <li><a href="/docs/commands/#sync-start">Command reference</a> &mdash; every flag named here, with defaults.</li>
+</ul>
+`,
+    prev: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
+    next: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
+  })
+);
+
 
 // nav-label: Upgrade PlanetScale Postgres
 write(
