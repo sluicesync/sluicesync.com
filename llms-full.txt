@@ -5119,6 +5119,90 @@ A full restore just works; a chain restore needs the same sidecar as sync (v0.99
 
 
 ===============================================================
+# Move a PlanetScale database to another organization
+(https://sluicesync.com/docs/planetscale-org-move/)
+
+PlanetScale has no in-place org transfer — its documented path is an offline dump and restore. sluice turns the same move into a zero-downtime sync, and lets you change region or cluster size in the same pass.
+
+Databases belong to an organization at creation, and there is no in-place transfer between organizations — moving one means creating a new database in the target org and copying the data across. To sluice, an org move and a region move are the same operation: both ends connect through the same global host and PlanetScale routes by credential, so sluice never sees the organization at all. Every case, gotcha, and command in the region-move guide applies verbatim here. This page covers only what an org move adds: choosing between the dump path and a live copy, credentials that come from two different orgs, and the org-level settings that don't travel with the data.
+
+## Choose your path
+
+Three ways to make the move:
+
+- PlanetScale's documented path — pscale database dump + restore-dump. Dump from the source org, restore into a database in the target org (the officially recommended flow). It is offline: rows written after the dump starts are not in it, so you freeze writes for the whole window, and the window scales with database size. Fine for a small database with an acceptable maintenance window. On pscale v0.218.0+, --allow-different-destination lets the destination database/branch name differ from the source's without renaming the dump files.
+
+- sluice zero-downtime sync + cutover (recommended). A continuous sync bulk-copies the source, then streams live CDC until you cut over — the source stays writable the whole time. This is Case 1, Option A of the region-move guide, unchanged.
+
+- sluice one-shot migrate. Simpler than the dump path at a similar downtime shape (freeze writes for the copy window), with schema, indexes, foreign-key handling, and AUTO_INCREMENT priming handled in one command — Case 1, Option B.
+
+One thing both sluice paths give you that the dump path can't: the target is an ordinary new database, so you can change region and/or cluster size in the same move — pick the new org's region and tier when you create it, and the copy lands there directly.
+
+## Credentials from two orgs — the one mechanical difference
+
+The source password is minted in the source org and the target password in the target org — pass --org to each pscale call rather than relying on the CLI's default org:
+
+    # source org: read access is enough
+    pscale password create app main mover --org source-org
+
+    # target org: sluice creates tables (and, for a sync, control tables) -> --role admin
+    pscale password create app main mover --role admin --org target-org
+
+USERNAME is the generated username field each command returns — not the label — and PASSWORD its plain_text value. Both DSNs point at the same global host; the credential alone decides which org (and database) you reach:
+
+    # source (org A) — export as SLUICE_SOURCE
+    USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app?tls=true
+
+    # target (org B) — export as SLUICE_TARGET
+    USERNAME:PASSWORD@tcp(aws.connect.psdb.cloud:3306)/app?tls=true
+
+The two databases can share a name — names are scoped per organization, so app in the source org and app in the target org are distinct databases and the DSNs above are unambiguous. Prefer environment variables over putting DSNs in argv, and use --source-driver planetscale --target-driver planetscale on both ends exactly as in the region-move guide.
+
+## Settings don't travel — the re-apply checklist
+
+The copy moves your schema and rows. Everything configured on the database or the organization stays behind, and the new database starts from defaults in the new org:
+
+- Foreign keys — enable them on the target before the copy. "Allow foreign key constraints" is a per-database setting, so the new database in the new org has it off even if the source had it on. Turn it on in the target's Settings → General (no open deploy requests) before you migrate, or sluice's FK DDL is rejected with VT10001. Full decision notes — including --skip-foreign-keys — in Foreign keys on Vitess and the region-move guide's foreign-key note.
+
+- Branch promotion and safe migrations — copy first, promote after. A fresh database's default branch starts as a development branch, which is exactly what you want during the copy: sluice can create tables directly. Once the move is done and traffic is cut over, promote the branch to production and re-enable safe migrations / deploy-request protections to match the source org's posture — not before, or the target rejects sluice's DDL.
+
+- Service tokens, OAuth apps, and CI credentials are org-scoped. Anything that authenticated against the source org — deploy pipelines, pscale service tokens, monitoring — needs new credentials minted in the target org and swapped into app config at cutover time.
+
+- Backups, insights, and alerting. Backup schedules, alert destinations, and any beta features enabled on the source database are per-database configuration — re-create them on the target after the move.
+
+## The copy itself — follow the region-move guide
+
+With the two DSNs in SLUICE_SOURCE / SLUICE_TARGET, the move is byte-for-byte the region-move flow: Case 1 for a single unsharded database (the common one), Case 2 for several databases (one run per keyspace, or a fleet config), Case 3 for a sharded keyspace. All the gotchas carry over too — --upfront-indexes on large tables, --apply-batch-size in the 25–50 range, waiting for caught-up before cutover. The zero-downtime shape, for orientation:
+
+    sluice sync start --stream-id org-move \
+        --source-driver planetscale --source "$SLUICE_SOURCE" \
+        --target-driver planetscale --target "$SLUICE_TARGET" \
+        --apply-batch-size 50
+
+    # ... watch sync status / sync health until caught up, then:
+    sluice cutover \
+        --source-driver planetscale --source "$SLUICE_SOURCE" \
+        --target-driver planetscale --target "$SLUICE_TARGET"
+
+    sluice sync stop --stream-id org-move \
+        --target-driver planetscale --target "$SLUICE_TARGET" --wait
+
+    sluice verify \
+        --source-driver planetscale --source "$SLUICE_SOURCE" \
+        --target-driver planetscale --target "$SLUICE_TARGET"
+
+After verify reports a match and the application is writing to the target org, walk the settings checklist above, then wind down the source database on your own schedule — it is untouched by the move and remains your rollback until you delete it.
+
+## Next steps
+
+- Move PlanetScale regions — the full copy mechanics this page leans on: all three cases, provisioning, and every gotcha.
+
+- Foreign keys on Vitess — the enable-vs-skip decision in full.
+
+- Zero-downtime migration — the snapshot→CDC cutover flow, engine-agnostic.
+
+
+===============================================================
 # Split a database by region — move just the rows for one region
 (https://sluicesync.com/docs/split-rows-by-region/)
 
@@ -6395,6 +6479,8 @@ Field notes are evergreen engine-behavior documentation, not release announcemen
 None of these require sluice to reproduce — they are properties of Postgres, MySQL, Vitess, SQLite, and the wire protocols and drivers around them. If you move data between databases for a living, several of them will eventually be your problem too.
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine. The depth mark tells you what you're committing to — · quick note, •• field note, ● deep dive — and ★ marks the handful of flagship findings.
+
+- 2026-08-26Postgres•• field note Your trigger-based CDC can't see replicated writes — A plain CREATE TRIGGER never fires for DML applied under session_replication_role = 'replica' &mdash; which is how logical-replication apply workers run, and how replication tools (sluice included) apply their own writes to bypass FK enforcement mid-stream. The rows land, the change log stays empty, the sync exits 0. Sharpest twist: the privileged production applier is blind where the unprivileged dev one wasn't &mdash; it works in staging, then loses in prod.
 
 - 2026-08-19MySQL & Vitess•• field note A freshly copied table reports 16 KB, so the size gate sizes itself out — Right after a bulk COPY, a 36 MB PlanetScale table reported DATA_LENGTH = 16384 (16 KB) and TABLE_ROWS = 5,925 &mdash; the catalog statistics hadn't caught up. A size gate keyed off the just-copied target read three orders of magnitude low and never fired, so the safeguard was absent on exactly the platform it protects. Nothing errored; the threshold just never tripped. Size off the long-lived source, not the freshly-loaded target.
 
@@ -12418,3 +12504,42 @@ Do not make a decision from a freshly-loaded table's own catalog statistics on a
 - MySQL reference &mdash; InnoDB persistent statistics: information_schema.tables cardinality and size are estimates the engine maintains lazily.
 
 - Companion note: The scan-once optimization that walls you &mdash; why the gate this defeated exists at all.
+
+
+===============================================================
+# Your trigger-based CDC can't see replicated writes
+(https://sluicesync.com/field-notes/triggers-fire-for-origin-only/)
+
+Postgres triggers have a firing dimension most people never touch: a plain CREATE TRIGGER fires for origin sessions only, never for DML applied under session_replication_role = 'replica'. That role is how logical-replication apply workers run — and how replication tools, sluice included, apply their own writes to bypass FK enforcement mid-stream. So a trigger-based capture installed on a database that is itself a replication target is silently blind to every replicated row: the rows land, the change log stays empty, the sync exits 0. And the privileged production applier is blind where the unprivileged dev one wasn't.
+
+Observed &mdash; a 2026-08-26 audit of sluice's pgtrigger engine, ground-truthed on real PostgreSQL 16: an INSERT executed under session_replication_role = 'replica' lands in the table while the capture table records zero rows. A two-shape detection WARN (SILENT-CAPTURE-GAP RISK) shipped in sluice v0.131.5. The capture gap itself is by design still open &mdash; the full fix has its own hazard (below) and is deferred to a design decision; the at-risk topologies remain unsupported for trigger capture.
+
+## The firing dimension nobody sets
+
+Every Postgres trigger carries a firing mode: ENABLE (the default), ENABLE REPLICA, or ENABLE ALWAYS, set via ALTER TABLE &hellip; ENABLE ALWAYS TRIGGER. It interacts with a session-level parameter, session_replication_role: a default-mode trigger fires only when the session's role is origin (or local) &mdash; under replica, it does not fire at all. This is deliberate: replicated DML was already validated and side-effected on the origin, so the subscriber suppresses triggers and foreign-key enforcement rather than running them twice. Logical-replication apply workers run in exactly this mode.
+
+The consequence for change capture: a capture-by-trigger design sees origin writes only. Install audit/capture triggers on a database that is a logical-replication subscriber and every replicated row is invisible to them &mdash; not delayed, not erroring, just absent. The table fills; the change log doesn't. Anything downstream of the capture &mdash; a sync, an audit trail, a cache invalidation &mdash; silently diverges at exit 0.
+
+## The tool that blinds its own relay
+
+The sharp version is self-inflicted. sluice's Postgres applier issues SET LOCAL session_replication_role = replica on each apply transaction when the connecting role holds the privilege (superuser or rds_superuser) &mdash; the standard replication-tool lever for applying rows without tripping FK ordering violations mid-stream. Which means in a relay topology &mdash; A → B applied by sluice, B → C captured by sluice's own trigger engine &mdash; the midpoint's capture triggers never fire for anything the upstream sync delivers. The relay forwards nothing, loudly reports nothing, and exits 0.
+
+The privilege condition inverts the usual dev-vs-prod failure. In dev, the applier typically connects as an ordinary role, can't set replica role, applies as an origin session &mdash; and the capture triggers fire. The relay works. In production, the applier connects privileged, gets the FK-bypass &mdash; and goes dark. &ldquo;It worked in staging&rdquo; is normally evidence the code is fine; here staging worked because it was less privileged, and the environment where the loss fires is exactly the one you didn't test.
+
+## Why ENABLE ALWAYS isn't the free fix
+
+The obvious repair &mdash; install the capture triggers ENABLE ALWAYS so they fire under replica role too &mdash; trades one silent hazard for another. An always-firing capture records replicated echoes: on a relay it re-captures what the upstream already delivered, and on anything bidirectional it is a loop. Doing it safely needs origin-tagging &mdash; a way for the capture to distinguish &ldquo;a real local write&rdquo; from &ldquo;a write my own upstream applied&rdquo; &mdash; which is a design decision, not a flag flip. sluice defers it to its own ADR.
+
+What shipped instead, in v0.131.5, is a detector: at trigger setup and at every stream open, the engine probes for the two shapes that produce the blindness &mdash; a source that is a logical-replication subscriber (pg_subscription), and a source that carries another sluice sync's own apply-target artifacts (the relay shape) &mdash; and emits a SILENT-CAPTURE-GAP RISK warning naming the gap. A probe error also warns rather than silently skipping. It is a detector, not a fix: the remedy it steers to is capturing from the origin instead &mdash; or, where the source supports replication slots at all, using the logical-replication (pgoutput) lane, which reads the WAL and has no trigger-firing blind spot. The trigger lane exists precisely for the slotless managed engines, so the steer is real work, not a link.
+
+## The transferable lesson
+
+Trigger-firing semantics are replication-role-scoped: &ldquo;triggers see every write&rdquo; is only true of origin writes, and the set of non-origin writers includes subscription apply workers, restore paths, and &mdash; easy to forget &mdash; your own tool's applier. Any capture-by-trigger design owes an explicit answer for replica-role writers, and &ldquo;we never sync into a capture source&rdquo; is an answer that a relay topology falsifies the day someone chains two syncs. And when the full fix would trade a silent loss for a silent loop, ship the detector first: a warning that names the blind spot converts works-in-dev/loses-in-prod into a caught misconfiguration, and buys the design decision time to be made in the open.
+
+## Primary sources
+
+- PostgreSQL documentation &mdash; ALTER TABLE &hellip; ENABLE REPLICA / ALWAYS TRIGGER and session_replication_role &mdash; the firing-mode &times; session-role matrix, and the note that logical-replication apply suppresses default-mode triggers.
+
+- sluice v0.131.5 changelog &mdash; the two-probe SILENT-CAPTURE-GAP RISK preflight and its real-PG 16 mechanism pin (replica-role INSERT lands, change log stays empty).
+
+- Related field note: The read replica is a better migrate source and a worse CDC source than the docs &mdash; another capability gated on the session's replication state rather than the SQL you ran.
