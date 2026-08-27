@@ -6490,6 +6490,16 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine. The depth mark tells you what you're committing to — · quick note, •• field note, ● deep dive — and ★ marks the handful of flagship findings.
 
+- 2026-08-27MySQL & MariaDB•• field note The replica you can't detect is the replica that loses your writes — With log_replica_updates=OFF, a MySQL replica applies replicated writes without entering them in its own binlog &mdash; the cold copy is perfect, and the CDC tail silently misses the entire write stream the replica exists to carry. GTID arithmetic makes it churn rather than lag: purged = executed &minus; binlogged, so the replicated GTIDs look purged instantly and every resume triggers a fresh resnapshot, forever. And the probe that should catch it hits a dialect trap: on MariaDB, bare SHOW REPLICA STATUS lists only the default connection &mdash; a named multi-source replica answers &ldquo;I'm not a replica&rdquo; to every MySQL-style question.
+
+- 2026-08-26Postgres•• field note FOR ALL TABLES doesn't mean all tables — Unlogged tables write no WAL, so logical replication can't stream them &mdash; and Postgres's two publication forms handle that in opposite directions: a scoped FOR TABLE publication refuses an unlogged table loudly, while FOR ALL TABLES silently leaves it out of pg_publication_tables. Mid-sync it's sharper: SET UNLOGGED on a scoped member errors; under FOR ALL TABLES the identical flip succeeds and the table silently drops out of the stream &mdash; after the cold copy included it, so the target freezes at the snapshot forever while everything reports green.
+
+- 2026-08-26Postgres•• field note Postgres never logically decodes a table rewrite — A typmod-only ALTER COLUMN &hellip; TYPE numeric(10,1) on a numeric(10,4) column rewrites the whole table &mdash; rounding every stored value &mdash; while the replication slot decodes zero messages: Postgres rewrites into a transient relation that logical decoding deliberately skips. The only wire artifact is one number (the typmod) in the next RelationMessage, invisible to a classifier that compares type OIDs. And the same-type USING rewrite is strictly worse: content-identical on the wire, provably undetectable from the stream.
+
+- 2026-08-26MySQL & Vitess•• field note MySQL never binlogs the cascade — Delete a parent row with ON DELETE CASCADE children and MySQL's binlog carries exactly one event: the parent's. The cascaded child deletes are never logged &mdash; the replica is expected to re-run the cascade through its own FK definitions. But nearly every CDC applier disables FK enforcement on apply, precisely to be free of row ordering &mdash; switching off exactly the mechanism MySQL delegated the cascade to. Child rows silently survive at exit 0; of four common target postures, only an unprivileged Postgres converges, by accident of privilege. Postgres WAL-logs its cascades; none of this arises there.
+
+- 2026-08-26MariaDB•• field note MariaDB's log_bin_compress makes the binlog size-conditional — Turn on MariaDB's log_bin_compress and the binlog becomes size-conditional: any row image &ge; log_bin_compress_min_len (256 B default) travels as a MARIADB_*_ROWS_COMPRESSED_EVENT_V1 &mdash; three event types most consumers' switches don't enumerate &mdash; while smaller rows keep the plain types. A consumer with a silent default arm loses rows conditioned on their size: small rows kept, big rows gone, and the GTID fold still advances the resume position past the loss. All three verbs &mdash; a big row's DELETE compresses too, via its before-image.
+
 - 2026-08-26Postgres•• field note Your trigger-based CDC can't see replicated writes — A plain CREATE TRIGGER never fires for DML applied under session_replication_role = 'replica' &mdash; which is how logical-replication apply workers run, and how replication tools (sluice included) apply their own writes to bypass FK enforcement mid-stream. The rows land, the change log stays empty, the sync exits 0. Sharpest twist: the privileged production applier is blind where the unprivileged dev one wasn't &mdash; it works in staging, then loses in prod.
 
 - 2026-08-19MySQL & Vitess•• field note A freshly copied table reports 16 KB, so the size gate sizes itself out — Right after a bulk COPY, a 36 MB PlanetScale table reported DATA_LENGTH = 16384 (16 KB) and TABLE_ROWS = 5,925 &mdash; the catalog statistics hadn't caught up. A size gate keyed off the just-copied target read three orders of magnitude low and never fired, so the safeguard was absent on exactly the platform it protects. Nothing errored; the threshold just never tripped. Size off the long-lived source, not the freshly-loaded target.
@@ -12553,3 +12563,218 @@ Trigger-firing semantics are replication-role-scoped: &ldquo;triggers see every 
 - sluice v0.131.5 changelog &mdash; the two-probe SILENT-CAPTURE-GAP RISK preflight and its real-PG 16 mechanism pin (replica-role INSERT lands, change log stays empty).
 
 - Related field note: The read replica is a better migrate source and a worse CDC source than the docs &mdash; another capability gated on the session's replication state rather than the SQL you ran.
+
+
+===============================================================
+# MariaDB's log_bin_compress makes the binlog size-conditional
+(https://sluicesync.com/field-notes/logbin-compress-size-conditional/)
+
+Turn on MariaDB's log_bin_compress and any row image at or above log_bin_compress_min_len (256 bytes by default) is written under compressed event types — MARIADB_WRITE/UPDATE/DELETE_ROWS_COMPRESSED_EVENT_V1 — while smaller rows keep the plain types. A binlog consumer whose event-type switch doesn't enumerate the compressed trio loses rows conditioned on their size: small rows kept, big rows gone, exit 0, with the resume position advanced past the loss. All three DML verbs are affected — a big row's DELETE compresses too, via its before-image.
+
+Observed &mdash; the 2026-08-26 capture-completeness sweep, ground-truthed on a real compressing MariaDB 11.4.12: with log_bin_compress=ON, SHOW BINLOG EVENTS shows sub-threshold rows arriving as plain *_rows_v1 events and every row image &ge; 256 bytes as *_rows_compressed_v1, interleaved in one session. Fixed in sluice v0.132.0 &mdash; the compressed trio is now captured identically to its uncompressed twins. The class was CRITICAL silent loss, affecting v0.99.271 (where MariaDB CDC shipped) through v0.131.5 &mdash; and backup incrementals ride the same reader, so chains from a compressing source carried the same hole.
+
+## One setting, two binlogs
+
+MariaDB's log_bin_compress is pitched as a disk-space knob: compress binlog events, save I/O. What the name doesn't say is that it is thresholded. Only events whose payload is at least log_bin_compress_min_len (default 256, range 10&ndash;1024) are compressed; the rest are written exactly as before. And compression is not a transparent wrapper around the existing event &mdash; it changes the event's type: a compressed INSERT travels as MARIADB_WRITE_ROWS_COMPRESSED_EVENT_V1, a distinct type code from WRITE_ROWS_EVENTv1, with compressed siblings for UPDATE and DELETE.
+
+So one server setting splits the binlog into two dialects, selected per-event by row size. A narrow table's traffic keeps the plain types entirely; a table with a JSON blob or a long text column emits both, mixed in one transaction. All three verbs participate &mdash; a DELETE of a big row compresses too, because its before-image is the payload that crosses the threshold.
+
+## What the consumer sees
+
+A binlog consumer is, at its core, a switch over event types. The compressed trio postdates most consumers' switches &mdash; and an unrecognized event type usually falls into a default arm that skips quietly, on the reasonable-sounding theory that unknown events are metadata the consumer doesn't need. Here that theory fails in the worst available way: the skipped events are the row data itself, and the events a consumer does recognize &mdash; the GTID and XID bookkeeping around them &mdash; still arrive and still advance the durable resume position. The failure signature is precise and nasty: small rows land, rows &ge; 256 bytes vanish, the stream reports green, and a restart resumes cleanly past the loss.
+
+The size condition is what makes this a works-in-dev bug. Dev fixtures and smoke tests lean small &mdash; integer keys, short strings, rows well under 256 bytes &mdash; so a consumer can pass every test against a compressing server and lose precisely the production rows that carry real payloads.
+
+## The bitter detail, and the class sibling
+
+The bitter detail from sluice's own instance: the library layer (go-mysql) had already handled compression correctly. It decompresses the payload before any column is decoded and maps the compressed types onto the same row-image structures as their uncompressed twins &mdash; by the time an event reached sluice's dispatch switch, its rows were shape-identical to plain events. The entire CRITICAL was three missing case labels; the fix routes the three types through the exact same arms, every existing belt applying unchanged, pinned by a family &times; verb &times; shape matrix against a real compressing MariaDB with an anti-vacuity floor proving compressed events were actually on the wire. (The Vitess/PlanetScale lane is unaffected &mdash; Vitess tablets run MySQL, which has no such setting.)
+
+And this is the second member of a class. MySQL 8.0.20+ has transaction-level binlog compression: a whole transaction packed into one TRANSACTION_PAYLOAD_EVENT a naive reader applies nothing from. Distinct mechanism &mdash; per-transaction versus per-event, config-wide versus size-thresholded, one wrapper type versus three new row types &mdash; but the same shape: a server-side setting can mint new event types for verbs you already handle, and it takes exactly one flag flip by a DBA to route production traffic through them.
+
+## The transferable lesson
+
+A binlog consumer's event-type switch is a completeness claim, whether or not it was written as one. Every arm you enumerate asserts &ldquo;this is data I capture&rdquo;; the default arm asserts &ldquo;everything else is safe to ignore&rdquo; &mdash; and that second assertion is falsified retroactively, by server settings that mint new event types for old verbs. The robust posture is to make the default arm loud: refuse, or at minimum count and surface, any unrecognized event type arriving between a transaction's begin and commit. A consumer that had merely counted its skips would have turned this from silent size-conditional loss into a first-day bug report.
+
+## Primary sources
+
+- MariaDB documentation &mdash; Compressing Events to Reduce Size of the Binary Log &mdash; the compressed event types and the transparent-to-replicas design (MariaDB's own replicas decompress natively; the trap is third-party consumers).
+
+- MariaDB documentation &mdash; log_bin_compress and log_bin_compress_min_len &mdash; the 256-byte default and the 10&ndash;1024 range.
+
+- sluice v0.132.0 changelog &mdash; the capture fix, the affected-release range (v0.99.271&ndash;v0.131.5), and the who-needs-this guidance: if a source ever ran log_bin_compress=ON on those releases, run sluice verify and resnapshot &mdash; the missing rows are behind an already-advanced resume position.
+
+- Related field note: A whole transaction in one zstd binlog event &mdash; the MySQL member of the same class.
+
+
+===============================================================
+# MySQL never binlogs the cascade
+(https://sluicesync.com/field-notes/mysql-never-logs-the-cascade/)
+
+Delete a parent row with ON DELETE CASCADE children and MySQL's binlog carries exactly one event: the parent's. The cascaded child changes are never logged — MySQL's replication design makes re-running the cascade the replica's job, through its own FK definitions. But virtually every heterogeneous replication tool disables FK enforcement on apply, precisely to be free of row-ordering constraints — which switches off exactly the mechanism MySQL delegated the cascade to. Postgres answers the same design question the opposite way: it WAL-logs cascaded DML, so the child changes stream as ordinary messages.
+
+Observed &mdash; the 2026-08-26 capture-completeness sweep, on a real mysql:8.0.46 wire: a parent-key DELETE/UPDATE produced parent-table row events only, in all three referential-action shapes tested (ON DELETE CASCADE, ON DELETE SET NULL, ON UPDATE CASCADE) &mdash; the child table absent from the binlog in every case. The contrast cell ran on real Postgres: pgoutput decoded the same parent DELETE as two messages, parent plus cascaded child. A census WARN shipped in sluice v0.132.0 on both MySQL lanes (binlog and VStream). The WARN is a detector, not a fix: the capture gap is MySQL's documented replication design, wire-level and permanent.
+
+## The cascade is the replica's job
+
+When an InnoDB foreign key carries a referential action and a parent-key DELETE or UPDATE fires it, the engine changes the child rows &mdash; but those changes are performed below the binlog layer, and MySQL deliberately does not log them. The binlog carries the parent event alone; the documented expectation is that the replica holds the same FK definitions and its own InnoDB re-runs the cascade locally when the parent event applies. Inside a homogeneous MySQL→MySQL replica set, that design is coherent and saves binlog volume: why ship rows the receiving engine will derive anyway?
+
+The design only works while both of its halves hold: the target must have the FK definitions, and the target must actually enforce them at apply time.
+
+## Your FK bypass is the other half of the bug
+
+Here is the inversion: virtually every CDC applier and heterogeneous replication tool deliberately breaks the second half. Applying a change stream under full FK enforcement means every batch must be ordered parent-before-child and delete child-before-parent &mdash; a constraint that fights batching, retries, and concurrent apply. So appliers switch enforcement off: foreign_key_checks=0 on a MySQL target, session_replication_role=replica on a privileged Postgres target, the foreign_keys pragma off on SQLite and D1. sluice does all three (its Bug 164 fix &mdash; out-of-order apply was poison-pilling batches). Standard applier hygiene, in other words, is the disabling of the exact mechanism MySQL delegated the cascade to.
+
+Net effect: the source cascades, the wire never says so, and the target &mdash; forbidden from cascading on its own &mdash; keeps the child rows. They silently survive a parent's delete, or hold stale foreign-key values after a parent-key update, at exit 0. Which target postures diverge is decided by privilege, not intent:
+
+Target posture · FK enforcement during apply · Cascade outcome ·
+
+MySQL / MariaDB · foreign_key_checks=0 · Diverges &mdash; child rows survive / go stale ·
+
+Postgres, privileged applier · SET LOCAL session_replication_role = replica · Diverges &mdash; same silent survival ·
+
+SQLite / Cloudflare D1 · foreign_keys pragma off · Diverges &mdash; same silent survival ·
+
+Postgres, unprivileged applier · Stays ON &mdash; the role can't set replica mode · Converges &mdash; the translated FK carries the action and the target re-runs the cascade itself ·
+
+The one converging posture converges by accident of privilege: the tool wanted the bypass, couldn't get it, and the denied permission preserved correctness. That is the same dev-versus-prod inversion as the trigger-capture note, from the other side of the wire: the better-credentialed deployment is the one that loses.
+
+## Two engines, opposite answers
+
+Postgres made the opposite design call. A cascaded DELETE or UPDATE is executed as real DML on the child table, WAL-logged like any other write, and logical decoding emits it as an ordinary change message &mdash; on the observed wire, one parent-key DELETE decoded as two D messages, parent then child. A consumer of pgoutput never faces this class at all: disabling FK enforcement on the target is correct there, because the stream itself carries the cascade. The identical applier hygiene is harmless downstream of Postgres and silently lossy downstream of MySQL &mdash; the hazard lives in the pairing, not in either engine alone.
+
+## What a tool can honestly do about a permanent gap
+
+Capture-side, nothing: the child changes never reach the wire, on either MySQL lane &mdash; Vitess's VStream re-serves the tablet's own binlog, where the cascaded rows are equally absent. Re-enabling target-side enforcement is not the remedy either; it re-opens the ordering failures the bypass exists to prevent. What sluice v0.132.0 ships is a detector: at every CDC open, on both lanes, a census of the in-scope tables' foreign keys logs a FK-REFERENTIAL-ACTION-CAPTURE-GAP warning naming each constraint whose referential action would cascade invisibly &mdash; scoped to the child table, since that is where the divergence lands, and silent for plain FKs and RESTRICT/NO ACTION, which block on the source rather than cascading. A probe error warns too, rather than silently skipping. Past the warning, sluice verify is the only independent catch, because it compares actual rows rather than trusting the stream.
+
+## The transferable lesson
+
+&ldquo;Whose job is the cascade?&rdquo; is a replication design decision, and the two major engines answered it in opposite directions: MySQL delegates it to the receiving side's FK definitions; Postgres materializes it into the log. Any tool that moves changes between engines inherits the mismatch &mdash; and the standard, correct-looking applier hygiene of disabling FK checks quietly assumes the Postgres answer. When you take a bypass on the target, enumerate what that mechanism was doing for you, not just what it was doing to you: on a MySQL-family source, FK enforcement wasn't only validation &mdash; it was the delivery mechanism for half the write stream.
+
+## Primary sources
+
+- MySQL reference &mdash; InnoDB and MySQL Replication &mdash; cascading FK actions are performed by the storage engine and not written to the binary log; replicas need the same FK definitions to reproduce them.
+
+- PostgreSQL documentation &mdash; logical decoding &mdash; the contrast side: cascaded DML is ordinary WAL-logged DML and decodes as ordinary change messages.
+
+- sluice v0.132.0 changelog &mdash; the FK-REFERENTIAL-ACTION-CAPTURE-GAP census on both MySQL lanes, the per-target divergence analysis, and why target-side enforcement stays off (Bug 164).
+
+- Related field notes: Your trigger-based CDC can't see replicated writes &mdash; the same session_replication_role bypass seen from the capture side; You can't filter a parent table without orphaning its children &mdash; another case of FKs coupling what looks like a per-table decision.
+
+
+===============================================================
+# Postgres never logically decodes a table rewrite
+(https://sluicesync.com/field-notes/pg-never-decodes-rewrites/)
+
+Everyone who works with pgoutput knows it streams no DDL; the sharper fact is that a table-rewriting ALTER's row rewrites are invisible too. ALTER COLUMN TYPE numeric(10,1) on a numeric(10,4) column rounds every stored value while the replication slot decodes zero messages — Postgres rewrites into a transient relation that logical decoding deliberately skips. The only wire artifact is one number in the next RelationMessage, invisible to a classifier that compares type OIDs; the same-type USING rewrite leaves no artifact at all and is provably undetectable from the stream.
+
+Observed &mdash; the 2026-08-26 capture-completeness sweep, on real PostgreSQL 16 with sluice's exact slot options: ALTER COLUMN &hellip; TYPE numeric(10,1) on a numeric(10,4) column rounded every stored row (99.9999 → 100.0) while the slot decoded zero messages. Typmod detection shipped in sluice v0.132.0; a v0.132.1 fast-follow refuses the detected-but-unforwardable shapes under both schema-change modes. The same-type USING rewrite remains a documented, permanent gap &mdash; no fix from the stream is possible.
+
+## Beat one: a billion-row rewrite decodes as nothing
+
+Some ALTER TABLE forms rewrite the entire table: Postgres builds a new physical relation, re-evaluates every row into it, and swaps it in. The rewrite's row traffic goes through a transient relation that logical decoding deliberately skips &mdash; reasonably, from Postgres's point of view: the rewrite is not new data, and replaying a billion synthetic row changes at every subscriber would be ruinous. But when the ALTER changes stored values &mdash; a precision shrink that rounds, a USING expression that transforms &mdash; the skipped traffic is precisely the change. On the wire, a value-rewriting ALTER over a billion rows and no change at all are the same stream: silence.
+
+## Beat two: the one number that changed is not an OID
+
+There is exactly one downstream trace of the typmod-shrink case, and it is easy to mishandle. pgoutput re-describes a relation lazily &mdash; one RelationMessage immediately before the next row change &mdash; and after the ALTER, that message carries the column's new typmod (the parenthesized modifier: precision/scale, length). The type OID is unchanged: numeric(10,4) and numeric(10,1) are both just numeric. So the obvious relation-change classifier &mdash; compare each column's type OID against the last known schema &mdash; sees &ldquo;no change,&rdquo; and a consumer with a refuse-on-schema-change policy has no door for the one ALTER that already rewrote every row underneath it. That was sluice's gap through v0.131.5: the v0.132.0 fix is simply that the classifier compares typmods too, so refuse mode refuses loudly and forward mode's convergence (the target re-runs the same deterministic cast) is pinned end-to-end.
+
+## Beat three: the rewrite you provably can't detect
+
+Now remove the typmod change. ALTER COLUMN v TYPE int USING v*10 on an int column rewrites every value &mdash; and its post-rewrite RelationMessage is content-identical to the pre-rewrite one: same OID, same typmod, same everything. Observed directly: zero decoded messages, then a relation descriptor indistinguishable from the old. This class is not hard to detect &mdash; it is impossible from the stream, and only barely visible from the catalog: the rewrite allocates a new relfilenode (observed 16395 → 16402), but VACUUM FULL and CLUSTER allocate new relfilenodes too, without changing a single value, so even that signal can only ever be a heuristic WARN, never a classifier. The honest support statement for value-rewriting ALTERs is the drained model: stop the stream, apply the DDL on both sides, resume.
+
+## Coda: two representations of &ldquo;the column's type&rdquo;
+
+Comparing typmods still isn't the end, because a consumer holds two representations of a column's type &mdash; the raw catalog pair (OID, typmod) and the projected model it maps engines' types into &mdash; and they can disagree about whether anything changed. interval(p) and array-element typmods are visible to the raw compare but vanish in projection (the modeled type has no slot for them), so detection and forwarding split: the change classifies, yet there is no projected schema boundary to forward. sluice's v0.132.1 fast-follow settles this the only honest way &mdash; a detected change whose projected type is unchanged refuses under both modes, per column, with a catalog-derived enumeration gate holding the class closed. The same release closed a final wrinkle the review found: pgoutput coalesces DML-quiet back-to-back DDL into one RelationMessage of final state, so a DROP COLUMN paired with a projection-invisible ALTER classified as just the drop &mdash; and since dropping a middle column shifts every later ordinal, the old/new compare has to key on column name, not position, to see the surviving column's change at all.
+
+## The transferable lesson
+
+On the logical-replication wire, a rewrite of every stored row and no change at all are the same message stream. Every pgoutput consumer's schema-change story has to be built knowing that: classify relation changes from the full descriptor (typmods included, names as keys), treat a detected change you cannot faithfully forward as a refusal rather than a shrug &mdash; and state plainly that the same-type USING class is undetectable, so operators route those ALTERs through a drained window instead of trusting the stream. A companion fact makes the family complete: the RelationMessage is also lazy, so a schema change with no rows behind it emits nothing either &mdash; that note is about when the descriptor arrives; this one is about how much the descriptor can never say.
+
+## Primary sources
+
+- PostgreSQL documentation &mdash; ALTER TABLE &mdash; which forms rewrite the table, and the USING clause's arbitrary value transformation.
+
+- PostgreSQL documentation &mdash; logical replication message formats &mdash; the Relation message: name, OID, typmod, and key flag per column; nothing else, and no DDL messages at all.
+
+- sluice v0.132.0 and v0.132.1 changelogs &mdash; the typmod classifier fix (affected releases v0.99.45&ndash;v0.131.5, refuse mode), the refuse-under-both-modes gate for projection-invisible shapes, and the drained-model guidance for value-rewriting ALTERs.
+
+- Related field notes: An ALTER with no rows behind it is invisible to Postgres CDC &mdash; the emission-timing half of the same family; pgoutput won't tell you a column's DEFAULT &mdash; another thing the relation descriptor can never say.
+
+
+===============================================================
+# FOR ALL TABLES doesn't mean all tables
+(https://sluicesync.com/field-notes/for-all-tables-except-unlogged/)
+
+Postgres silently excludes UNLOGGED tables from a FOR ALL TABLES publication — no error, no NOTICE, the table simply never appears in pg_publication_tables — while a scoped FOR TABLE publication refuses the same table loudly. The asymmetry extends mid-sync: ALTER TABLE … SET UNLOGGED on a scoped-publication member errors, but under FOR ALL TABLES the identical flip succeeds and the table silently drops out of the stream. For a sync tool the trap composes with the cold copy, which does include unlogged tables: the target receives the snapshot, then freezes forever while everything reports green.
+
+Observed &mdash; the 2026-08-26 capture-completeness sweep, on real PostgreSQL 16: all four cells &mdash; the scoped refusal (cannot add relation "u" to publication &hellip; not supported for unlogged tables, for both CREATE PUBLICATION and ALTER &hellip; ADD), the silent FOR ALL TABLES exclusion, and the mid-life flip split: SET UNLOGGED refused on a scoped-publication member (cannot change table to unlogged because it is part of a publication) yet succeeding under FOR ALL TABLES. A census refusal (SLUICE-E-CDC-UNLOGGED-TABLE) shipped in sluice v0.132.0; the stated residuals are below.
+
+## Opposite failure modes for the same table
+
+Unlogged tables skip WAL &mdash; that is their entire performance proposition &mdash; and logical replication reads WAL, so an unlogged table can never be streamed. Fair enough. The surprise is that Postgres's two publication forms surface this constraint in opposite directions. Add the table to a scoped FOR TABLE publication and you get a loud, immediate refusal. Create a FOR ALL TABLES publication over a database containing the same table and you get&hellip; success. The unlogged table is silently absent from pg_publication_tables &mdash; no error, no NOTICE, nothing distinguishes &ldquo;excluded by rule&rdquo; from &ldquo;included&rdquo; except a catalog view you'd have to know to check. FOR ALL TABLES quietly means all tables that can be published, and the set difference is invisible at creation time.
+
+## The sharpest beat: refuse versus succeed on the identical ALTER
+
+The asymmetry has a mid-life form, and it is sharper. Run ALTER TABLE t SET UNLOGGED on a table that belongs to a scoped publication and Postgres refuses: cannot change table to unlogged because it is part of a publication. Run the identical statement under a FOR ALL TABLES publication and it succeeds &mdash; the membership rule simply re-evaluates, and the table drops out of the publication mid-stream. So the spanning form &mdash; the one whose name most sounds like a completeness guarantee &mdash; is the one where a persistence flip can silently de-scope a live replication stream, while the explicitly-scoped form gets the engine's own protection. Membership by rule re-evaluates as the world changes; membership by list is defended.
+
+## How a sync tool compounds it
+
+A sync tool's cold copy doesn't read publications &mdash; it censuses information_schema for base tables, and unlogged tables are base tables. So the composition is: the initial copy lands the table's rows on the target, the stream opens green, and every subsequent write to the unlogged table produces no WAL, hence no decoded message, ever. The target holds a plausible-looking snapshot that froze at cold-copy time. And once later logged transactions advance the durable resume position, the frozen window isn't lag that a restart could recover &mdash; it is permanent loss with a green stream over it. (The trigger-CDC lane has its own unlogged twist: capture triggers keep firing after a SET UNLOGGED flip, so live capture continues &mdash; but a crash empties the table via recovery truncation without firing the TRUNCATE trigger, so the change log never hears about the wipe.)
+
+## The doors, and the stated residuals
+
+sluice v0.132.0 turned the catalog check into a coded refusal: a relpersistence='u' census over the in-scope tables runs at spanning cold start and every warm resume (because of the mid-life flip), at backup --chain-slot's publication ensure, and pre-DDL on the scoped lane where PG's own error was previously the backstop; v0.132.2 added the schema add-table registration path. The residuals are stated rather than implied closed: a flip during a live streaming window is undetectable until the next open &mdash; the census cadence bounds the blindness, it cannot eliminate it &mdash; and backup incremental's scope-less CDC open runs no census, so a mid-chain flip is caught only by the next full backup.
+
+## The transferable lesson
+
+A membership rule and a membership list are different promises. FOR ALL TABLES reads like a stronger guarantee than an explicit table list, and it is actually a weaker one: it re-evaluates silently as tables change persistence, and the engine defends only the explicit form against membership-breaking DDL. When a system offers both a spanning rule and a scoped list, ask which one the engine actively protects &mdash; and when you rely on the rule, census the set difference yourself, on a cadence, because nothing will tell you when it grows. The same lesson from another angle: publication membership can change under a healthy stream, and Postgres considers that your problem to notice.
+
+## Primary sources
+
+- PostgreSQL documentation &mdash; CREATE PUBLICATION &mdash; temporary and unlogged tables cannot be part of a publication; FOR ALL TABLES membership is rule-based.
+
+- PostgreSQL documentation &mdash; CREATE TABLE &hellip; UNLOGGED &mdash; no WAL, crash truncation, and the replication exclusion.
+
+- sluice v0.132.0 changelog &mdash; the SLUICE-E-CDC-UNLOGGED-TABLE census and its door roster (v0.132.2 for the add-table door), with the residuals stated at the door.
+
+- Related field note: Two syncs, one publication &mdash; the other way a table silently leaves a publication while every health surface stays green.
+
+
+===============================================================
+# The replica you can't detect is the replica that loses your writes
+(https://sluicesync.com/field-notes/the-replica-you-cannot-detect/)
+
+A MySQL replica with log_replica_updates=OFF applies replicated writes without entering them in its own binlog, so CDC pointed at it silently misses the entire write stream the replica exists to carry — and GTID arithmetic (purged = executed − binlogged) turns the gap into a perpetual resnapshot loop. The probe that should refuse this configuration has a dialect trap of its own: on MariaDB, bare SHOW REPLICA STATUS lists only the default connection, so a named multi-source replica — on the fork that also defaults log_slave_updates to OFF — answers zero rows to every MySQL-style question.
+
+Observed &mdash; the 2026-08-26/27 capture-completeness sweep and its follow-up audit. Two linked mysql:8.0.46 containers (GTID auto-position, replica running log_replica_updates=OFF): the primary's INSERTs were SQL-visible on the replica while its binlog stayed untouched &mdash; position frozen at 197, SHOW BINLOG EVENTS listing only Format_desc and Previous_gtids &mdash; and a direct local write was logged. Separately, on real MariaDB 11.4, twice independently: a CHANGE MASTER 'conn1' TO &hellip; named connection returned zero rows to bare SHOW REPLICA STATUS. sluice's refusal shipped in v0.132.0 and was extended to MariaDB named connections in v0.132.1 &mdash; after a fresh audit found the day-old door narrower than its name.
+
+## Act one: the replica that loses your writes
+
+Pointing CDC at a read replica is the natural offload move, and everything checks out at first: the replica's SQL layer shows all the data, so the cold copy is perfect. But a replica's SQL thread and its binlog are separate circuits. With log_replica_updates=OFF &mdash; ON by default since MySQL 8.0.3, commonly turned off on tuned replicas to save write amplification, and OFF by default on MariaDB (as log_slave_updates) &mdash; replicated transactions are applied without being written to the replica's own binlog. A direct local write is logged; everything arriving from the primary is not. So a binlog consumer attached to that replica captures local writes only, and silently misses the entire replicated stream &mdash; which on a read replica is essentially all of the writes.
+
+GTID bookkeeping turns the quiet gap into visible churn with an invisible cause. The replicated GTIDs still enter gtid_executed &mdash; the server really did execute them &mdash; and gtid_purged is defined as executed minus what's still in the binlogs, so those GTIDs appear in gtid_purged immediately, not after retention expiry. A GTID-mode resume check therefore concludes its position was purged and triggers an automatic resnapshot &mdash; which completes, falls behind through the same hole, and resnapshots again, forever: a well-formed, healthy-looking loop, easily misdiagnosed as a retention problem, whose steady state is data loss. In file/position mode there is no tripwire at all &mdash; the stream just runs, silently incomplete, indefinitely.
+
+## Act two: the replica you can't detect
+
+The obvious refusal is a conjunction: the server is a configured replica and log updates are off. The second conjunct has a spelling split (MariaDB has no log_replica_updates at all &mdash; reading it errors &mdash; so a portable probe falls back to log_slave_updates, readable on both). It's the first conjunct that hides the trap. On MySQL, SHOW REPLICA STATUS returns one row per replication channel, multi-source included: the bare statement is channel-complete. On MariaDB, the identical statement reports only the default connection &mdash; and MariaDB's standard multi-source idiom is named connections (CHANGE MASTER 'conn1' TO &hellip;), which the bare form answers with zero rows. A statement that parses identically on both engines enumerates a different set on each.
+
+The conjunction of defaults is what makes this dangerous rather than merely quirky: the fork whose replicas invisibly answer &ldquo;I'm not a replica&rdquo; is the same fork that defaults log_slave_updates=0. The undetectable replica is the lossy replica. MariaDB's complete spelling is its own extension &mdash; SHOW ALL REPLICAS STATUS &mdash; which MySQL rejects with a 1064 syntax error, so a portable probe must run both spelling families and reason about which server it's talking to from which spellings answered: a bare-form success plus an ALL-form syntax error identifies a channel-complete MySQL, where the bare answer stands.
+
+## Act three: the door was narrower than its name, for exactly one release
+
+sluice v0.132.0 shipped the refusal (SLUICE-E-CDC-REPLICA-NO-LOG-UPDATES) at every CDC-open chokepoint, ground-truthed on the linked-pair experiment above. One release later, a fresh audit of that same code found act two: the probe used only the bare spellings, so a MariaDB named-connection replica &mdash; the exact silent-loss configuration the door exists to refuse &mdash; walked straight through it. v0.132.1 extends the probe with the ALL spellings, pins the MySQL-syntax-error toleration so it can never degrade the door, and pins the whole thing against a real named-connection MariaDB with an anti-vacuity floor asserting the bare form really does return zero rows for it. One stated residual survives: where a restricted role can't run any status spelling (MariaDB 10.5+ splits this under the REPLICA MONITOR privilege), the probe warns and passes rather than refusing a working configuration &mdash; a detector's honesty about its own reach.
+
+## The transferable lesson
+
+Two lessons, one per act. First: a replica shows you all the data and is still not a complete change source unless it re-logs what it applies &mdash; this is the MySQL-binlog member of a three-engine family, alongside Postgres trigger capture missing replica-role writes and the PG 16 standby's asymmetric source capabilities: three mechanisms, one shape, &ldquo;reads complete, change feed not.&rdquo; Second: dialect traps aren't confined to DDL. A status statement can parse identically on two engines and enumerate a different set on each &mdash; so an empty result is only meaningful if you know which question the server actually heard, and a preflight built on such a statement inherits the dialect's blind spot until someone audits the gate itself. The gates get audited too; that's the part that turned one release's blind spot into a pinned class.
+
+## Primary sources
+
+- MySQL reference &mdash; log_replica_updates &mdash; whether the replica writes replicated transactions to its own binary log; ON by default since 8.0.3.
+
+- MySQL reference &mdash; gtid_purged &mdash; the definition that makes the loop: GTIDs executed but no longer (or never) in the binlog.
+
+- MariaDB documentation &mdash; multi-source replication and SHOW REPLICA STATUS &mdash; named connections, the default-connection scope of the bare statement, and the SHOW ALL REPLICAS STATUS spelling.
+
+- sluice v0.132.0 and v0.132.1 changelogs &mdash; the refusal, the named-connection extension, and the verify-then-resnapshot guidance for anyone who was syncing from such a replica.
+
+- Related field notes: Your trigger-based CDC can't see replicated writes; The read replica is a better migrate source and a worse CDC source than the docs.
