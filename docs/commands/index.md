@@ -809,6 +809,8 @@ Flag · Purpose ·
 
 --capture-payload · full (default) / changed / minimal — how much of each row the trigger records. ·
 
+--capture-replicated-writes · Install the per-table capture triggers ENABLE ALWAYS so writes applied under session_replication_role = 'replica' are captured (row and truncate alike) &mdash; the native logical-replication subscriber topology: a locked-down primary you can't install anything on → a CREATE SUBSCRIPTION subscriber → sluice trigger-capture → elsewhere (ADR-0185). Default off: plain triggers capture origin writes only, and the replica-role shapes warn at setup and stream open. Refused (SLUICE-E-CDC-TRIGGER-ECHO-LOOP) when the source also carries sluice's own apply bookkeeping (sluice_cdc_state) &mdash; ENABLE ALWAYS triggers would re-capture another sluice sync's applied rows, an echo loop. The enablement posture is recorded and verified at every stream open; postgres-trigger only, and re-running setup without the flag reverts to plain origin-only triggers. ·
+
 --dry-run, -n · Print the DDL the command would apply and exit; no source-side state is modified. ·
 
     sluice trigger setup --dsn 'postgres://user:pass@host:5432/app' \
