@@ -6492,6 +6492,20 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine. The depth mark tells you what you're committing to — · quick note, •• field note, ● deep dive — and ★ marks the handful of flagship findings.
 
+- 2026-08-23SQLite & D1•• field note SQLite's format('%.17g') silently caps floats at 16 significant digits — SQLite's format() looks exactly like C's printf and silently isn't: its %g caps output at 16 significant digits &mdash; one short of the 17 a double needs to round-trip &mdash; and %.16g, %.17g, %.20g, %.25g all emit the same 16-digit render. ~46% of swept doubles came back a different double. Only the obscure ! flag lifts the cap.
+
+- 2026-08-22MySQL & Vitess•• field note Two MySQL replication wire formats disagree about padding — The classic binlog strips a fixed BINARY(N) column's trailing 0x00 padding, so CDC delivered 2 bytes where the snapshot delivered 8 &mdash; at exit 0. Vitess's VStream doesn't strip: full width on both its COPY and CDC legs, verified on a real cluster. The same tool needed opposite handling on its two MySQL replication lanes.
+
+- 2026-08-20MySQL & Vitess•• field note The same tool disagreed with itself about whether a TINYINT(1) is a boolean — MySQL's BOOL alias does not extend to UNSIGNED or AUTO_INCREMENT tinyint(1). The schema translator knew that; the VStream replication decoder answered the same question from the wire's own column_type string &mdash; and answered it differently. An auto-increment tinyint(1) primary key collapsed every value &ge;2 to 1 on the change stream, while the cold copy was correct.
+
+- 2026-08-19MySQL & Vitess•• field note TINYINT(1) is a display width, not a value constraint — MySQL's BOOL is an alias for TINYINT(1), but the (1) is a formatting hint &mdash; the column stores the full signed 8-bit range. A legacy column holding 0&ndash;6 collapsed to true under the boolean mapping, at exit 0. sluice WARNed &mdash; and carried the collapsed value anyway. A warning you don't stop on is a footnote on the corruption.
+
+- 2026-08-18Postgres•• field note A Postgres domain has a different type OID on each of the two wires — On a regular query's wire a domain column reports its base type's OID, so drivers decode it with zero special handling. On the logical-replication wire, pgoutput reports the domain's own dynamic OID &mdash; with typmod -1, so even a varchar(10) base loses its length. The same driver round-trips the whole cold copy, then halts on the first CDC row.
+
+- 2026-08-17Cross-cutting•• field note Pushing NOT through a quantifier is the wrong De Morgan — Postgres stores x NOT IN (1,2) as a negation over a quantifier; MySQL keeps not in. A canonicalizer that simplifies NOT by negating the operator is exact for scalars and invalid across ANY/ALL &mdash; NOT (x = ANY S) is x <> ALL S, not x <> ANY S &mdash; so schema diff certified a gutted NOT IN constraint as in sync.
+
+- 2026-08-14Cross-cutting•• field note The catalog rewrote round(x), and the target lacks the overload it wrote — MySQL doesn't store your CHECK (round(d) >= -100000) &mdash; it materializes the default scale into the text, round(d,0). PostgreSQL has round(double precision) and round(numeric, integer) but no round(double precision, integer), so the faithfully-carried constraint dies at CREATE TABLE with 42883. The identical CHECK on a DECIMAL column migrates fine &mdash; which is exactly why the test corpus missed it.
+
 - 2026-08-27MariaDB•• field note The forensics table MariaDB doesn't have — MySQL session forensics &mdash; which connected session holds a binlog_format override? &mdash; is a two-table JOIN on performance_schema.variables_by_thread. On MariaDB that query dies with ERROR 1146: &hellip; doesn't exist, with performance_schema ON or OFF, because MariaDB's performance_schema never implemented the table &mdash; while under the OFF default the tables it does have answer empty instead of erroring. A runbook ported by syntax detonates at exactly the mid-incident moment it's reached for.
 
 - 2026-08-23Postgres•• field note A long-open transaction anywhere freezes your trigger-CDC — A gap-free trigger-CDC poll emits only provably-settled rows &mdash; txid below the current snapshot's xmin. Any open write transaction anywhere on the server pins that xmin, so the poll returns zero rows and the stream logs healthy-idle while replication lag grows without bound. Nothing is lost and nothing is wrong &mdash; and nothing says it's happening: a pinned-xmin stall is byte-identical to a genuinely quiet source.
@@ -12943,3 +12957,270 @@ A query's precondition set differs by flavor even where its syntax parses identi
 - sluice v0.132.1 changelog &mdash; the remedy-text precondition for the MariaDB flavor.
 
 - Related field note: The replica you can't detect is the replica that loses your writes &mdash; the same lesson asked of a status statement instead of a catalog table.
+
+
+===============================================================
+# The catalog rewrote round(x), and the target lacks the overload it wrote
+(https://sluicesync.com/field-notes/catalog-rewrites-round/)
+
+MySQL doesn't store your CHECK (round(d) >= -100000) — it materializes the function's default scale into the text, round(d,0). PostgreSQL's overload set has round(double precision) and round(numeric, integer) but no round(double precision, integer), so the faithfully-carried constraint dies at CREATE TABLE with 42883. The identical CHECK on a DECIMAL column migrates fine — which is exactly why the test corpus missed it.
+
+Observed &mdash; a MySQL → Postgres migrate carrying a CHECK on a DOUBLE column, caught by sluice's post-release regression cycle (Bug 252) and fixed in v0.126.1. Measured on real MySQL 8.0 and PostgreSQL 16.
+
+## Two invisible hands collide
+
+Write CHECK (round(d) >= -100000) on a MySQL DOUBLE column and read it back from information_schema: the catalog does not store your spelling. MySQL materializes the function's default scale into the stored text &mdash; round(d,0). Carry that stored form faithfully to PostgreSQL and it hits the second invisible hand: PG resolves functions by overload set, and its two-argument round exists only for numeric. There is no round(double precision, integer), so CREATE TABLE fails:
+
+    ERROR: function round(double precision, integer) does not exist (SQLSTATE 42883)
+
+Neither engine did anything wrong. MySQL stored an equivalent expression; PostgreSQL enforced its type system. The migration died in the seam between two behaviors that are each fine alone &mdash; and schema preview had rendered the doomed DDL at exit 0 with &ldquo;advisory hints: 0&rdquo;.
+
+## Why the corpus missed it
+
+The identical constraint on a DECIMAL column migrates cleanly &mdash; round(numeric, integer) exists. So the migrate-then-diff test corpus, whose pinned representative for CHECK expressions happened to be a DECIMAL column, stayed green through the whole failure class. The family axis here is not the expression text at all &mdash; it is the column type's overload set on the target: identical tool code path, different per-type surface, the same shape as a driver whose per-OID codecs diverge under one dispatch. Pin the class, not the representative.
+
+## The fix is author-intent restoration, not translation
+
+sluice's fix (v0.126.1) strips only the zero scale the catalog added: round(x,0) → round(x), which is semantics-exact on both engines for every argument type &mdash; it merely restores the author's own spelling. A human-written non-zero scale is meaning, and passes through untouched: a CHECK (round(d, 2) > 0) on a DOUBLE column still fails loudly at CREATE with the same 42883, deliberately &mdash; silently rewriting it (say, by inserting a cast) would change the predicate's type arithmetic. The wider overload-gap surface is filed for measurement, not papered over.
+
+One more measured fact from the same read-back: PostgreSQL spells some casts in two words &mdash; ::double precision &mdash; so an expression canonicalizer that skips a single cast token leaves precision behind as a phantom identifier. SQL-standard multi-word type names are their own parsing class.
+
+## The transferable lesson
+
+The expression you wrote is not the expression the catalog stores, and the expression the catalog stores is a claim about one engine's function-resolution rules. Any tool that carries stored expression text across engines is carrying rewrites it never saw &mdash; and the safe move splits by provenance: undo the rewrites the catalog demonstrably added, and let everything the author wrote fail loudly where the target genuinely lacks it. The companion note shows the same catalog-rewrite mechanism one step worse: not a failed CREATE, but a schema diff that certified a gutted constraint as in sync.
+
+## Primary sources
+
+- PostgreSQL reference &mdash; mathematical functions &mdash; round(numeric, integer) is the only two-argument form.
+
+- MySQL reference &mdash; ROUND() &mdash; the default-scale semantics the catalog materializes.
+
+- sluice v0.126.1 changelog &mdash; the default-scale strip, and the deliberate loud passthrough for non-zero scales.
+
+- Related field notes: Pushing NOT through a quantifier is the wrong De Morgan &mdash; the same &ldquo;the catalog rewrote your expression&rdquo; mechanism, escalated to a silent false-clean.
+
+
+===============================================================
+# Pushing NOT through a quantifier is the wrong De Morgan
+(https://sluicesync.com/field-notes/not-across-a-quantifier/)
+
+Two catalogs store the same negated CHECK in different spellings, so a cross-engine diff has to canonicalize. But a canonicalizer that simplifies NOT by negating the comparison operator — exact for scalars — is invalid the moment a quantifier appears: NOT (x = ANY S) is x <> ALL S, not the x <> ANY S operator-negation produces. A correct NOT IN and a hand-gutted <> ANY canonicalized to the same string, and schema diff certified a hollowed-out constraint as in sync.
+
+Observed &mdash; sluice's schema diff CHECK-expression canonicalizer, measured on real MySQL 8.0 and PostgreSQL 16. The unsound fold shipped in v0.126.0 and was fixed in v0.127.0, so the false-clean window is v0.126.0&ndash;v0.126.2.
+
+## Two catalogs, two spellings
+
+Ask MySQL 8.0 and PostgreSQL 16 to store the same logical constraint and read both back. PG rewrites CHECK (x NOT IN (1,2)) into a negation over a quantified comparison and hands it back built from ANY/ALL over ARRAY[&hellip;]; MySQL's catalog keeps not in. PG expands x NOT BETWEEN a AND b to (x < a) OR (x > b); MySQL keeps not between. That divergence is why a cross-engine schema diff needs a canonicalizer at all: compare the stored strings raw and every negated CHECK reports phantom drift forever.
+
+## The algebra that quietly stops being sound
+
+The canonicalizer's NOT-pushdown simplified NOT (v = 5) to v <> 5 by negating the operator. For a scalar comparison that is exact &mdash; even under SQL's three-valued logic, since a NULL-involving comparison evaluates UNKNOWN identically on both sides of the rewrite, and a CHECK treats UNKNOWN as pass. Across a quantifier it is a different theorem, and the operator-negation answer is wrong: NOT (x = ANY S) is x <> ALL S. Negating just the operator produces x <> ANY S &mdash; a predicate that accepts the very rows the original rejects (for S = (1,2), the value 1 satisfies <> ANY because it differs from 2). De Morgan for quantifiers flips the quantifier, not just the operator.
+
+The consequence was the worst report a diff tool can make. A correct NOT IN constraint on one side and a hand-gutted <> ANY on the other both canonicalized to the same string, so schema diff reported no drift on a CHECK that had been hollowed out &mdash; a false all-clear that could authorize dropping the source constraint. Phantom drift wastes an afternoon; a false clean authorizes the destructive act.
+
+## Bail, don't be clever
+
+The fix is deliberately unclever: when either operand of the negated comparison leads with a quantifier keyword &mdash; ANY, ALL, SOME &mdash; the pushdown bails and leaves the NOT verbatim, so the two constraints compare as the different things they are. The failure direction flips from silent-false-match to spurious-difference, which is loud. The match is word-boundary-checked, so a column merely named anything or awesome still gets the ordinary scalar fold. And the genuinely-equivalent renderings are folded by dedicated, semantics-checked rules instead: PG's canonical <> ALL (ARRAY[&hellip;]) folds back to not in(&hellip;) &mdash; exact for the NULL-free literal list a CHECK carries &mdash; and NOT BETWEEN is expanded to match PG's stored form. Those two, plus exposing the MySQL-direction expression translator to diff, were only ever over-reports (phantom drift on a target the tool itself created) &mdash; the quantifier fold was the one member of the family that failed silent.
+
+## The transferable lesson
+
+A canonicalizer is a proof engine that somebody built under deadline: every fold is a claimed theorem, and the claim's scope is the part nobody writes down. &ldquo;Simplify NOT by negating the operator&rdquo; is true right up until the operand grammar grows a quantifier, and an over-eager fold in a comparison tool converts real difference into &ldquo;no drift&rdquo; &mdash; the exact inversion of the tool's job. When a rewrite's soundness depends on the operand's shape, gate the rewrite on the shape and default to bailing verbatim: in a diff, a spurious difference is an annoyance, and a spurious equality is a data-loss authorization. The companion note is the same catalog-rewrite seam failing loud instead: an expression the catalog rewrote into a form the target cannot even execute.
+
+## Primary sources
+
+- PostgreSQL reference &mdash; row and array comparisons &mdash; ANY/ALL semantics; NOT IN's relationship to <> ALL.
+
+- MySQL reference &mdash; CHECK constraints &mdash; the catalog stores a normalized rendering of the expression.
+
+- sluice v0.127.0 changelog &mdash; the quantifier bail, the negation-sibling folds, and the false-clean window (v0.126.0&ndash;v0.126.2).
+
+- Related field notes: The catalog rewrote round(x) &mdash; the loud member of the same family; One predicate, two engines &mdash; a different two-evaluator seam: the filter predicate rather than the stored constraint.
+
+
+===============================================================
+# A Postgres domain has a different type OID on each of the two wires
+(https://sluicesync.com/field-notes/pg-domain-two-wire-oids/)
+
+On a regular query's wire, a domain column reports its base type's OID, so a driver decodes it with zero special handling. On the logical-replication wire, pgoutput reports the domain's own dynamic OID — with typmod -1, so even a varchar(10) base loses its length. The same driver round-trips the entire cold copy and then halts on the first CDC row.
+
+Observed &mdash; sluice's Postgres CDC reader against domain-typed source columns (Bug 254 and the Bug 233 class), fixed across v0.128.0&ndash;v0.128.1. The regular-query half is pinned in-tree against real PostgreSQL over a base-type matrix; the replication half is pinned by a real-PG CDC round-trip test.
+
+## The cliff
+
+A PostgreSQL domain is a named constraint wrapper over a base type &mdash; CREATE DOMAIN usd_money AS money &mdash; ordinary, standard SQL. Sync a table that uses one and you get a clean operational cliff: the bulk cold copy of every row succeeds byte-for-byte, and the very first change that arrives over CDC kills the stream:
+
+    postgres: cdc: unsupported column type OID <n> (typmod -1)
+
+Same database, same column, same tool. The difference is which wire the value traveled on.
+
+## Wire one: a regular query erases the domain
+
+On the ordinary query protocol, PostgreSQL reports the base type's OID in the RowDescription for a domain column &mdash; a domain over int comes across as OID 23, the builtin int4, never the domain's own OID. A driver like pgx picks its codec by that reported OID, so it decodes and encodes the column as its base type with zero special handling: on this wire the domain is erased before any codec is chosen, and the cold copy is byte-identical to a bare base-type column. (sluice pins this fact against real PostgreSQL across a matrix of base types &mdash; including a domain over a domain &mdash; asserting the reported OID is the base's and is a builtin, because the entire value-safety argument of the copy path rests on it.)
+
+## Wire two: logical replication keeps the domain
+
+pgoutput does the opposite. A RelationMessage carries the domain column's own OID &mdash; the dynamic one Postgres assigned at CREATE DOMAIN time, typtype='d' in pg_type, unique per database &mdash; and reports the column's typmod as -1. So the replication wire strips the two things a decoder needs at once: the OID matches no built-in codec, and even a DOMAIN &hellip; AS varchar(10) has lost its length &mdash; the (10) lives only in pg_type.typtypmod, recoverable from the catalog and never off the wire. That dynamic OID is what the decoder hit, and why the halt names an OID your driver has never heard of.
+
+The fix is the wire-side analogue of what schema readers already do: resolve the domain OID to its base through pg_type.typbasetype, carry the base's modifier from the catalog since the wire discarded it, flatten a domain-over-domain chain, and route a domain over an enum or array through those existing arms. Mutation-testing the fix &mdash; disabling the resolve arm &mdash; reproduces the exact halt.
+
+## The third answer: your own schema model
+
+Underneath both wires sits a third representation: the catalog's declared type, which a tool's schema reader surfaces as the domain wrapper itself. sluice found roughly a dozen internal sites that dispatched on that declared wrapper &mdash; a wrapper neither wire path ever sends &mdash; with consequences spanning the whole severity spectrum from one root cause: an over-refusal (--where filters rejected on domain columns), a mis-render (a domain over cidr shown as inet), and genuinely silent corruption (a domain over int skipping an integer-overflow redaction preflight; a domain over geometry wrongly eligible for a raw byte-pipe, its parquet export dropping the CRS so projected meters read back as degrees). Every such site now unwraps to the storage type, and a build-failing gate walks for the next dispatch site that forgets.
+
+## The transferable lesson
+
+One logical type wears three different clothes: its base OID on the query wire, its own dynamic OID on the replication wire, its wrapper in the catalog. Code that keys on any one of them silently disagrees with code that keys on another &mdash; and the disagreement surfaces at the worst seam, where the cold copy (one wire) has already succeeded and the ongoing stream (the other wire) is what dies. If you build against logical replication, test a domain-typed column explicitly: it is standard SQL, it is invisible on every query-path test you will ever write, and the replication wire is the one place Postgres refuses to flatten it for you.
+
+## Primary sources
+
+- PostgreSQL reference &mdash; CREATE DOMAIN.
+
+- PostgreSQL reference &mdash; logical replication protocol &mdash; the RelationMessage carries the column's type OID as stored, domains included.
+
+- PostgreSQL reference &mdash; pg_type &mdash; typtype='d', typbasetype, typtypmod: the only place the base and its modifier can be recovered.
+
+- sluice v0.128.0 / v0.128.1 changelogs &mdash; the schema-dispatch unwrap and gate; the CDC wire-OID resolve (Bug 254).
+
+- Related field note: pgoutput won't tell you a column's DEFAULT &mdash; another thing the replication wire withholds that the catalog knows.
+
+
+===============================================================
+# TINYINT(1) is a display width, not a value constraint
+(https://sluicesync.com/field-notes/tinyint1-display-width/)
+
+MySQL's BOOL and BOOLEAN are aliases for TINYINT(1), so every migration tool reads TINYINT(1) as a boolean — and the (1) is a formatting hint, not a range. The column stores the full signed 8-bit range, so a legacy column holding 0–6 collapsed to true under the boolean mapping, at exit 0. sluice WARNed — and carried the collapsed value anyway. And on the VStream wire, --type-override structurally cannot fix it.
+
+Observed &mdash; a real user's field report: a migrate of two TINYINT(1) columns holding values 0&ndash;6 exited 0 with every value rewritten to 1. Hardened in sluice v0.130.0. A TINYINT(1) that genuinely holds only 0/1 never triggered this and is unaffected &mdash; and the rows the old behavior had already copied held genuine 0/1 and were correct; the loss was confined to columns actually holding out-of-range values.
+
+## The display-width trap
+
+MySQL has no distinct boolean type: BOOL and BOOLEAN are aliases for TINYINT(1), so reading TINYINT(1) as a boolean is what the type means 99% of the time, and every MySQL-aware tool does it. But the (1) is a display width &mdash; a client formatting hint, deprecated in MySQL 8 &mdash; not a constraint. The column physically stores the full signed 8-bit range, &minus;128..127. So a column some developer declared TINYINT(1) years ago and used as a small enum &mdash; status 0..6 &mdash; is boolean-by-convention only, and the convention is wrong for exactly that column. The boolean decode collapses every non-zero value to true: 0&ndash;6 became 0/1, at exit 0, in values no target could refuse.
+
+## We warned, and lost the data anyway
+
+The sharp part: sluice already detected this. It emitted a WARN naming the column &mdash; and then carried the collapsed value. The warning scrolled past in the output of a migration that &ldquo;succeeded.&rdquo; A warning you don't stop on is not a safeguard; it is a footnote on the corruption. v0.130.0 turns it into a hard refusal (SLUICE-E-VALUE-TINYINT1-RANGE) at the first value outside {0,1}, on every read path &mdash; bulk copy, binlog CDC, VStream CDC and cold start, and the flat-file source &mdash; before the row is written. And because a large multi-table copy would otherwise hit the bad row hours in, a fail-fast preflight probes each mapped column at planning time &mdash; &hellip; WHERE col NOT IN (0,1) LIMIT 1, capped with a MAX_EXECUTION_TIME hint so a clean unindexed column never pays a full table scan &mdash; and refuses before any target table is created.
+
+## The twist: the wire decides, not your override
+
+The printed remedy leads with &ldquo;change the source column's type&rdquo; (ALTER TABLE &hellip; MODIFY col SMALLINT) rather than the more convenient --type-override col=smallint, and the reason has transfer value. The override rewrites the declared schema the ordinary read paths decode with, and on those paths it works. But on a PlanetScale/Vitess source, the VStream cell decoder types the column from the replication wire's own column_type string &mdash; the wire says tinyint(1), so the wire decides boolean, and no schema-side override reaches that decision. The layer where a value's type is decided is not always the layer where you configured it.
+
+## The transferable lesson
+
+A display width is metadata wearing a constraint's clothes. &ldquo;The type says boolean&rdquo; is a convention you must be able to falsify against the data &mdash; one bounded probe per mapped column buys that &mdash; and a warning that doesn't halt anything is a claim your pipeline makes to nobody. This note's companion, the same tool disagreeing with itself about the same column type, picks up one layer down: even deciding whether a given tinyint(1) is a boolean turns out to have two answers inside one tool, and the two drifted. See also the warning your own next statement erases &mdash; MySQL telling you about a coercion in a way that doesn't stick is the engine-side member of the same family.
+
+## Primary sources
+
+- MySQL reference &mdash; numeric type syntax &mdash; BOOL/BOOLEAN as TINYINT(1) aliases; display width as a formatting hint, deprecated in 8.0.
+
+- sluice v0.130.0 changelog &mdash; the field report, the refusal on every read path, and the bounded preflight.
+
+- Related field notes: The same tool disagreed with itself about whether a TINYINT(1) is a boolean &mdash; the companion, one layer down; Your own next statement erases the warning.
+
+
+===============================================================
+# The same tool disagreed with itself about whether a TINYINT(1) is a boolean
+(https://sluicesync.com/field-notes/tinyint1-two-authorities/)
+
+MySQL's BOOL alias does not extend to UNSIGNED or AUTO_INCREMENT tinyint(1) — those are integers. The schema translator knew that; the VStream replication decoder answered the same yes/no question from a different input, the wire's own column_type string, and answered it differently. An auto-increment tinyint(1) primary key silently collapsed every value ≥2 to 1 on the change stream — while the cold copy of the same table was correct.
+
+Observed &mdash; sluice's Vitess/PlanetScale VStream decode path, found by a post-release audit of v0.130.0 and ground-truthed on real MySQL 8.0.46; fixed in v0.130.1. The blast radius is deliberately stated narrowly: it takes an AUTO_INCREMENT or UNSIGNED tinyint(1) actually holding values &ge;2 (an auto-increment PK is the realistic shape), and only the VStream replication lane &mdash; the cold copy, and non-Vitess binlog sources, typed the column from the schema and were correct. Ordinary signed 0/1 boolean columns were never affected.
+
+## The boundary everyone forgets
+
+MySQL's BOOL-is-TINYINT(1) convention has edges: an UNSIGNED or AUTO_INCREMENT tinyint(1) is an integer in every practical sense &mdash; a primary key can perfectly well be TINYINT(1) AUTO_INCREMENT, and it stores and serves the full range, not {0,1}. sluice's schema translator got this right. Its VStream replication decoder answered the same yes/no question &mdash; is this column a boolean? &mdash; from a different input: the wire's column_type DDL string, through a rule that accepted tinyint(1) unsigned as boolean and never consulted the wire's AUTO_INCREMENT flag at all. Two authorities, one question, and they agreed everywhere except the columns that matter.
+
+## What the drift did
+
+An auto-increment tinyint(1) PK keeps its tinyint(1) spelling on the wire, so the decoder called it boolean and collapsed every value &ge;2 to 1 &mdash; merging distinct primary keys into one row on a MySQL-family target &mdash; and it did this only on the change stream. The cold copy of the same table, typed from the schema, was correct: the table diverged from itself the moment CDC took over. Then the kicker: v0.130.0's brand-new TINYINT(1) out-of-range refusal fires on the decoded value &mdash; so sitting on the mis-decode, it false-refused those same legitimate integer columns, asserting a boolean mapping sluice doesn't actually make for them. A guard is only as correct as the decode beneath it; layer a validity check on the wrong authority and it inherits the error, loudly.
+
+## One question, one function
+
+The fix is structural, not another patch to the string rule: a single shared predicate &mdash; display width 1, signed, non-auto-increment &mdash; that both the schema translator and the VStream decoder consult, the decoder feeding it unsigned parsed from the wire's column_type and auto-increment from the wire's field flags. A matrix gate pins decode-verdict == schema-verdict over {signed/unsigned} &times; {auto-increment/not} &times; zerofill &times; width, and fails the build if the two authorities ever diverge again. The tell worth stealing from the diff: a unit test was already green on the buggy behavior &mdash; it pinned tinyint(1) unsigned → bool as the expected result. A stale test doesn't just miss a bug; it certifies it.
+
+One premise deserved and got its own proof: the fix trusts the wire to say a column is auto-increment. A later end-to-end run against a real Vitess 24 cluster confirmed it measured, not inferred &mdash; the FIELD event for the auto-increment column carried the auto-increment flag bit set (Flags 49667, bit 512), the plain tinyint(1) carried it unset (32769) &mdash; so the wire genuinely distinguishes the two shapes.
+
+## The transferable lesson
+
+When a system answers the same type question in two places from two inputs &mdash; the declared schema here, the replication wire's DDL string and flags there &mdash; the answers will drift, and the drift lands exactly on the boundary cases the alias's fine print excludes. If a decision must be made twice, it must be made by one function, and a gate should hold the two call sites to it. The companion note is the same column type one layer up &mdash; whether TINYINT(1)-means-boolean is even true of your data; this one is whether your own tool holds a single opinion about it.
+
+## Primary sources
+
+- MySQL reference &mdash; numeric type syntax &mdash; the BOOL alias and its TINYINT(1) equivalence.
+
+- Vitess reference &mdash; VStream &mdash; FIELD events carry column_type and MySQL column flags.
+
+- sluice v0.130.1 changelog &mdash; the shared predicate, the false-refuse regression it also closes, and the divergence-pinning matrix gate.
+
+- Related field notes: TINYINT(1) is a display width, not a value constraint &mdash; the companion note; The same unsigned primary key is int64 to one reader and uint64 to the other &mdash; two readers disagreeing about the same column at the Go-type layer.
+
+
+===============================================================
+# Two MySQL replication wire formats disagree about padding
+(https://sluicesync.com/field-notes/binlog-strips-binary-padding/)
+
+MySQL right-pads a fixed BINARY(N) column to exactly N bytes, and a SELECT returns all N. The classic binlog's ROW image strips the trailing 0x00 padding, so BINARY(8) holding 0xDEAD000000000000 traveled the CDC wire as 2 bytes — snapshot 8 bytes, every later change 2, at exit 0. Vitess's VStream doesn't strip: full width on both its COPY and CDC legs, verified on a real cluster. The same tool needed opposite handling on its two MySQL replication lanes.
+
+Observed &mdash; sluice's MySQL binlog CDC lane, caught by an adversarial value-fidelity corpus and fixed in v0.131.1. The loss was confined to the classic-binlog CDC lane &mdash; the bulk-copy/snapshot and flat-file lanes carry the full padded width &mdash; and only values with trailing 0x00 bytes strip visibly: 0xDEAD00&hellip; collapses, an all-non-NUL value survives untouched.
+
+## The per-lane loss
+
+MySQL's BINARY(N) is fixed-width: the server right-pads every inserted value to exactly N bytes with 0x00, and a SELECT hands back all N. You would expect a change-data-capture stream of the same column to carry N bytes too. The classic binlog does not: the ROW image serializes a fixed BINARY column as MYSQL_TYPE_STRING in length-prefixed form with the trailing NUL padding stripped, so BINARY(8) holding 0xDEAD000000000000 travels as the two bytes 0xDEAD. On a MySQL → Postgres continuous sync that produced an exit-0 divergence between the two legs of the same migration &mdash; the initial snapshot landed all 8 bytes, every later CDC change landed 2 &mdash; with no error anywhere. One code path corrupts a value family its sibling path round-trips: the per-lane shape that no green test on the other lane will ever catch.
+
+## Why the reconstruction is safe &mdash; and exactly where it stops
+
+The fix re-pads a short fixed-BINARY value back to its declared width, and it is worth being precise about why that is reconstruction rather than guessing: a BINARY(N) column's semantic value is by definition exactly N bytes &mdash; MySQL right-padded it at INSERT &mdash; so appending 0x00 up to N restores what the server stores, byte for byte. (Debezium applies the same re-pad for the same reason.) The boundary matters just as much: VARBINARY and BLOB are never padded, because there a short value is a real short value and padding would be the corruption. Even the degenerate edge behaves: an all-zeros BINARY(8) arrives fully stripped &mdash; an empty, non-NULL value &mdash; and re-pads to eight zero bytes.
+
+## The twist: VStream never stripped
+
+The sharper half came from testing the fix's sibling lane on a real PlanetScale cluster: Vitess's VStream does not strip. A trailing-zeros BINARY(8) inserted mid-CDC arrived byte-exact at full width on both the COPY leg and the CDC leg &mdash; and it did so on the pre-fix binary too, so VStream never had the loss. Vitess did not share this bug; the defensive width-guard sluice added on that lane is a confirmed no-op. Which means the same tool, reading &ldquo;MySQL&rdquo; replication, needed opposite handling on its two lanes: re-pad on the classic binlog, hands off on VStream &mdash; a padding convention one wire format strips and the other preserves.
+
+## The transferable lesson
+
+&ldquo;It's all MySQL replication&rdquo; is a trap. The classic binlog ROW image and Vitess's VStream are different wire formats with different value-encoding decisions, even when they describe the same server storing the same bytes &mdash; and a green corpus on one lane says nothing about the other. Test each replication lane against the real server it reads, with values chosen to expose the encoding (trailing NULs here), and when you patch one lane, run the probe on the sibling before assuming it needs the same patch: the answer here was that it demonstrably didn't.
+
+## Primary sources
+
+- MySQL reference &mdash; BINARY and VARBINARY &mdash; fixed-width 0x00 right-padding on INSERT.
+
+- Debezium MySQL connector documentation &mdash; the same re-pad applied to fixed BINARY columns from the binlog.
+
+- sluice v0.131.1 changelog &mdash; the corpus finding (BINARY(8): 8 bytes via snapshot, 2 via CDC), the re-pad, and the real-PlanetScale verification that VStream delivers full width on both legs.
+
+- Related field notes: The identical code path that flattened numeric[][] &mdash; the founding member of the per-lane / per-family divergence class; parseTime governs the query protocol, not the binlog &mdash; another value-encoding decision the binlog makes on its own.
+
+
+===============================================================
+# SQLite's format('%.17g') silently caps floats at 16 significant digits
+(https://sluicesync.com/field-notes/sqlite-format-16-digit-cap/)
+
+format('%.17g', x) is the textbook way to render a double as text that reads back exactly — 17 significant digits is the IEEE-754 round-trip guarantee, and C's printf has honored it for decades. SQLite's format() looks exactly like C's printf and silently isn't: its %g conversion caps output at 16 significant digits, one short of what a double needs, and %.16g, %.17g, %.20g, %.25g all emit the same 16-digit render. ~46% of swept doubles came back a different double. Only the obscure ! flag lifts the cap.
+
+Observed &mdash; sluice's SQLite/D1 trigger-CDC value capture, caught by an adversarial value-fidelity corpus on its first trigger-CDC run and fixed in v0.131.2. Measured on modernc's bundled SQLite 3.53.3 and on real Cloudflare D1: 2295 of 5007 swept doubles (~46%) fail to round-trip through %.17g. The pure Go-side renders (strconv, the flat-file and parquet writers) were never affected; the exposure was the paths that rebuild a REAL's text inside the engine &mdash; the capture triggers and the D1 cold-start projection that reuses the same format() expression.
+
+## The guarantee everyone leans on
+
+Rendering a binary64 double with 17 significant digits guarantees the text reads back to the identical double &mdash; that is IEEE-754 arithmetic, and printf("%.17g") is its canonical spelling. Trigger-based CDC on SQLite has to render values in SQL, inside the trigger, so sluice's capture expression leaned on exactly that: format('%.17g', col) for every REAL column. SQLite's format() documents itself as a printf-style function, and for most conversions it is one.
+
+## The cap
+
+Not for %g. SQLite's own printf implementation caps floating-point output at 16 significant digits. The precision spec is honored below the cap and clamped at it: %.15g gives you 15 digits, but %.16g, %.17g, %.20g, and %.25g all emit the same 16-digit render &mdash; one digit short of what a double needs. So format('%.17g', 0.30000000000000004) returns "0.3", and a 17-digit-shaped value comes back as the 16-digit "0.1234567890123457" &mdash; a different double, in a value no target could refuse, at exit 0. And at the magnitude extreme it stops being silent: 16-digit rounding pushes the maximum double up, rendering "1.797693134862316e+308" &mdash; out of range, killing the stream loudly at decode. A worth-admitting coda: sluice's first shipped explanation blamed a SQLite 3.43 rewrite of format(), and that was wrong &mdash; direct experiment showed precision is honored below the cap and clamped at it, longstanding printf behavior, so %.17g was never lossless here. Even the postmortem needed the experiment.
+
+How it hid: the old regression test pinned one representative value &mdash; &pi;, whose shortest representation is exactly 16 digits &mdash; and stayed green straight through the loss. The corpus that caught it swept the worst-case doubles of the family against the real engine.
+
+## The one-character fix, and its version story
+
+The escape is a SQLite-specific spelling most people have never needed: the alternate-form-2 flag. format('%!.20g', col) lifts the cap (from 16 to 26 significant digits), and the same 5007-double sweep then measures 0 misses &mdash; on modernc's SQLite and on real D1. The obvious worry &mdash; what does ! do on an older SQLite? &mdash; has an unusually clean answer: the ! handling in SQLite's printf predates the SQL-level printf() function itself (added 3.8.3 in 2014, renamed format() in 3.38.0), so no shipped SQLite has the function without honoring the flag &mdash; a library too old to honor ! is too old to have the function, and fails the write loudly with &ldquo;no such function&rdquo; rather than silently clamping. sluice still doesn't take that on faith at runtime: a render-fidelity probe runs the production capture expression over a 17-digit double on the connected engine at every stream open and refuses on a clamp, and a capture-shape door refuses an installed trigger still carrying the old lossy body &mdash; so a stale install can't keep capturing wrong. The one residual, named in the code: a third-party application's own SQLite library firing a local capture trigger renders with that library's printf, which no probe from sluice's process can grade.
+
+## The transferable lesson
+
+A printf-style precision spec is an engine behavior, not a language constant &mdash; a function that borrows printf's syntax has not thereby promised printf's semantics, and the divergence hides precisely because the format string parses identically. If you serialize floats through a database's own string-formatting function, round-trip the worst-case double of the family against the real engine and version &mdash; a representative value that happens to fit 16 digits proves nothing &mdash; and keep a negative control in the gate so the question reopens if the engine changes again.
+
+## Primary sources
+
+- SQLite documentation &mdash; the built-in printf &mdash; the 16-significant-digit behavior and the ! alternate-form-2 flag for floating point.
+
+- SQLite documentation &mdash; format() &mdash; added as printf() in 3.8.3, renamed format() in 3.38.0.
+
+- sluice v0.131.2 changelog &mdash; the corpus finding (2295/5007), the %!.20g capture expression, and the capture-shape door; v0.131.4 &mdash; the render-fidelity probe and the version-history bound on the ! flag.
+
+- Related field notes: SQLite's DECIMAL is a suggestion &mdash; the reader-side float-rendering trap on the same lane; Postgres rounds your fractional seconds through a C double &mdash; another engine's float-rendering seam.
