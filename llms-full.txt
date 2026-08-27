@@ -6490,13 +6490,21 @@ None of these require sluice to reproduce — they are properties of Postgres, M
 
 They're listed newest first, each dated to roughly when the work landed in sluice. The engine tag is just a signpost — the primary ordering is chronological, not by engine. The depth mark tells you what you're committing to — · quick note, •• field note, ● deep dive — and ★ marks the handful of flagship findings.
 
-- 2026-08-27MySQL & MariaDB•• field note The replica you can't detect is the replica that loses your writes — With log_replica_updates=OFF, a MySQL replica applies replicated writes without entering them in its own binlog &mdash; the cold copy is perfect, and the CDC tail silently misses the entire write stream the replica exists to carry. GTID arithmetic makes it churn rather than lag: purged = executed &minus; binlogged, so the replicated GTIDs look purged instantly and every resume triggers a fresh resnapshot, forever. And the probe that should catch it hits a dialect trap: on MariaDB, bare SHOW REPLICA STATUS lists only the default connection &mdash; a named multi-source replica answers &ldquo;I'm not a replica&rdquo; to every MySQL-style question.
+- 2026-08-27MariaDB•• field note The forensics table MariaDB doesn't have — MySQL session forensics &mdash; which connected session holds a binlog_format override? &mdash; is a two-table JOIN on performance_schema.variables_by_thread. On MariaDB that query dies with ERROR 1146: &hellip; doesn't exist, with performance_schema ON or OFF, because MariaDB's performance_schema never implemented the table &mdash; while under the OFF default the tables it does have answer empty instead of erroring. A runbook ported by syntax detonates at exactly the mid-incident moment it's reached for.
+
+- 2026-08-23Postgres•• field note A long-open transaction anywhere freezes your trigger-CDC — A gap-free trigger-CDC poll emits only provably-settled rows &mdash; txid below the current snapshot's xmin. Any open write transaction anywhere on the server pins that xmin, so the poll returns zero rows and the stream logs healthy-idle while replication lag grows without bound. Nothing is lost and nothing is wrong &mdash; and nothing says it's happening: a pinned-xmin stall is byte-identical to a genuinely quiet source.
+
+- 2026-08-22MySQL & Vitess•• field note Go's zero time.Time is a live wire against MySQL — go-sql-driver/mysql serializes any IsZero() instant as MySQL's invalid '0000-00-00' sentinel &mdash; and Postgres happily stores year-1 dates, which decode in Go to exactly time.Time{}. So a legitimate '0001-01-01' either false-refuses under strict sql_mode with an error naming a value the source never held, or lands silently rewritten under a relaxed one.
+
+- 2026-08-17MySQL & Vitess•• field note The same unsigned primary key is int64 to one reader and uint64 to the other — A match key bridging two readers of the same MySQL table must survive the readers decoding the same unsigned PK to different Go types &mdash; int64 on the binary protocol, uint64 from VStream. So the obvious hardening, a %T type tag on the key, is exactly backwards: it would split every unsigned PK and silently miss the repair. The bug that did ship was quieter still &mdash; a composite key joined by a bare NUL let two distinct rows collide, writing one row's floats into the other row's archived record, in a backup that verifies green.
+
+- 2026-08-27MySQL & MariaDB● deep dive The replica you can't detect is the replica that loses your writes — With log_replica_updates=OFF, a MySQL replica applies replicated writes without entering them in its own binlog &mdash; the cold copy is perfect, and the CDC tail silently misses the entire write stream the replica exists to carry. GTID arithmetic makes it churn rather than lag: purged = executed &minus; binlogged, so the replicated GTIDs look purged instantly and every resume triggers a fresh resnapshot, forever. And the probe that should catch it hits a dialect trap: on MariaDB, bare SHOW REPLICA STATUS lists only the default connection &mdash; a named multi-source replica answers &ldquo;I'm not a replica&rdquo; to every MySQL-style question.
 
 - 2026-08-26Postgres•• field note FOR ALL TABLES doesn't mean all tables — Unlogged tables write no WAL, so logical replication can't stream them &mdash; and Postgres's two publication forms handle that in opposite directions: a scoped FOR TABLE publication refuses an unlogged table loudly, while FOR ALL TABLES silently leaves it out of pg_publication_tables. Mid-sync it's sharper: SET UNLOGGED on a scoped member errors; under FOR ALL TABLES the identical flip succeeds and the table silently drops out of the stream &mdash; after the cold copy included it, so the target freezes at the snapshot forever while everything reports green.
 
-- 2026-08-26Postgres•• field note Postgres never logically decodes a table rewrite — A typmod-only ALTER COLUMN &hellip; TYPE numeric(10,1) on a numeric(10,4) column rewrites the whole table &mdash; rounding every stored value &mdash; while the replication slot decodes zero messages: Postgres rewrites into a transient relation that logical decoding deliberately skips. The only wire artifact is one number (the typmod) in the next RelationMessage, invisible to a classifier that compares type OIDs. And the same-type USING rewrite is strictly worse: content-identical on the wire, provably undetectable from the stream.
+- 2026-08-26Postgres● deep dive Postgres never logically decodes a table rewrite — A typmod-only ALTER COLUMN &hellip; TYPE numeric(10,1) on a numeric(10,4) column rewrites the whole table &mdash; rounding every stored value &mdash; while the replication slot decodes zero messages: Postgres rewrites into a transient relation that logical decoding deliberately skips. The only wire artifact is one number (the typmod) in the next RelationMessage, invisible to a classifier that compares type OIDs. And the same-type USING rewrite is strictly worse: content-identical on the wire, provably undetectable from the stream.
 
-- 2026-08-26MySQL & Vitess•• field note MySQL never binlogs the cascade — Delete a parent row with ON DELETE CASCADE children and MySQL's binlog carries exactly one event: the parent's. The cascaded child deletes are never logged &mdash; the replica is expected to re-run the cascade through its own FK definitions. But nearly every CDC applier disables FK enforcement on apply, precisely to be free of row ordering &mdash; switching off exactly the mechanism MySQL delegated the cascade to. Child rows silently survive at exit 0; of four common target postures, only an unprivileged Postgres converges, by accident of privilege. Postgres WAL-logs its cascades; none of this arises there.
+- 2026-08-26MySQL & Vitess● deep dive MySQL never binlogs the cascade — Delete a parent row with ON DELETE CASCADE children and MySQL's binlog carries exactly one event: the parent's. The cascaded child deletes are never logged &mdash; the replica is expected to re-run the cascade through its own FK definitions. But nearly every CDC applier disables FK enforcement on apply, precisely to be free of row ordering &mdash; switching off exactly the mechanism MySQL delegated the cascade to. Child rows silently survive at exit 0; of four common target postures, only an unprivileged Postgres converges, by accident of privilege. Postgres WAL-logs its cascades; none of this arises there.
 
 - 2026-08-26MariaDB•• field note MariaDB's log_bin_compress makes the binlog size-conditional — Turn on MariaDB's log_bin_compress and the binlog becomes size-conditional: any row image &ge; log_bin_compress_min_len (256 B default) travels as a MARIADB_*_ROWS_COMPRESSED_EVENT_V1 &mdash; three event types most consumers' switches don't enumerate &mdash; while smaller rows keep the plain types. A consumer with a silent default arm loses rows conditioned on their size: small rows kept, big rows gone, and the GTID fold still advances the resume position past the loss. All three verbs &mdash; a big row's DELETE compresses too, via its before-image.
 
@@ -12778,3 +12786,158 @@ Two lessons, one per act. First: a replica shows you all the data and is still n
 - sluice v0.132.0 and v0.132.1 changelogs &mdash; the refusal, the named-connection extension, and the verify-then-resnapshot guidance for anyone who was syncing from such a replica.
 
 - Related field notes: Your trigger-based CDC can't see replicated writes; The read replica is a better migrate source and a worse CDC source than the docs.
+
+
+===============================================================
+# The same unsigned primary key is int64 to one reader and uint64 to the other
+(https://sluicesync.com/field-notes/same-pk-two-go-types/)
+
+sluice's backup float repair matches rows across two readers of the same MySQL table — the exact-scan query reader and the VStream COPY decoder — and they hand back the same unsigned-integer primary key as different Go types. So the type tag you'd reach for to harden the match key is precisely the wrong move: it would split int64 from uint64 and silently miss the repair for every unsigned PK. The collision that did ship was quieter — a NUL-joined composite key merged two distinct rows, writing one row's floats into the other row's archived record, in a backup that verifies green.
+
+Observed &mdash; the 2026-08-14 sluice repository audit (finding M-4), on the VStream float-repair path of backup full from a Vitess/PlanetScale source &mdash; default-on there, latent since the repair path shipped in v0.99.207; fixed v0.127.0. The type-tag half never shipped: the pre-release value-fidelity review caught it in the first cut of the fix.
+
+## Why a backup reads the same table twice
+
+Vitess's VStream COPY leg delivers FLOAT columns display-rounded (its own note), so on a Vitess/PlanetScale source sluice's backup re-reads FLOAT columns exactly over the query protocol and patches the archived rows. That makes one small map the crux of the whole feature: each re-read value must be re-associated with the same row's VStream-decoded record, matched on primary key &mdash; across two independent decoders of the same table.
+
+## Two readers, two type systems
+
+The readers do not agree what a PK value is. The exact-scan side runs MySQL's binary protocol and yields int64 for unsigned TINYINT through INT &mdash; and for BIGINT UNSIGNED up to 263&minus;1; above that it carries a decimal string, the driver-representation switch with its own note. The VStream decode yields uint64 for the same columns at every magnitude. Same table, same rows, same column: int64(42) on one side, uint64(42) on the other.
+
+Which makes the obvious hardening for a value-keyed map &mdash; tag the key with the value's type, so int64(1) can never collide with the string "1" &mdash; exactly backwards here. A %T tag would split int64 from uint64, the key would never match, and the repair would silently skip every row whose PK is an unsigned integer: the MySQL autoincrement norm. The pre-release review caught precisely that regression in the fix's first cut. The shipped key stays deliberately type-blind &mdash; %v renders all of these to the same decimal text, so they match &mdash; and the type-blindness is safe here because a PK column has one fixed schema type per reader: no two rows of one table can present the same column as different type families.
+
+## The collision that did ship
+
+The injectivity bug was elsewhere. The original key rendered a composite PK as %v components joined by a bare NUL byte &mdash; non-injective, because a NUL living inside a PK value shifts the component boundary: under a NUL-admitting collation like utf8mb4_bin (and MySQL VARCHAR admits 0x00), ("a\x00", "b") and ("a", "\x00b") render identically. Two distinct rows collided into one entry, and the repair wrote one row's exactly-re-read floats into the other row's archived record &mdash; a silent wrong value in a backup that verifies green. The v0.127.0 fix length-prefixes every component (<len>\x1e<value>), so every boundary is unambiguous however the payload is spelled.
+
+## The transferable lesson
+
+A key that bridges two independent decoders has to mean &ldquo;same value,&rdquo; not &ldquo;same runtime type&rdquo; &mdash; canonical rendering, deliberately type-blind. A type tag hardens a single-reader key and breaks a cross-reader one, and knowing which kind of key you are holding is the entire game. Injectivity, meanwhile, must come from framing, never from a separator byte you assume the payload can't contain: if the domain admits every byte, length-prefix. The shape to distrust is any map whose keys are built from values that crossed two different drivers &mdash; each driver's Go-type choices are an implementation detail, and they leak straight into your equality.
+
+## Primary sources
+
+- go-sql-driver/mysql &mdash; the query-side representation of unsigned integer columns (int64 within range, switching representation above int64's max).
+
+- sluice v0.127.0 changelog &mdash; the injective length-prefixed patch key, and the review note that removed the type tag before release.
+
+- Related field notes: BIGINT UNSIGNED overflows both bigint and int64 &mdash; the value-overflow boundary on a single reader; this note is the cross-reader divergence at any magnitude. VStream delivers FLOAT display-rounded &mdash; why the float repair exists at all.
+
+
+===============================================================
+# Go's zero time.Time is a live wire against MySQL
+(https://sluicesync.com/field-notes/go-zero-time-zero-date/)
+
+In Go, var t time.Time is the real instant 0001-01-01 00:00:00 UTC — and Postgres happily stores year-1 dates, which decode to exactly that value. go-sql-driver/mysql serializes any IsZero() instant as MySQL's invalid '0000-00-00' sentinel, so a legitimate year-1 date either false-refuses under strict sql_mode — with an error naming a value the source never held — or is silently stored wrong under a relaxed one. The fix is to take the encoding away from the driver.
+
+Observed &mdash; sluice's adversarial value-fidelity corpus (2026-08-22), which pushes each type family's worst-case value through migrate, CDC and backup in both directions: a Postgres DATE/timestamp of '0001-01-01' was mangled on write to MySQL. Fixed v0.131.1, ground-truthed on mysql:8.0 under full-strict sql_mode.
+
+## A valid date that equals the zero value
+
+Go's time.Time zero value is 0001-01-01 00:00:00 UTC &mdash; a real, representable instant, and also what var t time.Time gives you. Postgres stores year-1 dates without complaint (its date range starts at 4713 BC), so a Postgres DATE of '0001-01-01' decodes in a Go program to exactly time.Time{}, indistinguishable from &ldquo;never set.&rdquo; go-sql-driver/mysql resolves that ambiguity in the worst direction: when it binds a time.Time whose IsZero() is true, it serializes MySQL's invalid zero-date sentinel '0000-00-00' &mdash; on both the text and binary protocols. A legitimate value from one engine becomes an invalid value at the other engine's wire, and the value the driver sends is one the source never held.
+
+## Loud or silent, depending on sql_mode
+
+Under a strict sql_mode &mdash; sluice forces one on its writer sessions &mdash; MySQL rejects the sentinel with Error 1292: a false refusal whose message names '0000-00-00', sending the operator hunting for a zero-date that exists nowhere in the source. Under a relaxed sql_mode MySQL accepts it, and the wrong date is stored silently. Two failure modes, one root: a valid domain value collided with a library's in-band sentinel for &ldquo;no value.&rdquo;
+
+## What sluice does about it
+
+Take the encoding away from the driver: the value-bind seam now encodes Go's zero instant as its explicit string literal &mdash; '0001-01-01' into DATE columns, '0001-01-01 00:00:00' otherwise &mdash; so the driver never sees an IsZero() time.Time to rewrite, and MySQL stores the literal faithfully. It's the same string-encoding dodge sluice already uses for negative-zero floats, another value a library round-trips lossily. Three scope caveats, stated plainly: genuine MySQL '0000-00-00' zero-dates are untouched &mdash; they keep flowing through the existing --zero-date policy, this fix is only about a real year-1 date being turned into the sentinel. The &ldquo;stores faithfully&rdquo; claim is DATE/DATETIME only &mdash; a MySQL TIMESTAMP column still refuses '0001-01-01' loudly, since its floor is 1970-01-01 00:00:01, but the refusal now names the true value instead of the sentinel, the honest outcome for a value the type genuinely cannot hold. And the fix sits at the one seam every MySQL write lane funnels through &mdash; batched INSERT, CDC apply, LOAD DATA &mdash; so no lane keeps the old behavior.
+
+## The transferable lesson
+
+time.Time's zero value is not neutral: it is a specific date a well-behaved source can legitimately produce, and at least one very widely used driver treats it as a magic sentinel on the way out. If you bind time.Time toward MySQL, decide what happens to 0001-01-01 before the driver decides for you &mdash; and treat any library that overloads a legal domain value as &ldquo;unset&rdquo; as a value-corruption hazard, not a convenience.
+
+## Primary sources
+
+- go-sql-driver/mysql &mdash; the zero-time.Time → '0000-00-00' serialization.
+
+- MySQL reference &mdash; DATE, DATETIME, TIMESTAMP &mdash; TIMESTAMP's 1970-01-01 00:00:01 floor; strict sql_mode and zero dates.
+
+- PostgreSQL reference &mdash; date/time types &mdash; the date range that makes year-1 a first-class value.
+
+- sluice v0.131.1 changelog &mdash; the string-literal encoding and the corpus cells that pin it.
+
+- Related field notes: parseTime governs the query protocol, not the binlog &mdash; the same driver's temporal handling differing by path; MySQL TIME is a duration, not a time of day.
+
+
+===============================================================
+# A long-open transaction anywhere freezes your trigger-CDC
+(https://sluicesync.com/field-notes/long-open-tx-freezes-trigger-cdc/)
+
+Gap-free trigger-CDC on Postgres emits only provably-settled rows: txid below the current snapshot's xmin. Any open write transaction anywhere on the server — any table, captured or not — pins that xmin and prefix-cuts the entire poll window: zero rows, healthy-idle logs, replication lag growing without bound. It resumes the moment the transaction ends and loses nothing; until v0.131.3, nothing said it was happening.
+
+Observed &mdash; sluice's postgres-trigger gap-free reader, the fallback for managed Postgres that won't grant a logical-replication slot. The v0.131.3 change is observability only &mdash; a paced WARN naming the pinned xmin and where to look. Over-holding was always safe: a stall, never a loss.
+
+## The ordering problem the ceiling solves
+
+Trigger-based CDC polls a change-log table, and the poll has a genuinely hard ordering problem: a change-log row's id is allocated when the trigger fires, but its txid at the transaction's first write &mdash; so id order is not commit order, and a naive WHERE id > last can step permanently over a row whose transaction simply hasn't committed yet. sluice's gap-free reader closes that hole with a settled ceiling: emit only rows whose txid is below the current snapshot's xmin &mdash; pg_snapshot_xmin(pg_current_snapshot()) &mdash; rows no in-flight transaction could still be writing behind. Provably settled, never a gap.
+
+## What pins the ceiling
+
+The trap is what holds that xmin down: any open write transaction anywhere on the server. Any table, captured or not &mdash; it only needs an assigned xid. A forgotten idle in transaction session, a long analytics job that took one write lock, a stuck migration: the snapshot's xmin stays at that transaction's xid, every change written after it sits at-or-above the ceiling, and the poll window is prefix-cut to nothing. The poll returns zero rows, the pump takes its no-work path, and the stream logs healthy-idle while replication lag climbs without bound &mdash; from the consumer's side, a pinned-xmin stall is byte-identical to a source where nothing is changing. The moment the pinning transaction commits or rolls back, everything held flows through: a stall, never a loss. But &ldquo;zero rows, no error&rdquo; is not the same claim as &ldquo;nothing changed,&rdquo; and until v0.131.3 nothing distinguished them.
+
+## The fix is a sentence, not a behavior change
+
+sluice now runs a paced probe when the stream looks idle &mdash; built on the same not-settled predicate as the ceiling, shared as one constant so the two cannot drift &mdash; counting rows that are committed but held. When it finds them, it WARNs with the held-row count, the first held id, the pinned snapshot xmin, and the query that finds the session to go settle:
+
+    SELECT pid, state, xact_start, query
+    FROM pg_stat_activity
+    WHERE xact_start IS NOT NULL
+    ORDER BY xact_start;
+
+No correctness change anywhere &mdash; the honest fix for a safe-but-invisible state is to make it visible.
+
+## The transferable lesson
+
+Postgres DBAs know the xmin-horizon cliff as vacuum bloat and replication-slot lag; a poll-based CDC ceiling is the same cliff's third face, one layer up. Any consumer that holds rows back behind a snapshot bound inherits it: the predicate that guarantees you never emit an unsettled row is the predicate a single idle transaction can pin at zero progress. And this exact predicate has already failed in the opposite direction &mdash; the xid-wraparound note is the same hold-back comparing a 32-bit xid against a 64-bit bound, going permanently wrong past 232 lifetime transactions and silently skipping an in-flight transaction's rows. One line of SQL, both failure modes: under-hold and you lose rows silently; over-hold and you stall silently. So instrument the distance between the ceiling and the newest committed change &mdash; zero rows is an answer with two meanings, and only a probe can tell them apart.
+
+## Primary sources
+
+- PostgreSQL reference &mdash; system information functions &mdash; pg_current_snapshot() / pg_snapshot_xmin(): the snapshot's xmin is the oldest transaction id still in flight.
+
+- PostgreSQL reference &mdash; routine vacuuming &mdash; the xmin horizon's better-known faces: bloat held by long-running transactions.
+
+- sluice v0.131.3 changelog &mdash; the ceiling-stall WARN (held_rows, first held id, pinned xmin, the pg_stat_activity hint).
+
+- Related field notes: Comparing 32-bit transaction ids breaks after four billion of them &mdash; the same predicate failing the opposite way; Your trigger-based CDC can't see replicated writes &mdash; another structural blind spot of the trigger lane.
+
+
+===============================================================
+# The forensics table MariaDB doesn't have
+(https://sluicesync.com/field-notes/mariadb-performance-schema-absent/)
+
+MySQL session forensics — which connected session holds a binlog_format or sql_log_bin override — is a two-table JOIN on performance_schema.variables_by_thread and threads. On MariaDB that query dies with ERROR 1146: the table doesn't exist, whether performance_schema is ON or OFF, because MariaDB's performance_schema never implemented it. And under MariaDB's OFF default, the tables it does have answer empty instead of erroring — so a ported runbook fails both ways, at exactly the mid-incident moment it's reached for.
+
+Observed &mdash; live for this note, on stock mariadb:11.4 (11.4.13) in both switch positions, and reproduced on the latest MariaDB image. The flavor-precondition sentence shipped in sluice v0.132.1's error-remedy text.
+
+## The query and the error
+
+MySQL runbooks lean on performance_schema for session forensics, and a tool's own error messages can too: when sluice's binlog CDC halts on statement-logged DML (a SUPER session's SET SESSION binlog_format=STATEMENT slipping past the global preflight), the printed remedy is the standard two-table JOIN &mdash; variables_by_thread against threads &mdash; to name the session holding the override. Ported to MariaDB, that query does not degrade; it detonates:
+
+    ERROR 1146 (42S02): Table 'performance_schema.variables_by_thread' doesn't exist
+
+## Two flavor differences, stacked
+
+First &mdash; and this is the half we had wrong until we ran it &mdash; the absence is not the OFF default at work; it's the table set. MariaDB's performance_schema implements an older, smaller surface (81 tables on 11.4): variables_by_thread, a MySQL 5.7 addition, is not among them with performance_schema ON or OFF &mdash; verified in both positions, and still absent on the latest MariaDB image. The only per-thread variables table MariaDB carries is user_variables_by_thread, which holds user-defined @variables &mdash; a different thing entirely. So the reflex fix, enable performance_schema in server config and restart, does not make this query run on MariaDB at all.
+
+Second, the OFF default (MySQL defaults ON, MariaDB OFF) changes how the tables MariaDB does have fail. OFF doesn't drop them: threads still exists and simply answers zero rows &mdash; it reports live sessions the moment the switch is ON. So a ported probe fails split by table: the tables MariaDB never implemented hard-error with 1146, and the tables it has silently report nothing under the default. The second failure is arguably worse &mdash; a monitoring query that returns &ldquo;no sessions found&rdquo; gets believed.
+
+## The operational shape
+
+Both failures fire at the worst moment. Session forensics is mid-incident tooling &mdash; it's reached for when replication has already halted, often straight out of an error message's own remedy text, which makes that remedy untested code on one flavor of the family until someone runs it there. On MariaDB the practical fallback is SHOW PROCESSLIST plus interrogating candidate sessions one by one; there is no variables_by_thread to JOIN against.
+
+## The transferable lesson
+
+A query's precondition set differs by flavor even where its syntax parses identically on both. A runbook, a dashboard, a health probe, or an error-message remedy is a claim about a specific flavor's catalog, and it only holds where it has actually been run: absent-vs-empty is the difference between a runbook that crashes and one that reports nothing &mdash; and MariaDB hands you both at once, split by table. The companion note is the status-statement version of the same trap: SHOW REPLICA STATUS parses on both engines and enumerates a different set on each. Dialect traps are not confined to DDL &mdash; they extend to every diagnostic question you ask.
+
+## Primary sources
+
+- MariaDB documentation &mdash; Performance Schema overview &mdash; disabled by default, and MariaDB's own table list.
+
+- MySQL reference &mdash; performance_schema system-variable tables &mdash; variables_by_thread, the MySQL 5.7 addition the runbook leans on.
+
+- Live verification for this note: throwaway mariadb:11.4 and mariadb:latest containers, performance_schema ON and OFF &mdash; the 1146 error in every position, threads empty under OFF and populated under ON.
+
+- sluice v0.132.1 changelog &mdash; the remedy-text precondition for the MariaDB flavor.
+
+- Related field note: The replica you can't detect is the replica that loses your writes &mdash; the same lesson asked of a status statement instead of a catalog table.
