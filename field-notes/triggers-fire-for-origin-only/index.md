@@ -2,7 +2,7 @@
 
 > Postgres triggers have a firing dimension most people never touch: a plain CREATE TRIGGER fires for origin sessions only, never for DML applied under session_replication_role = 'replica'. That role is how logical-replication apply workers run — and how replication tools, sluice included, apply their own writes to bypass FK enforcement mid-stream. So a trigger-based capture installed on a database that is itself a replication target is silently blind to every replicated row: the rows land, the change log stays empty, the sync exits 0. And the privileged production applier is blind where the unprivileged dev one wasn't.
 
-Observed &mdash; a 2026-08-26 audit of sluice's pgtrigger engine, ground-truthed on real PostgreSQL 16: an INSERT executed under session_replication_role = 'replica' lands in the table while the capture table records zero rows. A two-shape detection WARN (SILENT-CAPTURE-GAP RISK) shipped in sluice v0.131.5. The capture gap itself is by design still open &mdash; the full fix has its own hazard (below) and is deferred to a design decision; the at-risk topologies remain unsupported for trigger capture.
+Observed &mdash; a 2026-08-26 audit of sluice's pgtrigger engine, ground-truthed on real PostgreSQL 16: an INSERT executed under session_replication_role = 'replica' lands in the table while the capture table records zero rows. A two-shape detection WARN (SILENT-CAPTURE-GAP RISK) shipped in sluice v0.131.5, with the full fix deliberately deferred &mdash; it has its own hazard (below). Update: the deferred design decision has since landed &mdash; sluice v0.133.0 ships the opt-in trigger setup --capture-replicated-writes; the sequel note covers what shipping it actually took.
 
 ## The firing dimension nobody sets
 
@@ -33,6 +33,8 @@ Trigger-firing semantics are replication-role-scoped: &ldquo;triggers see every 
 - sluice v0.131.5 changelog &mdash; the two-probe SILENT-CAPTURE-GAP RISK preflight and its real-PG 16 mechanism pin (replica-role INSERT lands, change log stays empty).
 
 - Related field note: The read replica is a better migrate source and a worse CDC source than the docs &mdash; another capability gated on the session's replication state rather than the SQL you ran.
+
+- Sequel field note: ENABLE ALWAYS fires for everyone &mdash; what shipping the replicated-write capture actually took: the subscriber's separate TRUNCATE executor, the no-origin-evidence fact, and the existence-not-liveness echo-loop refusal.
 
 ---
 Canonical page: https://sluicesync.com/field-notes/triggers-fire-for-origin-only/ · Full docs index: https://sluicesync.com/llms.txt
