@@ -64,6 +64,31 @@ When the stream is finished, sluice trigger teardown drops every per-table trigg
 
 --yes skips the destructive-action confirmation prompt (for scripted/CI use). Pass --keep-data to retain the change-log table for forensics instead of dropping it. Teardown is idempotent — re-running against a partially-uninstalled source proceeds cleanly via DROP ... IF EXISTS.
 
+## Upgrading an existing install (one trigger setup re-run)
+
+The capture side of this engine lives on your source database, not in the sluice binary: the functions, the per-table triggers and the event triggers are objects trigger setup installed there, and CREATE OR REPLACE is the only thing that replaces them. Upgrading the sluice binary does not touch them. So a fix that lands in a capture function body — a GUC pin, a security hardening, a new event-trigger arm — reaches your database only when you re-run setup.
+
+sluice does not leave that implicit. Every CDC open (which is every warm resume, not just a cold start) grades what is actually installed and says so. Four signals arrived across v0.134.1–v0.137.0, and the same single re-run clears all of them:
+
+    sluice trigger setup \
+        --source-driver postgres-trigger \
+        --dsn 'postgres://user:pass@host:5432/app' \
+        --tables orders,customers,line_items
+
+It takes seconds and is non-destructive: the change log, its resume watermark and the consumer registry are all preserved, and the stream resumes where it left off. Name every table the install captures, and add --capture-replicated-writes if the install had it (see the refusal row below).
+
+Signal at CDC open · Which installs · What it means ·
+
+INSECURE-CAPTURE-FUNCTION (warn) · Installed by v0.85.0–v0.134.0, event-trigger tier · The DDL capture function was created SECURITY DEFINER with no SET search_path, and CREATE EVENT TRIGGER requires superuser — so it is superuser-owned and resolves its unqualified calls against the search_path of whichever session fired the DDL. An unprivileged user who can create a function in a reachable schema could shadow a built-in it calls and execute SQL as the superuser by running one CREATE TABLE. Fixed in v0.134.1's renderer; the fix reaches a database only via the re-run. Warns rather than refuses on purpose — this runs at every resume, so refusing would turn a binary upgrade into an immediate outage. ·
+
+DROP-CAPTURE-ABSENT (warn) · Installed before v0.136.0, event-trigger tier · The install has the ddl_command_end event trigger but not the sql_drop one, so DROPping a synced table records nothing and the target keeps that table's last-synced rows forever at exit 0. See the two event triggers for why a drop needs its own arm. Warn, not refusal: the gap is bounded (once the table is gone there are no further writes to miss) and stranding a running sync over it would be the wrong trade. ·
+
+STALE-CAPTURE-FUNCTION (warn) · v0.137.0+ binaries, against an install whose capture-function definitions differ from what the binary renders · The old body keeps capturing through whatever it was written with — including from before the extra_float_digits pin (captured floats silently rounded when the writing session's setting is lower) and the bytea_output pin (captured bytea silently corrupted on the way to a MySQL/SQLite target). Read this row precisely: it fires on a difference, not on a vintage. An install whose definitions are already byte-identical to the binary's render opens silent, even if setup never recorded provenance for it — so "I don't see this warning" does not mean "setup has been re-run". ·
+
+Capture-posture refusal naming sluice_capture_ddl_trg · Installed by v0.133.x/v0.134.x with --capture-replicated-writes · The only one of the four that stops the stream. Those releases made the per-table triggers ENABLE ALWAYS but left the DDL event triggers plain, so replica-role DML was captured while replica-role DDL silently was not — the two capture tiers disagreed under exactly the topology the flag exists to support. v0.136.0 made the posture install-wide and grades every trigger against it. Re-run setup with the flag to restore a coherent install. Installs without the opt-in are unaffected by this one. ·
+
+Two refusals in the same family that a re-run does not clear, because they are not vintage: a capture function whose body no longer writes into the change log at all refuses at any vintage (no released sluice ever rendered one, so it is an edit, not an old install), and on a v0.137.0+ install a definition that disagrees with the digest trigger setup recorded refuses too — something replaced it after setup. Both name the function and tell you to find out who changed it. Re-running setup will overwrite the edit, so investigate first if it wasn't yours.
+
 ## Heroku Postgres → PlanetScale
 
 Heroku Postgres forbids replication slots outright, so it's the canonical postgres-trigger scenario. The three commands above work standalone against a Heroku source — read the DATABASE_URL fresh at each invocation (Heroku rotates it under failover) and append ?sslmode=require (Heroku rejects non-TLS connections):

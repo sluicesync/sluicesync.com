@@ -50,13 +50,13 @@ The slot-less trigger engines capture changes with database triggers instead of 
 
 Object · Kind · Why ·
 
-sluice_change_log + sluice_change_log_meta · tables (+ indexes) · Append-only captured-change log (txid, op, PK + before/after JSONB) and a singleton schema-version pin. ·
+sluice_change_log + sluice_change_log_meta · tables (+ indexes) · Append-only captured-change log (txid, op, PK + before/after JSONB) and a singleton per-install record. The meta table started as a bare schema-version pin and has since grown the rest of the install's identity: the capture_replicated_writes posture (v3, ADR-0185), the three setup-evidence columns the DDL-suppression privilege boundary is bound to (v4 &mdash; the firing backend's PID, a nonce, and a timestamp, armed and disarmed inside setup's own transaction), and capture_fn_digest (v5), the provenance that lets a CDC open tell an old capture function from an edited one. Every column is added by ADD COLUMN IF NOT EXISTS, so re-running trigger setup is the migration and older installs read fine until then. ·
 
 sluice_change_log_consumers · table · Per-stream applied-frontier registry (roadmap item 115) — every sync records how far it has consumed the shared change log, so the auto-prune / trigger prune cut is taken at the minimum across registered consumers. ·
 
-sluice_capture_change(), sluice_capture_truncate_fn(), sluice_capture_ddl() · functions · Row-capture (payload mode set by --capture-payload), TRUNCATE companion, and the DDL event-trigger handler. ·
+sluice_capture_change(), sluice_capture_truncate_fn(), sluice_capture_ddl(), sluice_capture_drop() · functions · Row-capture (payload mode set by --capture-payload), TRUNCATE companion, the ddl_command_end handler, and &mdash; since v0.136.0 &mdash; the sql_drop handler. The last two are installed only on the event-trigger tier (an --allow-polled-fingerprint install has neither). ·
 
-sluice_capture, sluice_capture_truncate (per table); sluice_capture_ddl_trg · triggers · One combined AFTER INSERT/UPDATE/DELETE trigger and a TRUNCATE trigger per table, plus one cluster DDL event trigger. ·
+sluice_capture, sluice_capture_truncate (per table); sluice_capture_ddl_trg, sluice_capture_drop_trg · triggers · One combined AFTER INSERT/UPDATE/DELETE trigger and a TRUNCATE trigger per table, plus two database-wide event triggers. Two, because PostgreSQL reports DDL through two mutually exclusive context functions: pg_event_trigger_ddl_commands() returns zero rows for a DROP, so a ddl_command_end trigger alone fires on DROP TABLE and records nothing &mdash; the stream carries on as though the table still existed. The dedicated sql_drop pair records it instead, filtered on the dropped-object set rather than a command-tag list (so DROP SCHEMA &hellip; CASCADE over a synced table is caught too; DROP INDEX stays deliberately uncaptured). Installs predating v0.136.0 have only the ddl_command_end half and warn DROP-CAPTURE-ABSENT at every CDC open until trigger setup is re-run. ·
 
 ### SQLite / Cloudflare-D1 trigger engines (sqlite-trigger / d1-trigger, ADR-0135/0136)
 
