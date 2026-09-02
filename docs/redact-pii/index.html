@@ -29,7 +29,7 @@
     <h1>Redact PII while you migrate &amp; sync</h1>
     <p class="subtitle">Seed staging, dev, analytics, and vendor handoffs from production without letting personal data leave with the rows.</p>
     
-    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#how-it-works">How --redact works</a></li><li><a href="#where-it-applies">Where redaction applies</a></li><li><a href="#strategies">The strategy families</a></li><li><a href="#determinism">Determinism</a></li><li><a href="#keyset">The operator keyset (--keyset-source)</a></li><li><a href="#schema-preview">Preview redaction before you run</a></li><li><a href="#audit-log">The audit log</a></li><li><a href="#examples">Worked examples</a></li><li><a href="#non-goals">What redaction is not</a></li><li><a href="#next">Next steps</a></li></ul></nav>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#how-it-works">How --redact works</a></li><li><a href="#where-it-applies">Where redaction applies</a></li><li><a href="#strategies">The strategy families</a></li><li><a href="#determinism">Determinism</a></li><li><a href="#keyset">The operator keyset (--keyset-source)</a></li><li><a href="#preflight">Preflight refusals</a></li><li><a href="#schema-preview">Preview redaction before you run</a></li><li><a href="#audit-log">The audit log</a></li><li><a href="#examples">Worked examples</a></li><li><a href="#non-goals">What redaction is not</a></li><li><a href="#next">Next steps</a></li></ul></nav>
     
 <p>You need a realistic copy of production in a place production data isn't allowed to go — a staging database, a developer laptop, an analytics warehouse, a vendor's environment. The schema, the row shapes, and the referential structure all have to survive; the emails, card numbers, and national IDs must not. sluice does this inline with <code>--redact</code>: PII is transformed <strong>between the source reader and the target writer</strong>, so the sensitive value never lands on the target and never touches the backup on disk. There is no separate scrubbing pass to forget to run.</p>
 
@@ -151,6 +151,20 @@
 <span class="f">--redact</span> users.first_name=tokenize:dict:first_names:customer_pii</code></pre>
 <p>The <code>db:</code> form is the cross-stream stability primitive: two streams pointing at the same keyset DSN turn <code>alice@example.com</code> into the <em>same</em> surrogate on staging-1 and staging-2. For two independent installs to agree (cross-org exchange), install the same <code>file:</code> keyset at both ends.</p>
 <div class="note"><strong>No hot-reload.</strong> The keyset is snapshotted once at process startup; a rotation takes effect only on the next restart. After a rotation, new rows get surrogates under the new active generation while existing target rows keep theirs — a clean rotation means re-running the migration under the new key. The security model is <em>stable hashing, not secrecy</em>: protect the key bytes with your storage layer — sluice does not encrypt them at rest.</div>
+
+<h2 id="preflight">Preflight refusals <a class="hlink" href="#preflight" aria-label="Permalink to this section">#</a></h2>
+<p>sluice runs these checks before any data movement, on every lane that redacts rows — <code>migrate</code> (single- and multi-database), <code>sync start</code> cold start (single- and multi-database), <code>sync add-table</code>, and <code>backup full</code>. When more than one fires in the same run they aggregate into a single combined error, so you see the full picture in one pass.</p>
+<ul>
+<li><strong>Selector resolution.</strong> Every rule's <code>[schema.]table.column</code> must resolve to a real column in the source schema, and a schema-qualified rule must resolve to a table in <strong>that</strong> namespace. A rule that resolves to nothing is refused as a typo class — it would apply to nothing and ship the column in clear. Two namespace shapes matter:
+  <ul>
+  <li><strong>Single-database MySQL is flat scope.</strong> Tables carry no namespace there, so a qualified rule such as <code>source_db.users.email</code> can never match a bulk-copied or backed-up row (only CDC rows carry the binlog database name). Through v0.137.4 that rule passed preflight and the column shipped <strong>unredacted</strong> through bulk copy and backup at exit 0 while CDC rows were redacted. Since v0.138.0 it is refused: use the bare <code>users.email</code> form, or select the database explicitly (<code>--include-database=source_db</code>) so tables are namespaced.</li>
+  <li><strong>Multi-database / multi-schema runs</strong> validate a qualified rule in the pass for its own namespace; a qualified rule naming a namespace outside the selected set is refused up front.</li>
+  </ul>
+</li>
+<li><strong><code>mask:uuid</code> on a UUID-typed column</strong> refuses unless <code>--type-override=col=text</code> short-circuits the target column type.</li>
+<li><strong><code>randomize:*</code> on a table with no primary key</strong> refuses; add a PK to the source or pick a non-random strategy.</li>
+<li><strong><code>hash:hmac-sha256</code> / <code>tokenize:dict</code> with no resolvable keyset</strong> refuses — supply <code>--keyset-source</code> and reference a key via the rule's <code>key:</code> option (or rely on the keyset default / sole entry).</li>
+</ul>
 
 <h2 id="schema-preview">Preview redaction before you run <a class="hlink" href="#schema-preview" aria-label="Permalink to this section">#</a></h2>
 <p><code>sluice schema preview</code> annotates the generated DDL so you can eyeball which columns are covered before moving a single row. The annotation is comment-only — the <code>CREATE TABLE</code> itself is unchanged, so the output stays drop-in usable:</p>

@@ -157,6 +157,22 @@ The db: form is the cross-stream stability primitive: two streams pointing at th
 
 No hot-reload. The keyset is snapshotted once at process startup; a rotation takes effect only on the next restart. After a rotation, new rows get surrogates under the new active generation while existing target rows keep theirs — a clean rotation means re-running the migration under the new key. The security model is stable hashing, not secrecy: protect the key bytes with your storage layer — sluice does not encrypt them at rest.
 
+## Preflight refusals
+
+sluice runs these checks before any data movement, on every lane that redacts rows — migrate (single- and multi-database), sync start cold start (single- and multi-database), sync add-table, and backup full. When more than one fires in the same run they aggregate into a single combined error, so you see the full picture in one pass.
+
+- Selector resolution. Every rule's [schema.]table.column must resolve to a real column in the source schema, and a schema-qualified rule must resolve to a table in that namespace. A rule that resolves to nothing is refused as a typo class — it would apply to nothing and ship the column in clear. Two namespace shapes matter:
+
+- Single-database MySQL is flat scope. Tables carry no namespace there, so a qualified rule such as source_db.users.email can never match a bulk-copied or backed-up row (only CDC rows carry the binlog database name). Through v0.137.4 that rule passed preflight and the column shipped unredacted through bulk copy and backup at exit 0 while CDC rows were redacted. Since v0.138.0 it is refused: use the bare users.email form, or select the database explicitly (--include-database=source_db) so tables are namespaced.
+
+- Multi-database / multi-schema runs validate a qualified rule in the pass for its own namespace; a qualified rule naming a namespace outside the selected set is refused up front.
+
+- mask:uuid on a UUID-typed column refuses unless --type-override=col=text short-circuits the target column type.
+
+- randomize:* on a table with no primary key refuses; add a PK to the source or pick a non-random strategy.
+
+- hash:hmac-sha256 / tokenize:dict with no resolvable keyset refuses — supply --keyset-source and reference a key via the rule's key: option (or rely on the keyset default / sole entry).
+
 ## Preview redaction before you run
 
 sluice schema preview annotates the generated DDL so you can eyeball which columns are covered before moving a single row. The annotation is comment-only — the CREATE TABLE itself is unchanged, so the output stays drop-in usable:
