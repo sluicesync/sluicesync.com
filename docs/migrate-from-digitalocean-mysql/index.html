@@ -77,7 +77,7 @@
 <h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><strong>The retention advisory WARN</strong> — <code>sync</code> and <code>backup</code> runs against a <code>*.db.ondigitalocean.com</code> host warn about the ~13–16-minute default purge window and name the config-API remedy. (The host pattern is the only reliable signal — the server variable can't be trusted on this platform, so the WARN is unconditional.)</li>
-  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position surfaces as an explicit &ldquo;persisted position is no longer valid&rdquo; WARN and a fresh cold start, never a silent gap; <code>--no-auto-resnapshot</code> converts that into a hard stop with named recovery commands.</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded <code>server_uuid</code> no longer matches the source (instance replaced / restored / failed over), surfaces as an explicit &ldquo;persisted position is no longer valid&rdquo; WARN and a fresh cold start, never a silent gap; <code>--no-auto-resnapshot</code> converts that into a hard stop with named recovery commands.</li>
   <li><strong><code>--source-tls-ca</code> refusals</strong> — the flag refuses to combine with a DSN-level <code>tls=</code> setting, and refuses on non-MySQL engines (Postgres uses <code>sslrootcert=</code> in the DSN) instead of silently ignoring a security flag.</li>
   <li><strong><code>SLUICE-E-DRIVER-HOST-MISMATCH</code> class checks</strong> — driver/DSN sanity is verified up front, before any connection.</li>
 </ul>

@@ -258,7 +258,7 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-05-23Postgres•• field note proto_version lets you parse streaming; only streaming='on' emits it — Two pgoutput knobs are easy to conflate, and the gap between them hides a silent-loss shape: if streaming ever activates and each chunk commits as its own transaction, a dropped StreamAbort leaves the pre-abort rows durably on the target &mdash; extra rows no checksum diff will catch.
 
-- 2026-05-22Postgres•• field note A Postgres LSN means nothing without its timeline — Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL gets this right for free with GTIDs; Postgres's raw LSN carries no provenance.
+- 2026-05-22Postgres•• field note A Postgres LSN means nothing without its timeline — Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL is self-identifying only in GTID mode &mdash; a binlog file/offset carries no more provenance than a raw LSN &mdash; so in both engines you pin the identity yourself.
 
 - 2026-05-20Cross-cutting· quick note BIT crosses the wire as bytes, and the engines disagree on layout — MySQL hands BIT(N) back as ceil(N/8) right-justified big-endian bytes; Postgres surfaces bit as a '0'/'1' text string. Carry the raw bytes between them and the value is silently corrupted &mdash; the ASCII of the digits, not the bits.
 

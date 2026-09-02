@@ -28,7 +28,7 @@ Purge appears platform-scheduled and lazy — files can outlive the configured w
 
 - FTWRL works (RELOAD honored) — sluice's concurrent frozen-snapshot cold copy runs with no fallback WARNs.
 
-- Replication grants (REPLICATION SLAVE/REPLICATION CLIENT) are present on the admin user out of the box; binlog_format=ROW is read-only at the platform (no MIXED trap); gtid_mode=OFF by default (file/position CDC is fine); sql_require_primary_key=OFF; stock-strict sql_mode (no DigitalOcean-style ANSI surprise).
+- Replication grants (REPLICATION SLAVE/REPLICATION CLIENT) are present on the admin user out of the box; binlog_format=ROW is read-only at the platform (no MIXED trap); gtid_mode=OFF by default (file/position CDC is fine — expect one POSITION-MODE INFO per CDC open since v0.137.3 naming it the weaker resume arm, with the position's instance identity resting on the v0.137.2 @@server_uuid stamp; gtid_mode=ON is the stronger configuration where the platform allows it); sql_require_primary_key=OFF; stock-strict sql_mode (no DigitalOcean-style ANSI surprise).
 
 - Host pattern *.mysql.database.azure.com; the in-band fingerprint is @@version ending in -azure. One-time subscription step: az provider register --namespace Microsoft.DBforMySQL must have completed before instance creation works.
 
@@ -52,7 +52,7 @@ Continuous sync — the same DSN, plus a stream id:
 
 - No retention advisory — correctly. Azure's defaults hold binlogs, so the host-pattern retention WARNs that fire on DigitalOcean and Vultr have nothing to warn about here; a quiet preflight is the right result, not a blind spot.
 
-- Loud position-invalid recovery — a resume from a purged position (only reachable if you bounded retention aggressively) is an explicit WARN plus a fresh cold start, or a hard stop under --no-auto-resnapshot.
+- Loud position-invalid recovery — a resume from a purged position (only reachable if you bounded retention aggressively), or (v0.137.2+) from a file/pos position whose recorded server_uuid no longer matches the source (instance replaced / restored / failed over), is an explicit WARN plus a fresh cold start, or a hard stop under --no-auto-resnapshot.
 
 ## Next steps
 

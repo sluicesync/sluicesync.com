@@ -33,7 +33,7 @@ What the WARN means. sluice's advisory here is detect-first: on sync/backup runs
 
 - MySQL 8.0's family default is binlog_format=MIXED — an RDS MySQL 8.0 source needs a custom parameter group with binlog_format=ROW. The parameter is dynamic: no reboot, but only new connections see it, so reconnect after the change.
 
-- gtid_mode=OFF_PERMISSIVE by default; sluice's file/position CDC works as-is.
+- gtid_mode=OFF_PERMISSIVE by default; sluice's file/position CDC works as-is. Expect one POSITION-MODE INFO per CDC open (v0.137.3+) naming file/pos as the weaker of the two resume arms — the position's instance identity then rests on the @@server_uuid stamp (v0.137.2), not on the position itself. gtid_mode=ON is the stronger configuration where the parameter group allows it. See the MySQL resume signals.
 
 ## The FTWRL platform block (why serial cold copy is expected)
 
@@ -75,7 +75,7 @@ The master user has the replication grants CDC needs out of the box (REPLICATION
 
 - FTWRL fallback WARNs — the serial-copy fallback and the no-freeze snapshot capture are both announced, never silent.
 
-- Loud position-invalid recovery — a resume from a purged position is an explicit WARN plus a fresh cold start (or a hard stop under --no-auto-resnapshot), never a silent gap.
+- Loud position-invalid recovery — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded server_uuid no longer matches the source (instance replaced / restored / failed over), is an explicit WARN plus a fresh cold start (or a hard stop under --no-auto-resnapshot), never a silent gap.
 
 - Unencrypted-binlog-stream WARN — a plaintext DSN gets a warning that the CDC stream is unencrypted; --source-tls-ca resolves it.
 

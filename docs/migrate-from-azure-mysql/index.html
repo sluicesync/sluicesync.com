@@ -49,7 +49,7 @@
 <ul>
   <li><strong>TLS is mandatory AND zero-setup</strong> — plaintext is refused (<code>require_secure_transport=ON</code>, the only probed managed-MySQL platform that refuses it), and a bare <code>?tls=true</code> just works: the server chain validates against the public roots already in your system store. No CA download, no <code>--source-tls-ca</code>.</li>
   <li><strong>FTWRL works</strong> (RELOAD honored) — sluice's concurrent frozen-snapshot cold copy runs with no fallback WARNs.</li>
-  <li>Replication grants (<code>REPLICATION SLAVE</code>/<code>REPLICATION CLIENT</code>) are present on the admin user out of the box; <code>binlog_format=ROW</code> is read-only at the platform (no MIXED trap); <code>gtid_mode=OFF</code> by default (file/position CDC is fine); <code>sql_require_primary_key=OFF</code>; stock-strict <code>sql_mode</code> (no DigitalOcean-style ANSI surprise).</li>
+  <li>Replication grants (<code>REPLICATION SLAVE</code>/<code>REPLICATION CLIENT</code>) are present on the admin user out of the box; <code>binlog_format=ROW</code> is read-only at the platform (no MIXED trap); <code>gtid_mode=OFF</code> by default (file/position CDC is fine — expect one <code>POSITION-MODE</code> INFO per CDC open since v0.137.3 naming it the weaker resume arm, with the position's instance identity resting on the v0.137.2 <code>@@server_uuid</code> stamp; <code>gtid_mode=ON</code> is the stronger configuration where the platform allows it); <code>sql_require_primary_key=OFF</code>; stock-strict <code>sql_mode</code> (no DigitalOcean-style ANSI surprise).</li>
   <li>Host pattern <code>*.mysql.database.azure.com</code>; the in-band fingerprint is <code>@@version</code> ending in <code>-azure</code>. One-time subscription step: <code>az provider register --namespace Microsoft.DBforMySQL</code> must have completed before instance creation works.</li>
 </ul>
 <p>One-shot copy (dry-run first, then drop the flag) — a bulk migrate reads no binlog, so the row-image knob above only gates the continuous form:</p>
@@ -67,7 +67,7 @@
 <ul>
   <li><strong><code>SLUICE-E-CDC-ROW-IMAGE-PARTIAL</code></strong> — a source streaming partial binlog row images (<code>binlog_row_image != FULL</code>) is refused at CDC start, because that is exactly the silent-UPDATE-loss shape; the remedy is the <code>az &hellip; parameter set</code> above.</li>
   <li><strong>No retention advisory — correctly.</strong> Azure's defaults hold binlogs, so the host-pattern retention WARNs that fire on DigitalOcean and Vultr have nothing to warn about here; a quiet preflight is the right result, not a blind spot.</li>
-  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position (only reachable if you bounded retention aggressively) is an explicit WARN plus a fresh cold start, or a hard stop under <code>--no-auto-resnapshot</code>.</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position (only reachable if you bounded retention aggressively), or (v0.137.2+) from a file/pos position whose recorded <code>server_uuid</code> no longer matches the source (instance replaced / restored / failed over), is an explicit WARN plus a fresh cold start, or a hard stop under <code>--no-auto-resnapshot</code>.</li>
 </ul>
 
 <h2 id="next">Next steps <a class="hlink" href="#next" aria-label="Permalink to this section">#</a></h2>

@@ -70,7 +70,7 @@
 <h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><strong>The unconditional retention WARN</strong> — <code>sync</code> and <code>backup</code> runs against a <code>*.vultrdb.com</code> host warn about the ~10-minute unconfigurable purge window. The wording is stronger than DigitalOcean's, because DO's message can point at a knob and Vultr's cannot.</li>
-  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position surfaces as an explicit WARN and a fresh cold start; <code>--no-auto-resnapshot</code> converts that into a hard stop with named recovery commands.</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded <code>server_uuid</code> no longer matches the source (instance replaced / restored / failed over), surfaces as an explicit WARN and a fresh cold start; <code>--no-auto-resnapshot</code> converts that into a hard stop with named recovery commands.</li>
   <li><strong><code>--source-tls-ca</code> refusals</strong> — the flag refuses to combine with a DSN-level <code>tls=</code> setting and refuses on non-MySQL engines, rather than silently ignoring a security flag.</li>
 </ul>
 
