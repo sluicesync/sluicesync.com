@@ -454,7 +454,7 @@ Flag · Purpose ·
 
 --copy-fanout-degree · VStream/CDC snapshot cold-start (PlanetScale-MySQL target) only, ADR-0097: WRITE-side fan-out — the incoming snapshot row stream is PK-hash-partitioned out to N concurrent batched-INSERT writers, each on its own connection, to beat the single round-trip-bound INSERT connection vtgate forces. 0 = auto: 4; 1 = serial. Bounded by the target connection budget. ·
 
---no-auto-resnapshot · Opt out of the automatic re-snapshot when a resume hits a purged/invalid source position (v0.99.51, ADR-0093). By default a resume from a position older than the source's retained binlogs — routine on PlanetScale's retention window — auto-recovers with a fresh cold-start re-snapshot; with this flag set, sluice instead fails loudly with the recovery commands named, so a full re-snapshot of very large tables is a deliberate choice. ·
+--no-auto-resnapshot · Opt out of the automatic re-snapshot when a resume hits a purged/invalid source position (v0.99.51, ADR-0093). By default a resume from a position older than the source's retained binlogs — routine on PlanetScale's retention window — auto-recovers with a fresh cold-start re-snapshot; with this flag set, sluice instead fails loudly with the recovery commands named, so a full re-snapshot of very large tables is a deliberate choice. A purged position is not the only cause: since v0.137.2 a MySQL file/pos position whose recorded server_uuid no longer matches the source's (instance replaced, rebuilt, restored from backup, failed over) is the same invalid-position class and takes the same fall-through — a fresh cold start against the new instance by default, a hard stop with this flag. See the MySQL resume signals below. ·
 
 --inject-shard-column · NAME=VALUE — ADR-0048 Shape A discriminator column for consolidating a multi-shard Vitess source onto one target (per-shard streams pass distinct VALUEs). See the migrate row. ·
 
@@ -462,7 +462,7 @@ Flag · Purpose ·
 
 --metrics-listen · Bind a Prometheus /metrics + /readyz endpoint, e.g. :9090. Exports sluice_build_info, a Go-runtime block, and — when PlanetScale telemetry is configured (below) — the sluice_target_* CPU/mem/storage/lag gauge family. See /metrics export. ·
 
---position-from-manifest · URL of a backup chain (s3://, gs://, azblob://, file:///) whose terminal manifest's EndPosition becomes this stream's resume position — resume CDC from a restored chain's tail without re-bulking. Bypasses the persisted sluice_cdc_state position. PG soft preflight warnings fire here; --strict-preflight promotes them to refusals. (Mutually exclusive with --restart-from-scratch / --reset-target-data.) ·
+--position-from-manifest · URL of a backup chain (s3://, gs://, azblob://, file:///) whose terminal manifest's EndPosition becomes this stream's resume position — resume CDC from a restored chain's tail without re-bulking. Bypasses the persisted sluice_cdc_state position. PG soft preflight warnings fire here; --strict-preflight promotes them to refusals. (Mutually exclusive with --restart-from-scratch / --reset-target-data.) The manifest's position is bound to the instance that produced it. On a mysql-flavor source in file/pos mode (gtid_mode=OFF or OFF_PERMISSIVE), backups taken by v0.137.2+ stamp the source's @@server_uuid onto the EndPosition, and a resume that finds a different @@server_uuid on the source — the instance was replaced, rebuilt, restored from backup, or failed over, so its binlog lineage reuses the same filenames but shares none of the bytes — is refused as an invalid position and falls through to a fresh cold start (or a hard stop under --no-auto-resnapshot), rather than streaming from a byte offset in an unrelated binlog. Through v0.137.1 the backup capturers did not stamp it and such a resume was accepted; one reproduced end to end on two MySQL 8.0.46 instances skipped three rows at exit 0. A manifest written before v0.137.2 carries no identity and still resumes on the binlog-filename check alone, with an UNVERIFIED-INSTANCE-IDENTITY WARN naming it — one fresh backup full moves that chain onto the identity check. The stamp is not needed elsewhere: a GTID set is instance-bound by construction, MariaDB is always in GTID mode, PlanetScale/Vitess resume on VStream positions, and a Postgres position is pinned by its own (system_id, timeline) identity. ·
 
 --planetscale-org · PlanetScale org slug, consumed by both optional PlanetScale integrations — each arms on its own token pair (v0.99.259): (1) target-health telemetry (CPU/mem/storage/lag) read from the PlanetScale metrics endpoint (ADR-0107), feeding proactive apply back-off and the sluice_target_* gauges — opt-in and all-or-nothing with the metrics-token pair (org + a partial metrics pair is a loud refusal); (2) the ADR-0148 deploy-request index-build fallback for the cold-start index phase on a planetscale target — opportunistic, WARN-at-most, arming on the service-token pair (a fallback-only arming never trips the telemetry refusal). A control-plane credential, distinct from the data-plane --target DSN. Unlike migrate's flag it has no ambient PLANETSCALE_ORG env binding here — arming needs the explicit flag (the tokens still come from env). Off when unset (default sync unchanged). ·
 
@@ -561,6 +561,18 @@ Shared with migrate · The copy-phase flags documented under migrate apply to th
   The apply path is adaptive-concurrent by default (v0.99.100+, ADR-0106). With --apply-concurrency unset, CDC apply fans out across an auto-chosen number of PK-hash lanes (Postgres min(4, slot-budget); MySQL/PlanetScale 4) — exactly-once for keyed tables, with per-lane AIMD and in-lane tx-killer/deadlock recovery. To force the old strictly-serial apply, pass --apply-concurrency 1.
 
   Resilient on managed / PlanetScale targets (no flags needed). sluice automatically rides PlanetScale storage-grow and primary-reparent serving transitions without operator intervention — across cold-copy writes, cold-copy source reads, the coordinated grow-gate, restore reconciliation, and (new in v0.99.118) the post-copy DDL phase (index / constraint / view build). Transient errors during a transition are bounded-retried and loud only on genuine exhaustion.
+
+  MySQL resume signals (v0.137.2–v0.137.3). A self-hosted MySQL source resumes on one of two arms — a GTID set, or a binlog file and offset — and the arms are not equally strong: a GTID set is instance-bound by construction, whereas a binlog file/offset is instance-local and carries no provenance — a replaced, rebuilt or restored server starts a fresh lineage that reuses mysql-bin.000001. On the file/pos arm sluice binds every persisted position to the source's @@server_uuid and refuses a mismatch; both the backup capturers (since v0.137.2) and the CDC capturers stamp it. Three grep-stable markers say where a given resume stands. None is toggled by a flag; none applies to MariaDB (always GTID mode), the PlanetScale/Vitess flavors (VStream positions), or Postgres.
+
+Signal at CDC open · When · What it means ·
+
+POSITION-MODE (info) · mysql-flavor source with gtid_mode=OFF or OFF_PERMISSIVE; once per CDC open, including the cold-start snapshot's. v0.137.3+. · This source resumes from a binlog file and offset. Supported and correct — and the weaker of the two arms, for the reason above: a resume against a replaced source is caught only by the @@server_uuid stamp, where a GTID set would catch itself. Enabling gtid_mode=ON on the source is the stronger configuration if the platform gives you the choice. It is an INFO, not a WARN, on purpose: a warning on a working configuration is what teaches people to ignore warnings. Nothing to do. ·
+
+UNVERIFIED-INSTANCE-IDENTITY (warn) — no identity recorded · The persisted file/pos position carries no server_uuid: a backup manifest written by v0.137.1 or earlier, or a capture that could not read the value. v0.137.3+ names it; earlier binaries were silent. · The position is unverifiable, not wrong, and it is accepted — refusing would force a full re-copy on chains that are almost certainly fine. What protects it is the binlog filename check alone, which a replaced source reusing the same name defeats. Taking one fresh backup full moves that chain onto the identity check; this population cannot grow, since every capture door now stamps, so it drains as chains are re-rooted. ·
+
+UNVERIFIED-INSTANCE-IDENTITY (warn) — source unreadable · The position carries an identity, but the source's @@server_uuid could not be read on this open, so the check could not run. v0.137.3+. · A probe failure on a refusal-gating check, which is a different thing from an old position. It is allowed through so a transient read failure cannot force a re-snapshot, but a replaced source would not be caught on this resume. Once is noise; a recurring one is a real finding — find out why the source will not answer SELECT @@server_uuid for this connection. ·
+
+"source instance identity changed since the persisted position was captured … refusing to resume" (refusal) · The recorded server_uuid and the source's differ: the instance was replaced, rebuilt, restored from backup, or failed over. v0.137.2+ for backup-captured positions; CDC-persisted positions have carried the stamp, and been checked, since v0.69.5. · The guard doing its job. The binlog lineage does not carry over, so the position is refused as invalid rather than streamed from an unrelated file. sync start falls through to a fresh cold start against the new instance by default, or a hard stop naming the recovery commands under --no-auto-resnapshot; backup incremental refuses and the remedy is a fresh backup full. Through v0.137.1 a backup-captured position had no identity to check, and this case resumed silently — see the --position-from-manifest row above. ·
 
   Run as a service with metrics + idle-source heartbeat:
 
@@ -723,7 +735,7 @@ Subcommand · Purpose ·
 
 backup full · Take a full snapshot (chain root). ·
 
-backup incremental · Append an incremental onto the existing chain. ·
+backup incremental · Append an incremental onto the existing chain. It streams from the parent manifest's EndPosition, and refuses — "source cannot serve the parent's terminal position (WAL/binlog pruned past it, or the source identity changed); take a fresh full backup" — rather than record an unrelated lineage's changes as the chain's delta. The identity half of that is the v0.137.2 guard: on a mysql-flavor source in file/pos mode the parent's position carries the @@server_uuid it was captured from, and an incremental run against a different instance (replaced, rebuilt, restored, failed over) is refused; the remedy is a fresh backup full. A parent captured before v0.137.2 has no identity to check and proceeds on the binlog-filename check alone, with an UNVERIFIED-INSTANCE-IDENTITY WARN. ·
 
 backup stream run / stop · Run as a long-lived process appending incrementals at a rolling cadence; stop drains the in-flight rollover and exits cleanly. ·
 
@@ -769,7 +781,7 @@ Flag · Purpose ·
 
 --chunk-size · Maximum rows (on full) or changes (on incremental / stream run) per chunk file; the writer rolls over on reaching it. Default 100000. Smaller chunks restore faster — the per-chunk SHA-256 verification fails fast on the smallest possible unit — but inflate the manifest. ·
 
---since · On incremental / stream run: the BackupID of the parent manifest this run chains off. Empty (default) picks the most recent manifest at the destination. ·
+--since · On incremental / stream run: the BackupID of the parent manifest this run chains off. Empty (default) picks the most recent manifest at the destination. The parent's EndPosition must be one the source can still serve and, on a MySQL file/pos source, one this instance produced — its recorded @@server_uuid is checked against the source's (v0.137.2), so a chain cannot be extended across an instance replacement; take a fresh full instead. ·
 
 --window / --max-changes · backup incremental's two window bounds. --window (default 5m) is the wall-clock duration it streams CDC events for; --max-changes stops after N events, 0 (default) meaning time-bound only. Both are approximate in the same way: transaction framing counts as events (a one-row transaction is three), and the window always extends to the next TxCommit so a chain never ends mid-transaction — and never closes before it has passed the parent's end position. ·
 
@@ -869,7 +881,7 @@ Flag · Purpose ·
     sluice restore --from s3://my-bucket/app-chain \
         --target-driver postgres --target ...
 
-   Pair with sync start --position-from-manifest URL — point it at the chain URL whose terminal manifest's EndPosition becomes the stream's resume position, so CDC picks up from the chain's tail without re-bulking. (PG soft preflight warnings — wal_keep_size sufficiency, Patroni-managed source — fire here; --strict-preflight promotes them to refusals.)
+   Pair with sync start --position-from-manifest URL — point it at the chain URL whose terminal manifest's EndPosition becomes the stream's resume position, so CDC picks up from the chain's tail without re-bulking. (PG soft preflight warnings — wal_keep_size sufficiency, Patroni-managed source — fire here; --strict-preflight promotes them to refusals.) On a MySQL source in file/pos mode the chain's tail position also names the @@server_uuid it was captured from (v0.137.2+), so pointing the stream at a replaced or restored instance refuses and cold-starts instead of resuming into an unrelated binlog; a chain whose tail predates v0.137.2 resumes with a UNVERIFIED-INSTANCE-IDENTITY WARN until one fresh full backup re-roots it — see the MySQL resume signals.
 
    Drive both restore parallelism axes (tables × within-table chunks, product bounded by the target budget):
 
@@ -4007,7 +4019,7 @@ Continuous sync — the same CA flag, plus a stream id. Set the binlog_retention
 
 - The retention advisory WARN — sync and backup runs against a *.db.ondigitalocean.com host warn about the ~13–16-minute default purge window and name the config-API remedy. (The host pattern is the only reliable signal — the server variable can't be trusted on this platform, so the WARN is unconditional.)
 
-- Loud position-invalid recovery — a resume from a purged position surfaces as an explicit &ldquo;persisted position is no longer valid&rdquo; WARN and a fresh cold start, never a silent gap; --no-auto-resnapshot converts that into a hard stop with named recovery commands.
+- Loud position-invalid recovery — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded server_uuid no longer matches the source (instance replaced / restored / failed over), surfaces as an explicit &ldquo;persisted position is no longer valid&rdquo; WARN and a fresh cold start, never a silent gap; --no-auto-resnapshot converts that into a hard stop with named recovery commands.
 
 - --source-tls-ca refusals — the flag refuses to combine with a DSN-level tls= setting, and refuses on non-MySQL engines (Postgres uses sslrootcert= in the DSN) instead of silently ignoring a security flag.
 
@@ -4061,7 +4073,7 @@ What the WARN means. sluice's advisory here is detect-first: on sync/backup runs
 
 - MySQL 8.0's family default is binlog_format=MIXED — an RDS MySQL 8.0 source needs a custom parameter group with binlog_format=ROW. The parameter is dynamic: no reboot, but only new connections see it, so reconnect after the change.
 
-- gtid_mode=OFF_PERMISSIVE by default; sluice's file/position CDC works as-is.
+- gtid_mode=OFF_PERMISSIVE by default; sluice's file/position CDC works as-is. Expect one POSITION-MODE INFO per CDC open (v0.137.3+) naming file/pos as the weaker of the two resume arms — the position's instance identity then rests on the @@server_uuid stamp (v0.137.2), not on the position itself. gtid_mode=ON is the stronger configuration where the parameter group allows it. See the MySQL resume signals.
 
 ## The FTWRL platform block (why serial cold copy is expected)
 
@@ -4103,7 +4115,7 @@ The master user has the replication grants CDC needs out of the box (REPLICATION
 
 - FTWRL fallback WARNs — the serial-copy fallback and the no-freeze snapshot capture are both announced, never silent.
 
-- Loud position-invalid recovery — a resume from a purged position is an explicit WARN plus a fresh cold start (or a hard stop under --no-auto-resnapshot), never a silent gap.
+- Loud position-invalid recovery — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded server_uuid no longer matches the source (instance replaced / restored / failed over), is an explicit WARN plus a fresh cold start (or a hard stop under --no-auto-resnapshot), never a silent gap.
 
 - Unencrypted-binlog-stream WARN — a plaintext DSN gets a warning that the CDC stream is unencrypted; --source-tls-ca resolves it.
 
@@ -4470,7 +4482,7 @@ Purge appears platform-scheduled and lazy — files can outlive the configured w
 
 - FTWRL works (RELOAD honored) — sluice's concurrent frozen-snapshot cold copy runs with no fallback WARNs.
 
-- Replication grants (REPLICATION SLAVE/REPLICATION CLIENT) are present on the admin user out of the box; binlog_format=ROW is read-only at the platform (no MIXED trap); gtid_mode=OFF by default (file/position CDC is fine); sql_require_primary_key=OFF; stock-strict sql_mode (no DigitalOcean-style ANSI surprise).
+- Replication grants (REPLICATION SLAVE/REPLICATION CLIENT) are present on the admin user out of the box; binlog_format=ROW is read-only at the platform (no MIXED trap); gtid_mode=OFF by default (file/position CDC is fine — expect one POSITION-MODE INFO per CDC open since v0.137.3 naming it the weaker resume arm, with the position's instance identity resting on the v0.137.2 @@server_uuid stamp; gtid_mode=ON is the stronger configuration where the platform allows it); sql_require_primary_key=OFF; stock-strict sql_mode (no DigitalOcean-style ANSI surprise).
 
 - Host pattern *.mysql.database.azure.com; the in-band fingerprint is @@version ending in -azure. One-time subscription step: az provider register --namespace Microsoft.DBforMySQL must have completed before instance creation works.
 
@@ -4494,7 +4506,7 @@ Continuous sync — the same DSN, plus a stream id:
 
 - No retention advisory — correctly. Azure's defaults hold binlogs, so the host-pattern retention WARNs that fire on DigitalOcean and Vultr have nothing to warn about here; a quiet preflight is the right result, not a blind spot.
 
-- Loud position-invalid recovery — a resume from a purged position (only reachable if you bounded retention aggressively) is an explicit WARN plus a fresh cold start, or a hard stop under --no-auto-resnapshot.
+- Loud position-invalid recovery — a resume from a purged position (only reachable if you bounded retention aggressively), or (v0.137.2+) from a file/pos position whose recorded server_uuid no longer matches the source (instance replaced / restored / failed over), is an explicit WARN plus a fresh cold start, or a hard stop under --no-auto-resnapshot.
 
 ## Next steps
 
@@ -4642,7 +4654,7 @@ Continuous sync — the same CA flag, plus a stream id. Keep it attached and cau
 
 - The unconditional retention WARN — sync and backup runs against a *.vultrdb.com host warn about the ~10-minute unconfigurable purge window. The wording is stronger than DigitalOcean's, because DO's message can point at a knob and Vultr's cannot.
 
-- Loud position-invalid recovery — a resume from a purged position surfaces as an explicit WARN and a fresh cold start; --no-auto-resnapshot converts that into a hard stop with named recovery commands.
+- Loud position-invalid recovery — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded server_uuid no longer matches the source (instance replaced / restored / failed over), surfaces as an explicit WARN and a fresh cold start; --no-auto-resnapshot converts that into a hard stop with named recovery commands.
 
 - --source-tls-ca refusals — the flag refuses to combine with a DSN-level tls= setting and refuses on non-MySQL engines, rather than silently ignoring a security flag.
 
@@ -6767,7 +6779,7 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-05-23Postgres•• field note proto_version lets you parse streaming; only streaming='on' emits it — Two pgoutput knobs are easy to conflate, and the gap between them hides a silent-loss shape: if streaming ever activates and each chunk commits as its own transaction, a dropped StreamAbort leaves the pre-abort rows durably on the target &mdash; extra rows no checksum diff will catch.
 
-- 2026-05-22Postgres•• field note A Postgres LSN means nothing without its timeline — Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL gets this right for free with GTIDs; Postgres's raw LSN carries no provenance.
+- 2026-05-22Postgres•• field note A Postgres LSN means nothing without its timeline — Resume a logical-replication slot after a PITR or a promotion and the same LSN points into a different WAL reference frame &mdash; the source streams from it happily and events are silently skipped. MySQL is self-identifying only in GTID mode &mdash; a binlog file/offset carries no more provenance than a raw LSN &mdash; so in both engines you pin the identity yourself.
 
 - 2026-05-20Cross-cutting· quick note BIT crosses the wire as bytes, and the engines disagree on layout — MySQL hands BIT(N) back as ceil(N/8) right-justified big-endian bytes; Postgres surfaces bit as a '0'/'1' text string. Carry the raw bytes between them and the value is silently corrupted &mdash; the ASCII of the digits, not the bits.
 
@@ -8091,7 +8103,7 @@ A Postgres LSN is not a global coordinate. It is only meaningful within a (syste
 
 The replication protocol hands you the identity on a plate — IDENTIFY_SYSTEM returns (systemid, timeline, xlogpos, dbname) before START_REPLICATION — but it is easy to call it only on cold-start to read xlogpos and discard the rest. Do that, and on resume you send the old LSN into the new timeline's WAL and the server obliges. The divergence is silent because nothing on either side is looking at the mismatch.
 
-The sharp contrast is MySQL: a GTID set from a different server_uuid simply fails GTID_SUBSET against the new source's executed set, so the same class refuses itself for free. Postgres's raw LSN carries no such self-identifying provenance — you have to pin it yourself.
+The contrast with MySQL is narrower than it first looks, and an earlier version of this note overstated it. In GTID mode the position is self-identifying: every GTID names the server_uuid that produced it, so a set from a different instance can be caught by a containment check against the new source. But "can be" is doing work in that sentence. The containment check sluice runs on that arm today is GTID_SUBSET(@@gtid_purged, resume) — "has the resume point been purged?" — which a fresh instance with an empty gtid_purged passes; it does not yet ask "did this server ever execute it?" (an open finding from the 2026-09-01 audit, recorded, not yet fixed). And in file/pos mode — gtid_mode=OFF, MySQL 8's default — a binlog filename and byte offset carry exactly as much provenance as a raw LSN: none. sluice binds those positions to the source's @@server_uuid and refuses a mismatch, and the backup-captured half of that stamp only arrived in v0.137.2, after a cross-instance resume was shown to skip rows at exit 0. So the honest statement is that neither engine hands you this for free: Postgres's raw LSN carries no self-identifying provenance, and MySQL's does only in one of its two modes — in both cases you pin the identity yourself.
 
 ## The repro
 
@@ -8113,7 +8125,7 @@ sluice pins (SystemID, Timeline) from IDENTIFY_SYSTEM onto the persisted positio
 
 ## The transferable lesson
 
-If you persist a Postgres LSN, persist the (system_id, timeline) it belongs to alongside it, and compare on every reconnect. A stored replication position is a coordinate in a reference frame, not an absolute address — and the ordinary HA events you most want to survive (failover, restore) are exactly the ones that change the frame while leaving the slot name and the number looking valid. Unlike a GTID, a bare LSN won't catch its own staleness for you; that check is yours to write, and its absence is a silent-loss class.
+If you persist a Postgres LSN, persist the (system_id, timeline) it belongs to alongside it, and compare on every reconnect. A stored replication position is a coordinate in a reference frame, not an absolute address — and the ordinary HA events you most want to survive (failover, restore) are exactly the ones that change the frame while leaving the slot name and the number looking valid. A bare LSN won't catch its own staleness for you — and neither will a MySQL binlog file/offset, which is why sluice stamps @@server_uuid onto those too; that check is yours to write, and its absence is a silent-loss class.
 
 ## Primary sources
 

@@ -62,7 +62,7 @@ Continuous sync — the same CA flag, plus a stream id. Set the binlog_retention
 
 - The retention advisory WARN — sync and backup runs against a *.db.ondigitalocean.com host warn about the ~13–16-minute default purge window and name the config-API remedy. (The host pattern is the only reliable signal — the server variable can't be trusted on this platform, so the WARN is unconditional.)
 
-- Loud position-invalid recovery — a resume from a purged position surfaces as an explicit &ldquo;persisted position is no longer valid&rdquo; WARN and a fresh cold start, never a silent gap; --no-auto-resnapshot converts that into a hard stop with named recovery commands.
+- Loud position-invalid recovery — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded server_uuid no longer matches the source (instance replaced / restored / failed over), surfaces as an explicit &ldquo;persisted position is no longer valid&rdquo; WARN and a fresh cold start, never a silent gap; --no-auto-resnapshot converts that into a hard stop with named recovery commands.
 
 - --source-tls-ca refusals — the flag refuses to combine with a DSN-level tls= setting, and refuses on non-MySQL engines (Postgres uses sslrootcert= in the DSN) instead of silently ignoring a security flag.
 

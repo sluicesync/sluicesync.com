@@ -20,7 +20,7 @@ A Postgres LSN is not a global coordinate. It is only meaningful within a (syste
 
 The replication protocol hands you the identity on a plate — IDENTIFY_SYSTEM returns (systemid, timeline, xlogpos, dbname) before START_REPLICATION — but it is easy to call it only on cold-start to read xlogpos and discard the rest. Do that, and on resume you send the old LSN into the new timeline's WAL and the server obliges. The divergence is silent because nothing on either side is looking at the mismatch.
 
-The sharp contrast is MySQL: a GTID set from a different server_uuid simply fails GTID_SUBSET against the new source's executed set, so the same class refuses itself for free. Postgres's raw LSN carries no such self-identifying provenance — you have to pin it yourself.
+The contrast with MySQL is narrower than it first looks, and an earlier version of this note overstated it. In GTID mode the position is self-identifying: every GTID names the server_uuid that produced it, so a set from a different instance can be caught by a containment check against the new source. But "can be" is doing work in that sentence. The containment check sluice runs on that arm today is GTID_SUBSET(@@gtid_purged, resume) — "has the resume point been purged?" — which a fresh instance with an empty gtid_purged passes; it does not yet ask "did this server ever execute it?" (an open finding from the 2026-09-01 audit, recorded, not yet fixed). And in file/pos mode — gtid_mode=OFF, MySQL 8's default — a binlog filename and byte offset carry exactly as much provenance as a raw LSN: none. sluice binds those positions to the source's @@server_uuid and refuses a mismatch, and the backup-captured half of that stamp only arrived in v0.137.2, after a cross-instance resume was shown to skip rows at exit 0. So the honest statement is that neither engine hands you this for free: Postgres's raw LSN carries no self-identifying provenance, and MySQL's does only in one of its two modes — in both cases you pin the identity yourself.
 
 ## The repro
 
@@ -42,7 +42,7 @@ sluice pins (SystemID, Timeline) from IDENTIFY_SYSTEM onto the persisted positio
 
 ## The transferable lesson
 
-If you persist a Postgres LSN, persist the (system_id, timeline) it belongs to alongside it, and compare on every reconnect. A stored replication position is a coordinate in a reference frame, not an absolute address — and the ordinary HA events you most want to survive (failover, restore) are exactly the ones that change the frame while leaving the slot name and the number looking valid. Unlike a GTID, a bare LSN won't catch its own staleness for you; that check is yours to write, and its absence is a silent-loss class.
+If you persist a Postgres LSN, persist the (system_id, timeline) it belongs to alongside it, and compare on every reconnect. A stored replication position is a coordinate in a reference frame, not an absolute address — and the ordinary HA events you most want to survive (failover, restore) are exactly the ones that change the frame while leaving the slot name and the number looking valid. A bare LSN won't catch its own staleness for you — and neither will a MySQL binlog file/offset, which is why sluice stamps @@server_uuid onto those too; that check is yours to write, and its absence is a silent-loss class.
 
 ## Primary sources
 

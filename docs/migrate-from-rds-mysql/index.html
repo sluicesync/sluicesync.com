@@ -52,7 +52,7 @@ CALL mysql.rds_show_configuration;                               -- verify: binl
 <ul>
   <li><strong>MySQL 8.4's default parameter group is CDC-ready</strong> (<code>binlog_format=ROW</code> is the engine default and the group leaves it unset).</li>
   <li><strong>MySQL 8.0's family default is <code>binlog_format=MIXED</code></strong> — an RDS MySQL 8.0 source needs a custom parameter group with <code>binlog_format=ROW</code>. The parameter is dynamic: no reboot, but only <em>new</em> connections see it, so reconnect after the change.</li>
-  <li><code>gtid_mode=OFF_PERMISSIVE</code> by default; sluice's file/position CDC works as-is.</li>
+  <li><code>gtid_mode=OFF_PERMISSIVE</code> by default; sluice's file/position CDC works as-is. Expect one <code>POSITION-MODE</code> INFO per CDC open (v0.137.3+) naming file/pos as the weaker of the two resume arms — the position's instance identity then rests on the <code>@@server_uuid</code> stamp (v0.137.2), not on the position itself. <code>gtid_mode=ON</code> is the stronger configuration where the parameter group allows it. See the <a href="/docs/commands/#mysql-resume-signals">MySQL resume signals</a>.</li>
 </ul>
 
 <h2 id="ftwrl">The FTWRL platform block (why serial cold copy is expected) <a class="hlink" href="#ftwrl" aria-label="Permalink to this section">#</a></h2>
@@ -84,7 +84,7 @@ CALL mysql.rds_show_configuration;                               -- verify: binl
 <ul>
   <li><strong>The detect-first retention advisory</strong> — on <code>*.rds.amazonaws.com</code> hosts, sluice queries <code>mysql.rds_configuration</code> and WARNs when <code>binlog retention hours</code> is NULL (naming the ~5–11-minute purge reality and the exact remedy call) or configured under 24 h (a milder WARN naming the window); a value &ge; 24 h stays silent. If the query itself fails, sluice falls back to an unconditional DO-style WARN rather than staying quiet.</li>
   <li><strong>FTWRL fallback WARNs</strong> — the serial-copy fallback and the no-freeze snapshot capture are both announced, never silent.</li>
-  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position is an explicit WARN plus a fresh cold start (or a hard stop under <code>--no-auto-resnapshot</code>), never a silent gap.</li>
+  <li><strong>Loud position-invalid recovery</strong> — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded <code>server_uuid</code> no longer matches the source (instance replaced / restored / failed over), is an explicit WARN plus a fresh cold start (or a hard stop under <code>--no-auto-resnapshot</code>), never a silent gap.</li>
   <li><strong>Unencrypted-binlog-stream WARN</strong> — a plaintext DSN gets a warning that the CDC stream is unencrypted; <code>--source-tls-ca</code> resolves it.</li>
 </ul>
 
