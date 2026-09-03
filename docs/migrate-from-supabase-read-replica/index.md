@@ -1,6 +1,6 @@
 # Migrating from a Supabase read replica with sluice
 
-> A Supabase read replica (an -rr- endpoint) is a fine bulk-migrate source that offloads the copy's read load from your primary — PG 16+ standby parallel snapshots engage unreduced — but CDC is refused: a replica can't host the sluice publication, so continuous sync must point at the primary. Plus the corrected CDC-preflight facts and how to verify safely against a lagging replica.
+> A Supabase read replica (an -rr- endpoint) is a fine bulk-migrate source that offloads the copy's read load from your primary — PG 16+ standby parallel snapshots engage unreduced — but CDC and backup are refused: a replica can't host the sluice publication and can't be asked for a CDC end position, so continuous sync and backups must point at the primary. Plus the corrected CDC-preflight facts and how to verify safely against a lagging replica.
 
 A Supabase read replica is managed Postgres running as a streaming-replication standby, so sluice drives it with the vanilla postgres engine. Live-probed 2026-07-17 (PG 17 replica, same region as its primary): it works as a bulk sluice migrate source with the full consistency story, and it is refused as a CDC source with a coded steer to the primary. This guide covers both, plus verifying safely against a replica. For the primary-endpoint essentials (IPv6-only direct host, Supavisor pooler modes, TLS, float display), start with the main Supabase guide.
 
@@ -28,7 +28,7 @@ The password is identical to the primary (the role catalog replicates physically
 
 ## CDC: point at the primary, never the replica
 
-CDC has to manage the sluice publication on the source, and CREATE/ALTER PUBLICATION cannot run on a standby. sluice refuses up front with the coded SLUICE-E-CDC-STANDBY-SOURCE steer (before the fix this surfaced as a raw SQLSTATE 25006 &ldquo;read-only transaction&rdquo; at publication ensure). PG 16+ standbys can technically host logical slots, but creation blocks on the primary's next running-xacts record and Supabase denies the pg_log_standby_snapshot() nudge that would unblock it — so the primary is the supported CDC source. Point sync start (and backup CDC chains) at db.<ref>.supabase.co, not the -rr- host.
+CDC has to manage the sluice publication on the source, and CREATE/ALTER PUBLICATION cannot run on a standby. sluice refuses up front with the coded SLUICE-E-CDC-STANDBY-SOURCE steer (before the fix this surfaced as a raw SQLSTATE 25006 &ldquo;read-only transaction&rdquo; at publication ensure). PG 16+ standbys can technically host logical slots, but creation blocks on the primary's next running-xacts record and Supabase denies the pg_log_standby_snapshot() nudge that would unblock it — so the primary is the supported CDC source. Point sync start and backup at db.<ref>.supabase.co, not the -rr- host. Since v0.139.0 backup full refuses a standby up front too, and not only as part of a CDC chain: it cannot record the CDC end position every manifest needs, and it used to discover that only after copying every row — dying on a raw SQLSTATE 55000 at position capture and leaving an uncommitted manifest that restore then refuses.
 
 ## The CDC preflight facts (on the primary)
 

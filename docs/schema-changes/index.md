@@ -26,7 +26,7 @@ ADD COLUMN · forwards · forwards ·
 
 DROP COLUMN · forwards · forwards ·
 
-ALTER COLUMN TYPE (same- or cross-engine) · forwards · forwards ·
+ALTER COLUMN TYPE (same- or cross-engine) · forwards5 · forwards5 ·
 
 ALTER NULLABILITY · forwards · refuses1 ·
 
@@ -44,12 +44,21 @@ RENAME TABLE / multi-shape combo · refuses · refuses ·
 2 sluice decodes rows by column name, never by position, so a pure reorder needs no DDL — it is a safe no-op.
 3 MySQL's CDC projection reads only {schema, name, columns, primary key} on a DDL boundary; it does not project secondary indexes or CHECK constraints. Forwarding them would need a new catalog projection (perf-only for indexes; cross-engine expression-translation-hazardous for checks), so both are deferred.
 4 A Postgres RENAME is proven via the stable pg_attribute.attnum — see RENAME COLUMN.
+5 With two carve-outs, both below: a cast to or from a session-normalised timestamp always refuses (session-normalised timestamp), and on a Postgres source a change your projected type cannot express refuses under both modes (projection-invisible changes).
 
 Every forwarded DDL is logged at INFO as it lands, so the applied change is visible in the sync's log stream. Cross-engine type ALTERs are retargeted through the same translation path a cold-start CREATE TABLE uses; a widening ALTER forwards cleanly, while a narrowing or incompatible one is rejected by the target engine and surfaces as a loud, retryable refuse (position not advanced).
 
 ## What always refuses, even under forward
 
-Two shapes never auto-apply, because forwarding the wrong guess would silently lose data:
+Five shapes never auto-apply, because forwarding them would silently change or lose stored data:
+
+### A cast to or from a session-normalised timestamp
+
+An ALTER COLUMN TYPE where either side is a session-normalised timestamp — MySQL TIMESTAMP, Postgres timestamptz — refuses, in either direction and at any precision. Those types store UTC, so the server has to resolve them through the executing session's zone to render them as anything else (and to read anything else into them), and nothing on the binlog or the pgoutput wire carries which zone that was. The source operator's ALTER ran under their own session — MySQL's shipped default is time_zone=SYSTEM, the host zone — while sluice pins UTC on every connection it opens, so forwarding the same statement re-casts the target's pre-existing rows against a different zone. Row counts stay equal, every row applied after the ALTER is correct, and the sync exits 0: exactly the silent shape the refusals on this page exist for.
+
+The original refusal was the TIMESTAMP ↔ DATETIME swap alone. Since v0.139.0 it covers the wider measured class. On MySQL 8.0.46 and PostgreSQL 16, a value stored at 2026-06-15 20:00:00 UTC and altered under a +09:00 session read back as 2026-06-16 05:00:00 through VARCHAR, 2026-06-16 through DATE (across midnight), 05:00:00 through TIME and 20260616050000 through BIGINT; the reverse casts into TIMESTAMP shifted the stored instant by the same nine hours, and PG timestamptz to text / date behaved identically. All of them forwarded unrefused before. timetz is deliberately not in the class: it stores its offset per value, and timetz to text / time measured byte-identical under two different session zones. time to timetz is in it, because an offset is invented from the session. A precision-only change within one type (DATETIME(3) → DATETIME(6)) and a cast with no zoned side at all (DATETIME → VARCHAR) carry no zone conversion and keep forwarding.
+
+Scope, stated precisely. The widened class is enforced at the pipeline door, which is reached when a boundary is forwarded — the mode that re-casts the target's existing rows, and so where the widening does its work. The reader-side checks that refuse at a table's first boundary after a cold start or a warm resume still carry only the original TIMESTAMP/DATETIME pair. Either way the remedy is the drained model below: stop with --wait, run the same ALTER on source and target from your own client so both casts happen under a session zone you chose, then restart with the same --stream-id.
 
 ### RENAME COLUMN
 
@@ -62,6 +71,14 @@ A column rename and a DROP x + ADD y of the same type are indistinguishable from
 ### ADD COLUMN with a computed / volatile DEFAULT
 
 An ADD COLUMN whose DEFAULT is a non-deterministic function is refused, because evaluating it in the target's session diverges from the per-row values the source already inserted (ADR-0058 §2a). The refused functions include NOW() / CURRENT_TIMESTAMP / clock_timestamp(), nextval(), gen_random_uuid(), random(), and MySQL's UUID() / RAND() — matched schema-qualified or bare, and detected even when wrapped (e.g. COALESCE(NULL, NOW())). A constant DEFAULT forwards normally. If the probe of a column's default can't be read at all, sluice refuses on uncertainty rather than risk a wrong value.
+
+### A change your projected type cannot express (Postgres source)
+
+A consumer of pgoutput holds two representations of a column's type — the raw wire pair (type OID, typmod) and the projected IR type sluice maps engines into — and they can disagree about whether anything changed. interval precision/field restrictions and array-element modifiers are visible to the raw compare and vanish in projection, so the change classifies and there is no projected boundary to forward, while the source has already rewritten every stored value underneath it. Since v0.132.1 a detected change whose projected type is unchanged refuses under both modes, per column and keyed on column name (a middle-column DROP shifts every later ordinal, and pgoutput coalesces DML-quiet back-to-back DDL into one relation message of final state), with a catalog-derived enumeration gate holding the class closed. The refusal text is shape-aware: the two catalog-only shapes PostgreSQL applies without a rewrite — an unbounded varchar↔text swap, and an interval precision widening with the same range bits — say so instead of warning about divergence that did not happen.
+
+### A DROP of a synced table (postgres-trigger source)
+
+Dropping a table a postgres-trigger install captures — directly, or through DROP SCHEMA … CASCADE / DROP OWNED BY — refuses the stream at the next poll since v0.136.0, naming the relation and carrying a drop-specific remedy (the usual one would be useless: sluice migrate reads the source schema and cannot land a drop). Through v0.135.x nothing recorded it at all — the ddl_command_end event trigger named DROP TABLE in its tag filter, and pg_event_trigger_ddl_commands() returns zero rows for a drop — so the stream carried on at exit 0 with the target holding the table's last-synced rows forever. An install created before v0.136.0 has no sql_drop arm and warns DROP-CAPTURE-ABSENT at every CDC open until sluice trigger setup is re-run. Two deliberate non-events: a DROP INDEX records nothing (sluice never forwards index DDL, so an index drop cannot change any row the applier writes), and a drop elsewhere in the database records nothing — the capture is scoped to tables carrying this install's own sluice_capture trigger.
 
 Multi-shape combos (more than one structural change in a single boundary) also refuse — the IR delta can't be unambiguously ordered — as does a target DDL apply that fails on lock contention, permissions, or an unrecognized type. Every one of these leaves the CDC position un-advanced, so a retry replays the boundary once you've reconciled by hand.
 
