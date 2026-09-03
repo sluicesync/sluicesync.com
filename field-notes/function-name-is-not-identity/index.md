@@ -50,7 +50,7 @@ When you audit a database object against what your tool renders, the read must b
 
 - Measured for this note on stock postgres:16 (16.14) and postgres:17 (17.11) containers &mdash; the declared-arguments refusal, the surviving overload after CREATE OR REPLACE, the return-type refusal, and body storage under both check_function_bodies settings.
 
-- sluice internal/engines/pgtrigger/cdc_capture_body.go at v0.137.0 &mdash; captureFunctionArity, captureFunctionShapeQuery and the file header: the arity scope, the three-column comparison, and the two normalizations.
+- sluice internal/engines/pgtrigger/cdc_capture_body.go at v0.137.0 &mdash; captureFunctionArity, captureFunctionShapeQuery and the file header: the arity scope, the three-column comparison, and the two normalizations. Since v0.138.0 the door resolves through the OID actually bound — pg_trigger.tgfoid / pg_event_trigger.evtfoid, compared by namespace before name — in cdc_capture_shape.go; captureFunctionArity no longer exists, so a same-named function in another schema is never what gets graded.
 
 - Related field note: The index that shares only a name &mdash; the same family one object type over: &ldquo;already exists&rdquo; is not &ldquo;already correct.&rdquo;
 
