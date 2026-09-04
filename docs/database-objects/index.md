@@ -34,7 +34,7 @@ Object · Kind · When & why · Cleaned up by ·
 
 sluice_slot · replication slot · Created lazily on the first CDC connect (cold-start). Pins WAL and holds the resume LSN (confirmed_flush_lsn). pgoutput plugin; failover-aware on PG 17+. · Never auto-dropped — explicit sluice slot drop <name>. (Auto-dropped only if cold-start setup itself fails.) ·
 
-sluice_pub · publication · Ensured on demand when missing, by migrate and sync start. Defines the table set pgoutput streams — scoped FOR TABLE … by default (ADR-0021), FOR ALL TABLES for multi-schema CDC. · No dedicated command — manual DROP PUBLICATION (a DROP SCHEMA won't remove it). sluice rescopes/recreates it itself. ·
+sluice_pub · publication · Ensured on demand when missing, by migrate and sync start. Defines the table set pgoutput streams — scoped FOR TABLE … by default (ADR-0021), FOR ALL TABLES for multi-schema CDC. A MISSING publication is recreated at every stream open, warm resume included, and when no table scope is supplied it comes back FOR ALL TABLES — so dropping it by hand and resuming can silently widen a scoped stream to the whole database. The scope-conflict refusal does not catch this: it guards a rescope that REMOVES tables, not a create-from-absent. · No dedicated command — manual DROP PUBLICATION (a DROP SCHEMA won't remove it). sluice rescopes/recreates it itself. ·
 
 sluice_heartbeat · table · Opt-in via --source-heartbeat-interval (default off). A periodic INSERT generates WAL so the consumer position keeps advancing on an idle source — preventing slot-invalidation / binlog-purge silent loss. Also created on a MySQL source under the same flag. · Rows auto-pruned (--source-heartbeat-prune-window, default 1h); the table itself is left in place — drop manually. ·
 
@@ -84,7 +84,7 @@ sluice trigger prune / backup prune · Old change-log rows / below-floor sluice_
 
 sluice sync start --reset-target-data · The target bookkeeping state + every source-schema table sluice manages on the target (destructive recovery). ·
 
-manual · sluice_pub (DROP PUBLICATION), and the sluice_heartbeat table once heartbeats are no longer needed. ·
+manual · sluice_pub (DROP PUBLICATION — but see the warning below), and the sluice_heartbeat table once heartbeats are no longer needed. Do not drop sluice_pub while any stream over that source still exists. The next open recreates it, and with no table scope to hand it recreates it FOR ALL TABLES — which stops Postgres accepting UPDATE and DELETE on every table in the database that has no replica identity, including ones the stream never touched. Retire the stream first with sluice sync decommission --stream-id <id> --yes, which drops the slot and the per-stream publication together. ·
 
 ---
 Canonical page: https://sluicesync.com/docs/database-objects/ · Full docs index: https://sluicesync.com/llms.txt
