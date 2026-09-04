@@ -159,7 +159,7 @@ No hot-reload. The keyset is snapshotted once at process startup; a rotation tak
 
 ## Preflight refusals
 
-sluice runs these checks before any data movement, on every lane that redacts rows — migrate (single- and multi-database), sync start cold start (single- and multi-database), sync add-table, and backup full. When more than one fires in the same run they aggregate into a single combined error, so you see the full picture in one pass.
+sluice runs these checks before any data movement, on every lane that redacts rows — migrate (single- and multi-database), sync start cold start (single- and multi-database), schema add-table, and backup full. When more than one fires in the same run they aggregate into a single combined error, so you see the full picture in one pass.
 
 - Selector resolution. Every rule's [schema.]table.column must resolve to a real column in the source schema, and a schema-qualified rule must resolve to a table in that namespace. A rule that resolves to nothing is refused as a typo class — it would apply to nothing and ship the column in clear. Two namespace shapes matter:
 
