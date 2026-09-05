@@ -394,7 +394,7 @@ Inspect, gracefully stop, health-check, and retire a stream. All take --stream-i
     sluice sync health --stream-id app-prod --target-driver postgres --target ... \
         --max-stale-seconds 300   # exit non-zero if the last apply was more than 5 minutes ago
     sluice sync decommission --stream-id wave-1 --source-driver postgres --source ... \
-        --target-driver postgres --target ... --yes   # drained wave: drop slot + publication, clear control row
+        --target-driver postgres --target ... --yes   # drained wave: drop slot + its OWN publication, clear control row
 
    sync health's freshness check is --max-stale-seconds N (target-side wall-clock seconds since the last apply; 0 = informational only). When you also pass --source-driver + --source the probe reads the source position too and, on a PG→PG pair, exposes --max-lag-bytes N (source LSN bytes ahead of target; MySQL GTID sets aren't byte-distance comparable). Both exit 1 when breached — cron-friendly. Since v0.123.0 the exit-1 set has a third member with no threshold flag: a nonzero skipped-tables count (skipped_tables in the JSON — see the skip-and-count note under sync start), because skipped tables only resolve through operator action.
 
