@@ -51,7 +51,7 @@ Because only backup full redacts, extending a redacted full with an incremental 
 
 - restore, chain restore, backup verify, export-as-parquet and the from-backup broker refuse a chain whose links disagree.
 
-- backup compact refuses a redacted chain outright. Compaction re-attributes one segment's manifest to several segments' merged data, which would produce a chain claiming to be redacted over plaintext — and one the read doors above would then pass. Use backup prune to reclaim space instead.
+- backup compact refuses a compaction that would merge segments of a chain carrying the marker. Compaction re-attributes one segment's manifest to several segments' merged data, which would produce a chain claiming to be redacted over plaintext — and one the read doors above would then pass. Use backup prune to reclaim space instead. This door is defense-in-depth: no sluice binary can currently produce a marker-carrying chain of more than one segment (both extenders refuse, and an older binary can neither write the marker nor read past the format-version stamp), so what it refuses is a hand-assembled lineage. It also runs after compaction's "fewer than two eligible segments" check, so a chain with nothing to merge exits 0 without firing.
 
 - sync start --position-from-manifest refuses unless the sync carries the same --redact rules. Resuming CDC off a redacted chain without them overwrites each restored redacted value with the plaintext one, on a live target.
 
