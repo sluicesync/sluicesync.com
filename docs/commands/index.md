@@ -107,7 +107,7 @@ Flag · Purpose ·
 
 --dry-run, -n · Print the plan; don't touch the target. ·
 
---include-table / --exclude-table · Glob-aware table filters (mutually exclusive). Scope the bulk copy — including the PlanetScale (VStream) snapshot — not just the write path. ·
+--include-table / --exclude-table · Glob-aware table filters (mutually exclusive). Scope the bulk copy — including the PlanetScale (VStream) snapshot — not just the write path. Patterns match the bare table name (stdlib path.Match globs), not a schema-qualified one — so public.pii matches nothing, and an --exclude-table that matches nothing fails open: the table you meant to keep out is copied, at exit 0. Since v0.142.0 an unmatched pattern warns, marked TABLE-FILTER-PATTERN-UNMATCHED; scope namespaces with --include-schema / --exclude-schema instead. ·
 
 --include-database / --exclude-database / --all-databases · Multi-database fan-out (ADR-0074, MySQL source): migrate several source databases in one run, each to a same-named target namespace. Glob-aware; system databases (information_schema, mysql, …) are always excluded. When any database-scope flag is set the source DSN's database is optional (it's a server connection). ·
 
@@ -282,7 +282,7 @@ Flag · Purpose ·
 
 --schema-already-applied · Skip all cold-start DDL (you promise the target catalog matches). For Atlas/Liquibase-managed or PlanetScale Safe-Migrations targets. ·
 
---include-table / --exclude-table · Glob-aware table filters (mutually exclusive). Scope the cold-start snapshot and its resume — including the PlanetScale (VStream) snapshot, so an excluded table in a large keyspace is never streamed (v0.99.12–v0.99.13), not just the write path. ·
+--include-table / --exclude-table · Glob-aware table filters (mutually exclusive). Scope the cold-start snapshot and its resume — including the PlanetScale (VStream) snapshot, so an excluded table in a large keyspace is never streamed (v0.99.12–v0.99.13), not just the write path. Patterns match the bare table name (stdlib path.Match globs), not a schema-qualified one — so public.pii matches nothing, and an --exclude-table that matches nothing fails open: the table you meant to keep out is copied, at exit 0. Since v0.142.0 an unmatched pattern warns, marked TABLE-FILTER-PATTERN-UNMATCHED; on a multi-database run the warning is emitted once after the whole fan-out. ·
 
 --where · TABLE=<predicate> — continuous filtered replication: replicate only the rows of TABLE matching a native source-SQL boolean predicate (repeatable, source-keyed; ADR-0173/0174). Unlike migrate's one-shot --where, this scopes both the cold-start copy and the ongoing CDC tail — a change that moves a row into scope replays as an INSERT, one that moves it out replays as a DELETE, so the target stays a faithful filtered replica instead of accumulating orphans. Same rules as migrate's: filtering a parent orphans its children (SLUICE-E-WHERE-FK-ORPHAN — filter consistently or pass --allow-degraded-fks), a key naming no table refuses (SLUICE-E-WHERE-UNKNOWN-TABLE). A string predicate is classified under the column's real collation so a row-move matches the source's own = (case/accent folding, and PAD-SPACE trailing-space semantics on legacy collations); on a PlanetScale/Vitess source a PAD-SPACE-collation predicate is filtered client-side so trailing-space rows aren't dropped (v0.99.283). ·
 
@@ -541,7 +541,7 @@ Flag · Purpose ·
 
 --table-parallelism · Tables read concurrently during the backup sweep (the read-side analog of pg_dump -j); 0 = auto (4). Postgres pins every parallel reader to one shareable exported snapshot; vanilla MySQL coordinates N readers under a brief FTWRL window (v0.99.43, ADR-0088) — both match the serial sweep's cross-table consistency. MySQL falls back to a serial single reader (a loud INFO names why) without RELOAD. (v0.99.39 / v0.99.43) ·
 
---include-table / --exclude-table · Glob-aware table filters; scope the backup snapshot itself — including the PlanetScale (VStream) snapshot — so an excluded table in a large keyspace is never streamed (v0.99.13), not just what's written. ·
+--include-table / --exclude-table · Glob-aware table filters; scope the backup snapshot itself — including the PlanetScale (VStream) snapshot — so an excluded table in a large keyspace is never streamed (v0.99.13), not just what's written. Patterns match the bare table name (stdlib path.Match globs), not a schema-qualified one — so public.pii matches nothing, and an --exclude-table that matches nothing fails open: the table you meant to keep out is copied, at exit 0. Since v0.142.0 an unmatched pattern warns, marked TABLE-FILTER-PATTERN-UNMATCHED; on a multi-database run the warning is emitted once after the whole fan-out. ·
 
 --compression · Per-segment chunk codec: none | gzip | zstd. Default zstd (55–85% faster restore — the DR-critical axis; ~1–5% larger than gzip). none leaves chunks as human-readable .jsonl on a local-FS target. Recorded in lineage.json and read back from there on restore (never inferred from bytes). ·
 
