@@ -31,7 +31,9 @@
     
     <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#how-it-works">How --redact works</a></li><li><a href="#where-it-applies">Where redaction applies</a></li><li><a href="#strategies">The strategy families</a></li><li><a href="#determinism">Determinism</a></li><li><a href="#keyset">The operator keyset (--keyset-source)</a></li><li><a href="#preflight">Preflight refusals</a></li><li><a href="#schema-preview">Preview redaction before you run</a></li><li><a href="#audit-log">The audit log</a></li><li><a href="#examples">Worked examples</a></li><li><a href="#non-goals">What redaction is not</a></li><li><a href="#next">Next steps</a></li></ul></nav>
     
-<p>You need a realistic copy of production in a place production data isn't allowed to go — a staging database, a developer laptop, an analytics warehouse, a vendor's environment. The schema, the row shapes, and the referential structure all have to survive; the emails, card numbers, and national IDs must not. sluice does this inline with <code>--redact</code>: PII is transformed <strong>between the source reader and the target writer</strong>, so the sensitive value never lands on the target and never touches the backup on disk. There is no separate scrubbing pass to forget to run.</p>
+<p>You need a realistic copy of production in a place production data isn't allowed to go — a staging database, a developer laptop, an analytics warehouse, a vendor's environment. The schema, the row shapes, and the referential structure all have to survive; the emails, card numbers, and national IDs must not. sluice does this inline with <code>--redact</code>: PII is transformed <strong>between the source reader and the target writer</strong>, so the sensitive value never lands on the target. There is no separate scrubbing pass to forget to run.</p>
+
+<p><strong>Read <a href="#where-it-applies">Where redaction applies</a> before relying on this for backups.</strong> Redaction reaches every path that copies rows in bulk, and the live CDC apply stream — but <em>not</em> <code>backup incremental</code> or <code>backup stream run</code>. A redacted backup chain is therefore a series of <em>fulls</em>, not a full plus incrementals. sluice v0.144.0 refuses every combination that would silently produce a mixed chain; earlier versions produced one at exit 0.</p>
 
 <h2 id="how-it-works">How --redact works <a class="hlink" href="#how-it-works" aria-label="Permalink to this section">#</a></h2>
 <p>Each rule names a column and a strategy:</p>
@@ -44,16 +46,31 @@
 <p>Every rule also has a YAML form under a <code>redactions:</code> block in the config file (see <a href="/docs/configuration/">Configuration</a>). CLI and YAML mix: CLI rules are processed first, YAML appends, and a duplicate on the same <code>schema.table.column</code> is last-write-wins with a WARN. Keep the bulk in version-controlled YAML; reach for the flag for per-environment overrides (<code>--redact users.email=null</code> in staging).</p>
 
 <h2 id="where-it-applies">Where redaction applies <a class="hlink" href="#where-it-applies" aria-label="Permalink to this section">#</a></h2>
-<p>The same rule set is honoured uniformly across every path that moves rows, so a column can't leak through a surface you forgot about:</p>
+<p>Redaction reaches every path that copies rows in <strong>bulk</strong>, and the live CDC apply stream. It does <strong>not</strong> reach the two commands that archive change events, and that asymmetry is load-bearing rather than incidental — their events come off the source's CDC pump verbatim, with no seam to apply a rule at:</p>
 <div class="table-scroll"><table>
 <thead><tr><th>Command</th><th>Behaviour</th></tr></thead>
 <tbody>
 <tr><td><code>sluice migrate</code></td><td class="desc">One-shot bulk copy — every row passes through the redactor.</td></tr>
 <tr><td><code>sluice sync start</code></td><td class="desc">Both phases honour <code>--redact</code>: the cold-start snapshot copy <em>and</em> the live CDC apply stream.</td></tr>
-<tr><td><code>sluice backup full</code> / <code>incremental</code></td><td class="desc">Backup chunks are PII-clean on disk; a later restore copies them through unchanged.</td></tr>
+<tr><td><code>sluice backup full</code></td><td class="desc">Redaction is applied at chunk-write time, so the archive on disk is PII-clean and a later restore copies it through unchanged.</td></tr>
+<tr><td><code>sluice backup incremental</code></td><td class="desc"><strong>No <code>--redact</code> flag and no redaction.</strong> Change events are archived off the CDC pump verbatim.</td></tr>
+<tr><td><code>sluice backup stream run</code></td><td class="desc"><strong>No redaction</strong>, same as <code>backup incremental</code>; its rotation-born segment fulls are unredacted too.</td></tr>
+<tr><td><code>sluice restore</code></td><td class="desc">No <code>--redact</code> flag. Redaction happens on the way <em>in</em>, never on the way out — restoring an unredacted archive yields unredacted rows whatever the target is configured with.</td></tr>
 <tr><td><code>sluice schema preview</code></td><td class="desc">No data moves — it annotates the generated <code>CREATE TABLE</code> DDL with which columns are redacted (see below).</td></tr>
 </tbody>
 </table></div>
+
+<h3 id="redacted-chains">A redacted backup chain is a series of fulls <a class="hlink" href="#redacted-chains" aria-label="Permalink to this section">#</a></h3>
+<p>Because only <code>backup full</code> redacts, extending a redacted full with an incremental would archive plaintext for every row touched after the snapshot — and restore it. Through v0.143.0 that happened silently, at exit 0. <strong>Since v0.144.0 a redacted full records the fact in its manifest</strong> (a rule count plus a fingerprint of the policy — never the rules, and never the column names, so a manifest shipped off-site does not enumerate where your PII lives) <strong>and every operation that would mix or hide the chain's posture refuses</strong> with <code>SLUICE-E-BACKUP-REDACTED-CHAIN</code>:</p>
+<ul>
+<li><code>backup incremental</code> and <code>backup stream run</code> refuse to extend it, before the change window opens.</li>
+<li>A resumed <code>backup full</code> refuses under different <code>--redact</code> rules, which would otherwise leave one manifest listing chunks written under two policies.</li>
+<li><code>restore</code>, chain restore, <code>backup verify</code>, <code>export-as-parquet</code> and the from-backup broker refuse a chain whose links disagree.</li>
+<li><code>backup compact</code> refuses a redacted chain outright. Compaction re-attributes one segment's manifest to several segments' merged data, which would produce a chain claiming to be redacted over plaintext — and one the read doors above would then pass. Use <code>backup prune</code> to reclaim space instead.</li>
+<li><code>sync start --position-from-manifest</code> refuses unless the sync carries the same <code>--redact</code> rules. Resuming CDC off a redacted chain without them overwrites each restored redacted value with the plaintext one, on a live target.</li>
+</ul>
+<p><strong>Chains taken before v0.144.0 carry no marker</strong>, so a pre-existing mix cannot be detected retroactively — a v0.143.0-or-earlier chain rooted in a redacted full still restores its incrementals' rows unredacted. If you have one, re-take it.</p>
+<p>To keep a chain PII-clean, take periodic <code>backup full --redact</code> runs. To accept plaintext in the change window, start an unredacted chain deliberately so the choice is explicit.</p>
 
 <h2 id="strategies">The strategy families <a class="hlink" href="#strategies" aria-label="Permalink to this section">#</a></h2>
 <p>sluice ships 26 strategies across five families. Pick the one that matches the column's shape.</p>
