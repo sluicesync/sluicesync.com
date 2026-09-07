@@ -51,7 +51,7 @@ Continuous sync — the same CA flag, plus a stream id. Keep it attached and cau
 
 - The unconditional retention WARN — sync and backup runs against a *.vultrdb.com host warn about the ~10-minute unconfigurable purge window. The wording is stronger than DigitalOcean's, because DO's message can point at a knob and Vultr's cannot.
 
-- Loud position-invalid recovery — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded server_uuid no longer matches the source (instance replaced / restored / failed over), surfaces as an explicit WARN and a fresh cold start; --no-auto-resnapshot converts that into a hard stop with named recovery commands.
+- Loud position-invalid recovery — a resume from a purged position surfaces as an explicit WARN and a fresh cold start; --no-auto-resnapshot converts that into a hard stop with named recovery commands. A replaced instance is a different case and refuses terminally (v0.146.0+, marker SOURCE-INSTANCE-IDENTITY-CHANGED): when a file/pos position’s recorded server_uuid no longer matches the source, sluice does not re-copy, because that is a different server rather than the same one having advanced past you — and it cannot be told apart from a stale connection string. Through v0.145.0 it dropped the target’s tables and re-copied from whichever instance answered. Re-run a warm sync start with --restart-from-scratch if the replacement was intended.
 
 - --source-tls-ca refusals — the flag refuses to combine with a DSN-level tls= setting and refuses on non-MySQL engines, rather than silently ignoring a security flag.
 
