@@ -563,7 +563,7 @@ Flag · Purpose ·
 
 --kms-region / --azure-wrap-algorithm · Provider knobs for KMS mode. --kms-region overrides the AWS region for KMS calls (otherwise AWS_REGION or the SDK's own resolution). --azure-wrap-algorithm overrides the Azure Key Vault wrap algorithm, which defaults to RSA-OAEP-256 and works for software-protected RSA keys — an HSM-backed AES key needs A256KW. Both are accepted by every command that touches an encrypted chain (backup full / incremental / stream run / verify / prune / compact / export-as-parquet, restore, and the from-backup broker). ·
 
---keyset-source · On backup full, the companion to --redact when a rule uses hash:hmac-sha256 or tokenize:dict — same file: / env: / db: forms as migrate's. Redaction is applied at chunk-write time, so the chain rests PII-clean; a restore reproduces the redacted shape and never re-applies (or undoes) it. ·
+--keyset-source · On backup full, the companion to --redact when a rule uses hash:hmac-sha256 or tokenize:dict — same file: / env: / db: forms as migrate's. Redaction is applied at chunk-write time, so the full this command writes rests PII-clean; a restore reproduces that redacted shape and never re-applies (or undoes) it. Note only backup full redacts — see A redacted backup chain is a series of fulls. ·
 
 --chunk-size · Maximum rows (on full) or changes (on incremental / stream run) per chunk file; the writer rolls over on reaching it. Default 100000. Smaller chunks restore faster — the per-chunk SHA-256 verification fails fast on the smallest possible unit — but inflate the manifest. ·
 

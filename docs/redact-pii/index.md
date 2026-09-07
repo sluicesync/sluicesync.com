@@ -2,7 +2,9 @@
 
 > Seed staging, dev, analytics, and vendor handoffs from production without letting personal data leave with the rows.
 
-You need a realistic copy of production in a place production data isn't allowed to go — a staging database, a developer laptop, an analytics warehouse, a vendor's environment. The schema, the row shapes, and the referential structure all have to survive; the emails, card numbers, and national IDs must not. sluice does this inline with --redact: PII is transformed between the source reader and the target writer, so the sensitive value never lands on the target and never touches the backup on disk. There is no separate scrubbing pass to forget to run.
+You need a realistic copy of production in a place production data isn't allowed to go — a staging database, a developer laptop, an analytics warehouse, a vendor's environment. The schema, the row shapes, and the referential structure all have to survive; the emails, card numbers, and national IDs must not. sluice does this inline with --redact: PII is transformed between the source reader and the target writer, so the sensitive value never lands on the target. There is no separate scrubbing pass to forget to run.
+
+Read Where redaction applies before relying on this for backups. Redaction reaches every path that copies rows in bulk, and the live CDC apply stream — but not backup incremental or backup stream run. A redacted backup chain is therefore a series of fulls, not a full plus incrementals. sluice v0.144.0 refuses every combination that would silently produce a mixed chain; earlier versions produced one at exit 0.
 
 ## How --redact works
 
@@ -21,7 +23,7 @@ Every rule also has a YAML form under a redactions: block in the config file (se
 
 ## Where redaction applies
 
-The same rule set is honoured uniformly across every path that moves rows, so a column can't leak through a surface you forgot about:
+Redaction reaches every path that copies rows in bulk, and the live CDC apply stream. It does not reach the two commands that archive change events, and that asymmetry is load-bearing rather than incidental — their events come off the source's CDC pump verbatim, with no seam to apply a rule at:
 
 Command · Behaviour ·
 
@@ -29,9 +31,33 @@ sluice migrate · One-shot bulk copy — every row passes through the redactor. 
 
 sluice sync start · Both phases honour --redact: the cold-start snapshot copy and the live CDC apply stream. ·
 
-sluice backup full / incremental · Backup chunks are PII-clean on disk; a later restore copies them through unchanged. ·
+sluice backup full · Redaction is applied at chunk-write time, so the archive on disk is PII-clean and a later restore copies it through unchanged. ·
+
+sluice backup incremental · No --redact flag and no redaction. Change events are archived off the CDC pump verbatim. ·
+
+sluice backup stream run · No redaction, same as backup incremental; its rotation-born segment fulls are unredacted too. ·
+
+sluice restore · No --redact flag. Redaction happens on the way in, never on the way out — restoring an unredacted archive yields unredacted rows whatever the target is configured with. ·
 
 sluice schema preview · No data moves — it annotates the generated CREATE TABLE DDL with which columns are redacted (see below). ·
+
+### A redacted backup chain is a series of fulls
+
+Because only backup full redacts, extending a redacted full with an incremental would archive plaintext for every row touched after the snapshot — and restore it. Through v0.143.0 that happened silently, at exit 0. Since v0.144.0 a redacted full records the fact in its manifest (a rule count plus a fingerprint of the policy — never the rules, and never the column names, so a manifest shipped off-site does not enumerate where your PII lives) and every operation that would mix or hide the chain's posture refuses with SLUICE-E-BACKUP-REDACTED-CHAIN:
+
+- backup incremental and backup stream run refuse to extend it, before the change window opens.
+
+- A resumed backup full refuses under different --redact rules, which would otherwise leave one manifest listing chunks written under two policies.
+
+- restore, chain restore, backup verify, export-as-parquet and the from-backup broker refuse a chain whose links disagree.
+
+- backup compact refuses a compaction that would merge segments of a chain carrying the marker. Compaction re-attributes one segment's manifest to several segments' merged data, which would produce a chain claiming to be redacted over plaintext — and one the read doors above would then pass. Use backup prune to reclaim space instead. This door is defense-in-depth: no sluice binary can currently produce a marker-carrying chain of more than one segment (both extenders refuse, and an older binary can neither write the marker nor read past the format-version stamp), so what it refuses is a hand-assembled lineage. It also runs after compaction's "fewer than two eligible segments" check, so a chain with nothing to merge exits 0 without firing.
+
+- sync start --position-from-manifest refuses unless the sync carries the same --redact rules. Resuming CDC off a redacted chain without them overwrites each restored redacted value with the plaintext one, on a live target.
+
+Chains taken before v0.144.0 carry no marker, so a pre-existing mix cannot be detected retroactively — a v0.143.0-or-earlier chain rooted in a redacted full still restores its incrementals' rows unredacted. If you have one, re-take it.
+
+To keep a chain PII-clean, take periodic backup full --redact runs. To accept plaintext in the change window, start an unredacted chain deliberately so the choice is explicit.
 
 ## The strategy families
 
