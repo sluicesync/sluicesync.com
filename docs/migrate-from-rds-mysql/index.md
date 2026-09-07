@@ -75,7 +75,7 @@ The master user has the replication grants CDC needs out of the box (REPLICATION
 
 - FTWRL fallback WARNs — the serial-copy fallback and the no-freeze snapshot capture are both announced, never silent.
 
-- Loud position-invalid recovery — a resume from a purged position, or (v0.137.2+) from a file/pos position whose recorded server_uuid no longer matches the source (instance replaced / restored / failed over), is an explicit WARN plus a fresh cold start (or a hard stop under --no-auto-resnapshot), never a silent gap.
+- Loud position-invalid recovery — a resume from a purged position is an explicit WARN plus a fresh cold start (or a hard stop under --no-auto-resnapshot), never a silent gap. A replaced instance is a different case and refuses terminally (v0.146.0+, marker SOURCE-INSTANCE-IDENTITY-CHANGED): when a file/pos position’s recorded server_uuid no longer matches the source, sluice does not re-copy, because that is a different server rather than the same one having advanced past you — and it cannot be told apart from a stale connection string. Through v0.145.0 it dropped the target’s tables and re-copied from whichever instance answered. Re-run a warm sync start with --restart-from-scratch if the replacement was intended.
 
 - Unencrypted-binlog-stream WARN — a plaintext DSN gets a warning that the CDC stream is unencrypted; --source-tls-ca resolves it.
 
