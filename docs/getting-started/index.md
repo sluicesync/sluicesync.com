@@ -171,6 +171,8 @@ When the source is a managed Postgres that blocks logical replication slots — 
     sluice trigger teardown \
         --dsn 'postgres://user:pass@host:5432/app?sslmode=require' --yes
 
+CHANGE-LOG-PAGE-UNORDERED — on the SQLite and Cloudflare D1 trigger lanes the reader refuses a page of sluice_change_log whose rows do not arrive in strictly ascending id order, naming the two ids it saw out of sequence. This is a bug in the poll query or the transport, never in your data, and there is nothing to repair on your side. It refuses rather than carrying on because the resume watermark is the page's MAXIMUM id: an out-of-order page advances that watermark past rows the poll never returned, and a keyset resume then starts above them, so those rows are captured, undelivered and unreachable. That is what Bug 266 was, on the D1 lane, where an output alias made SQLite sort the page lexicographically. The query is fixed and pinned, but the pin grades the QUERY while this grades what the pump was actually handed.
+
 The slot-based PG CDC reader refuses loudly when the source role lacks the REPLICATION attribute rather than silently degrading to polling — the trigger engine is the deliberate slot-less path. See the trigger reference.
 
 ## Next steps
