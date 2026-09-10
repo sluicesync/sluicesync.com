@@ -101,6 +101,7 @@ const NAV = [
       { slug: "foreign-keys-vitess", label: "Foreign keys on Vitess" },
       { slug: "planetscale-schema-changes", label: "Online schema changes" },
       { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
+      { slug: "planetscale-postgres-to-neki", label: "PlanetScale Postgres → Neki" },
       { slug: "planetscale-mysql-to-postgres", label: "PlanetScale MySQL → Postgres" },
       { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
       { slug: "planetscale-postgres-analytics-replica", label: "PlanetScale Postgres analytics replica" },
@@ -469,6 +470,7 @@ function page({ slug, title, subtitle, body, prev, next }) {
     "split-rows-by-region",
     "mysql-to-planetscale",
     "planetscale-postgres",
+    "planetscale-postgres-to-neki",
     "planetscale-postgres-upgrade",
     "planetscale-postgres-analytics-replica",
     "operate-fleet",
@@ -664,6 +666,7 @@ sluice engines      # list the database engines built into this binary`)}
 <ul>
   <li>A <strong>source</strong> and a <strong>target</strong> database you can reach over the network.</li>
   <li>Engines available out of the box (${ENGINE_COUNT} — run <code>sluice engines</code> to confirm): <code>mysql</code>, <code>mariadb</code>, the <code>planetscale</code> and self-hosted <code>vitess</code> MySQL flavors, <code>postgres</code>, <code>sqlite</code> and <code>d1</code> (migrate sources; <code>sqlite</code> is also a target), the trigger-CDC engines <code>postgres-trigger</code>, <code>sqlite-trigger</code>, <code>d1-trigger</code>, and the flat-file migrate sources <code>csv</code>, <code>tsv</code>, <code>ndjson</code>, and <code>mydumper</code>.</li>
+  <li><strong>PlanetScale Neki</strong> (sharded Postgres) is reached with the ordinary <code>postgres</code> driver — there is no <code>neki</code> driver and it is not listed by <code>sluice engines</code>; sluice detects it from the server version. It is a migrate and sync <strong>target</strong>, and a migrate <strong>source</strong>. See <a href="/docs/planetscale-postgres-to-neki/">Migrate PlanetScale Postgres to Neki</a>.</li>
   <li>For continuous sync from Postgres, the source normally needs logical replication (a replication slot). Managed Postgres that blocks slots (e.g. Heroku) can use the slot-less <a href="/docs/commands/#trigger">trigger engine</a> instead.</li>
   <li>SQLite and Cloudflare D1 are <strong>migrate sources</strong> (a local file, a <code>.sql</code> dump, or a live D1 over the HTTP query API) into Postgres or MySQL; SQLite is also a <strong>target</strong>. Their base engines are migrate-only — for continuous sync use the trigger-CDC variants <code>sqlite-trigger</code> / <code>d1-trigger</code>.</li>
 </ul>
@@ -2564,6 +2567,7 @@ ${pre(`sluice migrate \\
 <h2 id="next">Next steps</h2>
 <ul>
   <li><a href="/docs/multi-database/">Migrate many databases or schemas</a> — the full fan-out story across every schema or database at once.</li>
+  <li><a href="/docs/planetscale-postgres-to-neki/">PlanetScale Postgres → Neki</a> — moving an existing PlanetScale Postgres database onto Neki, PlanetScale's sharded Postgres.</li>
   <li><a href="/docs/planetscale-postgres/">PlanetScale Postgres</a>, <a href="/docs/planetscale-region-move/">Move PlanetScale regions</a>, and <a href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a> — the target-side setup for each PlanetScale flavor.</li>
   <li><a href="/docs/verify-reconcile/">Verify &amp; reconcile</a> — confirm only the tables you scoped landed, with matching <code>--include-table</code>.</li>
   <li><a href="/docs/commands/#migrate">Command reference</a> — every flag named here, with defaults.</li>
@@ -2772,6 +2776,8 @@ write(
     body: `
 <p>sluice moves data between database engines through two surfaces: <strong>migrate</strong> (a one-shot schema + data copy) and <strong>sync</strong> (continuous change-data-capture). A "direction" is just a <em>source engine → target engine</em> pair. Which pairs are supported differs between the two surfaces, because migrate and sync have different engine roles — a few engines can be read continuously but not written to, and a couple can only ever be a source. The authoritative, always-current list for the binary in your hand is <code>sluice engines</code>; this page is the operator-facing summary of what those roles add up to.</p>
 ${pre(`sluice engines   # lists every engine built into this binary and its role (migrate / CDC, source / target)`)}
+
+<div class="note"><strong>Where PlanetScale Neki sits in these tables.</strong> Neki is PlanetScale's sharded Postgres and is reached with the <code>postgres</code> driver, so it rides the <strong>Postgres</strong> row and column below — with one asymmetry that breaks this page's usual rule. As a <strong>target</strong> it supports both migrate and sync, including into a sharded database and across a live reshard. As a <strong>source</strong> it supports <strong>migrate only</strong>: a Neki replication connection can export a snapshot but nothing can import one, so there is no cold-start-to-CDC handoff out of it. Full procedure: <a href="/docs/planetscale-postgres-to-neki/">Migrate PlanetScale Postgres to Neki</a>.</div>
 
 <h2 id="migrate">Migrate — one-shot copy</h2>
 <p>Migrate reads a source once and writes a fresh copy into a target. <strong>Every migrate source copies to every migrate target</strong> — the cell is never "unsupported", only "faster" on the same-engine diagonal. Cross-engine pairs flow through the typed <a href="/docs/how-sluice-copies/#ir-path">IR</a>; same-engine pairs take an optimized path but the same fidelity.</p>
@@ -5227,6 +5233,111 @@ ${pre(`sluice verify \\
   })
 );
 
+
+// nav-label: PlanetScale Postgres → Neki
+write(
+  "planetscale-postgres-to-neki",
+  page({
+    slug: "planetscale-postgres-to-neki",
+    title: "Migrate PlanetScale Postgres to Neki",
+    subtitle: "Neki is PlanetScale's sharded Postgres. sluice reaches it with the ordinary postgres driver — no new engine, no flag — and this page is the procedure we measured end to end against live databases.",
+    body: `
+<p><a href="https://planetscale.com/docs/neki">Neki</a> is PlanetScale's horizontally-sharded PostgreSQL: a router speaking the PostgreSQL wire protocol in front of real PostgreSQL clusters. It is the Postgres counterpart of what Vitess does for MySQL, and it is in <strong>platform preview</strong>.</p>
+
+<p>Every step below was measured on 2026-09-10 against a real PlanetScale Postgres database (PostgreSQL 18.6, PS-10) and a real Neki database (PostgreSQL 18.6, PS-10, same region), using a 12-table schema covering every value family sluice knows about. Where something was <em>not</em> tested, this page says so rather than implying coverage.</p>
+
+<div class="note"><strong>There is no <code>neki</code> driver, and that is deliberate.</strong> <code>--target-driver neki</code> does not exist. sluice detects Neki from the server's own <code>version()</code> string and adapts the handful of behaviours that differ. Worth stating because PlanetScale's own CLI takes <code>pscale database create --engine neki</code>, so it is reasonable to go looking for the same word here.</div>
+
+<pre><code>sluice migrate \\
+  --source-driver postgres --source "$PS_POSTGRES_DSN" \\
+  --target-driver postgres --target "$NEKI_DSN"</code></pre>
+
+<h2 id="before">Before you start</h2>
+
+<p><strong>Connection strings.</strong> <code>pscale role reset-default &lt;db&gt; &lt;branch&gt; --format json</code> returns a <code>database_url</code> carrying <code>sslmode=verify-full</code>. That works anywhere the system CA store is populated. In a container without CA certificates it fails with <code>root certificate file "/root/.postgresql/root.crt" does not exist</code> — use <code>sslmode=require</code>, or mount a CA bundle. Applies to both ends.</p>
+
+<p><strong>Create your extensions on the target first.</strong> sluice does not install them — extensions are surfaced, never silently auto-handled. Check the source and mirror the set you actually use:</p>
+
+<pre><code>-- on the source
+SELECT extname, extversion FROM pg_extension ORDER BY 1;
+-- on the target, for each one your schema uses
+CREATE EXTENSION IF NOT EXISTS btree_gist;</code></pre>
+
+<p><code>btree_gist</code>, <code>btree_gin</code>, <code>pgcrypto</code> and <code>postgis</code> are all available on Neki. Miss one and sluice refuses with <code>SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED</code> naming the extension and the exact command — not PostgreSQL's raw <em>"no default operator class"</em> message.</p>
+
+<p><strong>Nothing to configure for CDC.</strong> Measured on PlanetScale Postgres: <code>wal_level</code> is already <code>logical</code> and the default <code>postgres</code> role already has <code>rolreplication</code>. There is no operator action here, unlike most managed PostgreSQL. <code>max_replication_slots</code> was 20.</p>
+
+<p><strong>Tables with no primary key need a replica identity — only if you use <code>sync</code>.</strong> A one-shot <code>migrate</code> does not care. For <code>sync</code>, PostgreSQL cannot identify rows for <code>UPDATE</code>/<code>DELETE</code> without one, and sluice refuses at preflight with <code>SLUICE-E-SOURCE-REPLICA-IDENTITY</code> naming the table:</p>
+
+<pre><code>ALTER TABLE public.events REPLICA IDENTITY FULL;</code></pre>
+
+<p>…or take it out of scope with <code>--exclude-table</code>. Do this before starting — the refusal fires before anything is copied.</p>
+
+<h2 id="oneshot">Option A — one-shot migration</h2>
+<p>Right when you can take a window.</p>
+<pre><code>sluice migrate \\
+  --source-driver postgres --source "$PS_POSTGRES_DSN" \\
+  --target-driver postgres --target "$NEKI_DSN" \\
+  --migration-id ps-to-neki</code></pre>
+<p>Measured: 12 tables, exit 0, every table byte-identical to the source afterwards.</p>
+
+<h2 id="sync">Option B — minimal downtime</h2>
+<p>Copies, then tails changes until you cut over.</p>
+<pre><code>sluice sync start \\
+  --source-driver postgres --source "$PS_POSTGRES_DSN" \\
+  --target-driver postgres --target "$NEKI_DSN" \\
+  --stream-id ps-to-neki \\
+  --slot-name psneki \\
+  --publication-name sluice_pub_psneki</code></pre>
+
+<p>The cold copy runs, the stream reports <code>entering CDC mode</code>, and changes apply continuously. Measured live: inserts, updates and deletes made on the PlanetScale Postgres source after the handoff — including <code>NaN</code>, <code>-0</code> and <code>Infinity</code> in float and numeric columns, astral-plane text, an enum change, a range change, a composite-key delete and an insert into a keyless table — all landed on the Neki target, with every table still byte-identical.</p>
+
+<div class="note"><strong>Use a dedicated <code>--publication-name</code> per stream.</strong> sluice refuses to re-scope a publication another slot is reading, which is the right behaviour and easy to trip over if you run more than one stream against the same source.</div>
+
+<h3 id="cutover">Cutover</h3>
+<ol>
+  <li>Stop writes to the PlanetScale Postgres source.</li>
+  <li>Wait for the stream to drain — <code>sluice sync status --stream-id ps-to-neki</code>.</li>
+  <li>Verify (below).</li>
+  <li>Point the application at Neki.</li>
+  <li><code>sluice sync stop --stream-id ps-to-neki</code>.</li>
+</ol>
+
+<h2 id="verify">Verifying</h2>
+<p>Do not take exit 0 as proof. Compare values, computed the same way on both servers:</p>
+<pre><code>SELECT md5(coalesce(string_agg(rowtext, ',' ORDER BY rowtext), '')) AS ck, count(*) AS n
+FROM (SELECT coalesce("col1"::text,'~NULL~') || '|' || coalesce("col2"::text,'~NULL~')
+      FROM public."your_table") s(rowtext);</code></pre>
+<p>Casting every column to <code>text</code> <em>on the server</em> compares what each side actually stores, rather than what a client decoded. Take the column list from the <strong>source</strong>, so a dropped or invented column shows up as a mismatch instead of being excluded from both sides.</p>
+<p><code>sluice schema diff</code> between the two is a useful second opinion — it reads both catalogs independently of the copy path.</p>
+
+<h2 id="sharding">Before you shard</h2>
+<p>A migration lands on an <strong>unsharded</strong> Neki database, where everything above holds and PostgreSQL semantics are intact. Sharding later changes two things that matter:</p>
+
+<div class="note"><strong>Uniqueness becomes per-shard.</strong> A <code>PRIMARY KEY</code>, <code>UNIQUE</code> or <code>EXCLUDE</code> constraint is enforced only <em>within</em> a shard unless its columns contain the shard key. Neki accepts the declaration either way, so the guarantee weakens silently. Measured: a table with <code>email text NOT NULL UNIQUE</code> accepted two rows with the same email once they routed to different shards. This is inherent to distributed storage — Vitess and Citus behave the same way — but it means a schema ported from PostgreSQL keeps the constraint on paper and loses it in fact.</div>
+
+<p>And sluice <strong>requires the shard key to be in the primary key</strong> to keep syncing into a sharded table, refusing with <code>SLUICE-E-TARGET-SHARD-KEY-NOT-IN-UPSERT-KEY</code> otherwise. That refusal exists because <code>ON CONFLICT</code> on a sharded table is evaluated only on the shard the incoming row routes to, so an upsert can insert a duplicate of the key instead of updating it.</p>
+
+<p>Both point the same way: <strong>if you intend to shard, get the shard key into the primary key of the tables that will be sharded — ideally before the migration.</strong></p>
+
+<h2 id="notsupported">Not supported: Neki as a continuous-sync source</h2>
+<p><code>migrate</code> <em>out of</em> Neki works, including from a sharded database. <code>sync</code> out of it does not, and that is a platform limitation rather than missing work: a Neki replication connection can export a snapshot but there is no way to import one (<code>pg_export_snapshot()</code> and <code>SET TRANSACTION SNAPSHOT</code> are unimplemented), so there is no consistent handoff from the bulk copy to the change stream. Plan a cutover window if you ever need to move back off Neki.</p>
+
+<h2 id="untested">What we have not tested</h2>
+<p>Stated so this page cannot be read as broader than it is:</p>
+<ul>
+  <li>Migrating <strong>into an already-sharded</strong> Neki database. Every measurement here targeted an unsharded one, which is where a migration lands by default.</li>
+  <li>Volume — the fixture was correctness-shaped (every value family, adversarial values), not volume-shaped.</li>
+  <li>Multiple schemas. Everything here used <code>public</code>.</li>
+  <li>MoveTables and online DDL running underneath a live stream. A <strong>reshard</strong> underneath a live stream <em>is</em> tested and clean — no loss, no duplication, source and target checksums equal afterwards.</li>
+</ul>
+
+<p>Neki is in platform preview and its surface moves. Treat the behaviours above as measured-on-a-date rather than permanent, and re-check before relying on a limitation staying put.</p>
+`,
+    prev: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
+    next: { href: "/docs/planetscale-postgres-upgrade/", label: "Upgrade PlanetScale Postgres" },
+  })
+);
 
 // nav-label: Upgrade PlanetScale Postgres
 write(

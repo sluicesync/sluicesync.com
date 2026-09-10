@@ -31,6 +31,8 @@ Self-contained binaries (Linux / macOS / Windows &times; amd64 / arm64) and .deb
 
 - Engines available out of the box (14 — run sluice engines to confirm): mysql, mariadb, the planetscale and self-hosted vitess MySQL flavors, postgres, sqlite and d1 (migrate sources; sqlite is also a target), the trigger-CDC engines postgres-trigger, sqlite-trigger, d1-trigger, and the flat-file migrate sources csv, tsv, ndjson, and mydumper.
 
+- PlanetScale Neki (sharded Postgres) is reached with the ordinary postgres driver — there is no neki driver and it is not listed by sluice engines; sluice detects it from the server version. It is a migrate and sync target, and a migrate source. See Migrate PlanetScale Postgres to Neki.
+
 - For continuous sync from Postgres, the source normally needs logical replication (a replication slot). Managed Postgres that blocks slots (e.g. Heroku) can use the slot-less trigger engine instead.
 
 - SQLite and Cloudflare D1 are migrate sources (a local file, a .sql dump, or a live D1 over the HTTP query API) into Postgres or MySQL; SQLite is also a target. Their base engines are migrate-only — for continuous sync use the trigger-CDC variants sqlite-trigger / d1-trigger.
