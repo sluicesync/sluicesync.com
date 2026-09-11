@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What sluice refuses on a sharded target — sluice docs</title>
+<meta name="description" content="Each refusal exists because a specific silent-corruption shape was measured on a live cluster. This page is the reasoning.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/sharded-target-refusals/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview &amp; validate before you migrate</a><a class="lnk" href="/docs/sizing/">Sizing &amp; plan recommendations</a><a class="lnk" href="/docs/verify-reconcile/">Verify &amp; reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/staged-wave-migration/">Staged (wave) migration</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-supabase-read-replica/">Migrating from a Supabase read replica</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-postgres/">Migrating from Google Cloud SQL Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a><a class="lnk" href="/docs/migrate-from-azure-mysql/">Migrating from Azure Database for MySQL</a><a class="lnk" href="/docs/migrate-from-azure-postgres/">Migrating from Azure Database for PostgreSQL</a><a class="lnk" href="/docs/migrate-from-vultr-mysql/">Migrating from Vultr Managed MySQL</a><a class="lnk" href="/docs/migrate-from-vultr-postgres/">Migrating from Vultr Managed PostgreSQL</a><a class="lnk" href="/docs/migrate-from-mariadb/">Migrating from MariaDB</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/sharded-postgres-semantics/">What changes when Postgres is sharded</a><a class="lnk" href="/docs/sharding-readiness-checklist/">Is your schema ready to be sharded?</a><a class="lnk active" href="/docs/sharded-target-refusals/">What sluice refuses on a sharded target</a><a class="lnk" href="/docs/planetscale-postgres-to-neki/">PlanetScale Postgres → Neki</a><a class="lnk" href="/docs/planetscale-mysql-to-postgres/">PlanetScale MySQL → Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><a class="lnk" href="/docs/planetscale-org-move/">Move to another organization</a><a class="lnk" href="/docs/split-rows-by-region/">Split rows by region</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error &amp; exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>What sluice refuses on a sharded target</h1>
+    <p class="subtitle">Each refusal exists because a specific silent-corruption shape was measured on a live cluster. This page is the reasoning.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#upsert-key">The shard key is not in the key sluice conflicts on</a></li><li><a href="#placement">Routing and placement disagree</a></li><li><a href="#shard-key-update">A change would move a row between shards</a></li><li><a href="#blocked">A workflow has taken the table away</a></li><li><a href="#not-refused">What sluice does not protect you from</a></li></ul></nav>
+    
+<p>sluice refuses several things on a sharded target that it accepts everywhere else. Each refusal exists because a specific way of losing or corrupting data was <strong>measured on a live cluster</strong> &mdash; not because sharded targets warrant extra caution in the abstract.</p>
+
+<p>This page is the reasoning. <a href="/docs/error-codes/">Error codes</a> is the reference.</p>
+
+<div class="note"><strong>Why refuse instead of warn.</strong> Every shape below fails <em>quietly</em> if allowed through: exit 0, no error, correct-looking row counts, and a target that disagrees with the source in a way you find out about later. A loud refusal you can act on is strictly better than a silent divergence you cannot see. Where the condition is knowable from the schema, the refusal comes before any data moves.</p></div>
+
+<h2 id="upsert-key">The shard key is not in the key sluice conflicts on <a class="hlink" href="#upsert-key" aria-label="Permalink to this section">#</a></h2>
+
+<p><code>SLUICE-E-TARGET-SHARD-KEY-NOT-IN-UPSERT-KEY</code> &mdash; refused at preflight, before anything is written.</p>
+
+<p>sluice's idempotent write is <code>INSERT &hellip; ON CONFLICT (key) DO UPDATE</code>. Both the CDC applier and the bulk-copy resume path use it. On a sharded table whose shard key is outside that key, <strong>both available spellings fail, and they fail in opposite directions</strong>:</p>
+
+<ul>
+  <li><strong>Naming the shard key in the <code>SET</code> list</strong> is refused by the platform outright (<code>SQLSTATE NK013</code>), on the statement shape, even when the value is unchanged.</li>
+  <li><strong>Leaving it out</strong> &mdash; the obvious workaround &mdash; is worse. <code>ON CONFLICT</code> is evaluated only on the shard the incoming row routes to, so a row whose shard key differs from the stored row's finds no conflict there and is <strong>inserted alongside it</strong>.</li>
+</ul>
+
+<p><strong>Measured:</strong> two rows carrying <code>id = 3001</code>, physically resident on different shards, at exit 0 with no warning &mdash; and an equality-routed read returns only one of them, so the duplication is invisible to exactly the queries a sharded application is written to use. A CDC replay of an update that changed the shard key produces this, and an at-least-once pipeline will eventually emit one.</p>
+
+<p>There is no third spelling, which is why this is a refusal rather than a degradation. The safe condition is a property of the <em>schema</em> &mdash; every shard-key column contained in the conflict key &mdash; so it is knowable before any data moves and fixable by you.</p>
+
+<p><strong>The fix:</strong> put the shard key in the primary key. That is the standard advice for a sharded schema anyway, and it makes the shard key unchangeable for a given key.</p>
+
+<h2 id="placement">Routing and placement disagree <a class="hlink" href="#placement" aria-label="Permalink to this section">#</a></h2>
+
+<p><code>SLUICE-E-TARGET-SHARD-PLACEMENT-MISMATCH</code> &mdash; refused before any data moves.</p>
+
+<p>If a table is attached to a shard group without moving its rows to the shards that routing now points at, the table's <code>PRIMARY KEY</code> stops being globally enforced: equality-routed queries look on the shard the key routes to, find nothing, and an upsert inserts a second copy.</p>
+
+<p>The usual cause is attaching a <em>populated</em> table to a shard group without running a reshard workflow. sluice probes for it rather than assuming, and refuses if it finds it.</p>
+
+<p><strong>The fix:</strong> run the platform's reshard workflow so the rows are where the topology says they are, then re-run.</p>
+
+<h2 id="shard-key-update">A change would move a row between shards <a class="hlink" href="#shard-key-update" aria-label="Permalink to this section">#</a></h2>
+
+<p><code>SLUICE-E-TARGET-SHARD-KEY-UPDATE-UNSUPPORTED</code> &mdash; refused mid-stream, on a target that passed the preflight above.</p>
+
+<p>A CDC change that alters a shard-key value would have to move the row to a different shard, which a sharded target cannot express. sluice refuses rather than applying the other columns and leaving the routing column behind &mdash; that would make the target's row disagree with the source's on the one value that decides where the row lives, silently, with the stream still reporting healthy.</p>
+
+<p>Only a <em>genuine</em> change reaches here. An unchanged shard key is dropped from the <code>UPDATE</code>'s <code>SET</code> list automatically, because the before-image proves the assignment is a no-op and the <code>WHERE</code> clause still routes the statement correctly.</p>
+
+<p><strong>The fix:</strong> shard on a column your application does not update. If the change is a one-off, apply it on the source as a delete plus an insert, which sluice replicates as two changes that both route correctly.</p>
+
+<h2 id="blocked">A workflow has taken the table away <a class="hlink" href="#blocked" aria-label="Permalink to this section">#</a></h2>
+
+<p><code>SLUICE-E-TARGET-TABLE-BLOCKED-BY-WORKFLOW</code> &mdash; the stream halts.</p>
+
+<p>A PlanetScale Neki <strong>MoveTables</strong> cutover moves tables between <em>databases</em>. Because a Postgres client chooses its database at connect time, the write switch cannot redirect a connection that named the old one &mdash; so it blocks the table there instead, on every shard primary, and every statement sluice makes is refused (<code>SQLSTATE NK213</code>).</p>
+
+<p><strong>Nothing is lost when this fires.</strong> Measured across a full cutover with a live stream and a running writer: 2,000 rows byte-identical end to end. <code>move_tables_create</code> and the read switch are completely transparent; it is the write switch that takes the table. The persisted CDC position stops <em>before</em> the block rather than advancing past unapplied changes, which is what makes a restart replay the gap instead of skipping it.</p>
+
+<p>It is terminal rather than retried: the block carries a one-year expiry and clears only on an operator action, and the resolution changes which database the data lives in &mdash; not a decision a migration tool should make for you.</p>
+
+<p><strong>The fix:</strong> <code>__neki.list_blocked_tables()</code> names the database and table; <code>__neki.move_tables_status()</code> names the workflow. Then either finish the move and restart sluice against the new database, or reverse the cutover.</p>
+
+<h2 id="not-refused">What sluice does <em>not</em> protect you from <a class="hlink" href="#not-refused" aria-label="Permalink to this section">#</a></h2>
+
+<p>Stated plainly, because a page listing refusals can read as a claim of total coverage:</p>
+
+<ul>
+  <li><strong>Per-shard <code>UNIQUE</code> and <code>EXCLUDE</code> constraints.</strong> sluice copies your schema faithfully, and the platform enforces those constraints within a shard. sluice does not warn that a constraint means less than it says &mdash; see <a href="/docs/sharding-readiness-checklist/#unique">the readiness checklist</a> to find them yourself before migrating.</li>
+  <li><strong>Cross-shard transaction semantics.</strong> Reads that span shards have no shared snapshot. That is a property of your queries after the migration, not of the copy.</li>
+  <li><strong>Router-evaluated expression differences.</strong> Bulk copy moves stored values, which we measured byte-identical; computed results are an application concern.</li>
+  <li><strong>Choosing the shard key.</strong> sluice checks that your schema is consistent with the key you chose. Whether it is a good key is a design question.</li>
+</ul>
+
+<p>The pattern is consistent: sluice refuses what it can <em>prove</em> would diverge, and tells you plainly where it cannot see.</p>
+
+    <div class="pager"><span></span><a class="next" href="/docs/planetscale-postgres-to-neki/">Migrate PlanetScale Postgres to Neki →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/sharded-target-refusals/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
