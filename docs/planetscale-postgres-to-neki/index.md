@@ -126,7 +126,7 @@ Stated so this page cannot be read as broader than it is:
 
 MoveTables underneath a live stream is measured (2026-09-10, a 3-shard cluster, 2,000 rows byte-identical end to end). Two things are worth knowing before you run one:
 
-- move_tables_create and move_tables_switch_reads are transparent to a running sluice stream. The write switch is not: it blocks the table on the database it came from, and sluice halts on the next statement, on the router refusal access to table … is blocked (SQLSTATE NK213). A coded refusal naming the workflow and the query that identifies it lands in the next release. That is the intended outcome — nothing is lost, the persisted position stops before the block, and restarting after you finish or reverse the move replays the gap. Do not treat the halt as a failure to work around.
+- move_tables_create and move_tables_switch_reads are transparent to a running sluice stream. The write switch is not: it blocks the table on the database it came from, and sluice halts on the next statement with SLUICE-E-TARGET-TABLE-BLOCKED-BY-WORKFLOW (v0.151.0), which names __neki.list_blocked_tables() and __neki.move_tables_status() and both end states. That is the intended outcome — nothing is lost, the persisted position stops before the block, and restarting after you finish or reverse the move replays the gap. Do not treat the halt as a failure to work around.
 
 - A table created with a plain CREATE TABLE is not enrolled in Neki's data topology, so move_tables_create refuses it (NK604, "table doesn't exist in the existing topology") even though the table plainly exists and holds rows. Add it with __neki.set_data_topology() first.
 
