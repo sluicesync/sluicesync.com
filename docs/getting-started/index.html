@@ -63,6 +63,8 @@
 <tr><td><code>mysql</code></td><td><code>user:pass@tcp(host:3306)/dbname</code></td></tr>
 <tr><td><code>mariadb</code></td><td>Same shape as <code>mysql</code> (<code>user:pass@tcp(host:3306)/dbname</code>) — use the <code>mariadb</code> driver for a MariaDB server; sluice fingerprints the server and steers you if the driver and server family are mismatched.</td></tr>
 <tr><td><code>postgres</code></td><td><code>postgres://user:pass@host:5432/dbname?sslmode=require</code></td></tr>
+<tr><td><code>planetscale</code></td><td>Same shape as <code>mysql</code> — but <strong>use this driver, not <code>mysql</code>, for any PlanetScale MySQL host</strong> (<code>*.connect.psdb.cloud</code>). PlanetScale blocks the binlog CDC and <code>LOAD DATA</code> cold-copy that the <code>mysql</code> driver relies on; this one uses VStream instead. sluice refuses the wrong pairing rather than failing partway, but it is easier not to hit it.</td></tr>
+<tr><td><code>vitess</code></td><td>Same shape and same VStream path, for a self-hosted Vitess cluster.</td></tr>
 <tr><td><code>sqlite</code></td><td>A file path (<code>./app.db</code>) or a <code>wrangler d1 export</code> <code>.sql</code> dump (auto-detected). Also a target driver.</td></tr>
 <tr><td><code>d1</code></td><td><code>d1://&lt;account_id&gt;/&lt;database_id&gt;</code> (or <code>d1://&lt;database_id&gt;</code> + <code>CLOUDFLARE_ACCOUNT_ID</code>); API token via <code>CLOUDFLARE_API_TOKEN</code>.</td></tr>
 </tbody>

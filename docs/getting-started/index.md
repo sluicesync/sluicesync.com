@@ -49,6 +49,10 @@ mariadb · Same shape as mysql (user:pass@tcp(host:3306)/dbname) — use the mar
 
 postgres · postgres://user:pass@host:5432/dbname?sslmode=require ·
 
+planetscale · Same shape as mysql — but use this driver, not mysql, for any PlanetScale MySQL host (*.connect.psdb.cloud). PlanetScale blocks the binlog CDC and LOAD DATA cold-copy that the mysql driver relies on; this one uses VStream instead. sluice refuses the wrong pairing rather than failing partway, but it is easier not to hit it. ·
+
+vitess · Same shape and same VStream path, for a self-hosted Vitess cluster. ·
+
 sqlite · A file path (./app.db) or a wrangler d1 export .sql dump (auto-detected). Also a target driver. ·
 
 d1 · d1://<account_id>/<database_id> (or d1://<database_id> + CLOUDFLARE_ACCOUNT_ID); API token via CLOUDFLARE_API_TOKEN. ·
