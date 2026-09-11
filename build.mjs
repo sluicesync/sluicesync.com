@@ -101,6 +101,7 @@ const NAV = [
       { slug: "foreign-keys-vitess", label: "Foreign keys on Vitess" },
       { slug: "planetscale-schema-changes", label: "Online schema changes" },
       { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
+      { slug: "sharded-postgres-semantics", label: "What changes when Postgres is sharded" },
       { slug: "planetscale-postgres-to-neki", label: "PlanetScale Postgres → Neki" },
       { slug: "planetscale-mysql-to-postgres", label: "PlanetScale MySQL → Postgres" },
       { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
@@ -5237,6 +5238,125 @@ ${pre(`sluice verify \\
 `,
     prev: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
     next: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
+  })
+);
+
+
+// nav-label: What changes when Postgres is sharded
+write(
+  "sharded-postgres-semantics",
+  page({
+    slug: "sharded-postgres-semantics",
+    title: "What changes when your Postgres is sharded",
+    subtitle: "Sharding changes what your schema guarantees, and several of the changes are silent. Measured on a live PlanetScale Neki cluster.",
+    body: `
+<p>Sharding a PostgreSQL database does not only spread it across machines. It <strong>changes what your schema guarantees</strong>, and several of the changes are silent &mdash; the statement succeeds, the exit code is zero, and the result is not what the same SQL means on one node.</p>
+
+<p>This page is about <a href="https://planetscale.com/docs/neki">PlanetScale Neki</a> specifically, but most of it is true of any sharded PostgreSQL. Everything below was <strong>measured on a live 3-shard cluster on 2026-09-10</strong> (PostgreSQL 18.6, platform preview) rather than taken from documentation. Neki is in preview; re-check anything load-bearing before you bet on it.</p>
+
+<div class="note"><strong>The short version.</strong> Three guarantees you almost certainly rely on stop holding globally: <code>UNIQUE</code>, <code>PRIMARY KEY</code> conflict detection, and the ability to change a column's value. If your schema depends on any of them across the whole table rather than within one shard, that dependency needs a plan before you migrate, not after.</div>
+
+<h2 id="unique">Your <code>UNIQUE</code> constraint is only unique within a shard</h2>
+
+<p>A <code>UNIQUE</code> constraint is accepted in full on a sharded table and enforced <strong>per shard</strong>. Two rows carrying the same value in a <code>UNIQUE</code> column can coexist, at exit 0, with no error at any point &mdash; if they route to different shards.</p>
+
+<p>The same is true of <code>EXCLUDE</code> constraints. Both are created without complaint, and both quietly mean something narrower than they say.</p>
+
+<p>This is not a bug so much as arithmetic: enforcing uniqueness globally would require a cross-shard read on every insert, which is the cost sharding exists to avoid. But it is rarely what the schema author intended, and nothing warns you.</p>
+
+<p><strong>What to do.</strong> For every <code>UNIQUE</code> constraint, ask whether it is a correctness requirement or a convenience. If an email address must be globally unique, the shard key has to be the email (or uniqueness has to move to an application-level check, or a separate unsharded table). If it is a convenience index, nothing needs to change.</p>
+
+<h2 id="upsert">An upsert can insert a duplicate primary key</h2>
+
+<p>This one is worth understanding in detail, because it is the shape every change-data-capture pipeline and every idempotent writer uses:</p>
+
+<pre><code>INSERT INTO t (...) VALUES (...)
+ON CONFLICT (id) DO UPDATE SET ...</code></pre>
+
+<p><code>ON CONFLICT</code> is evaluated <strong>only on the shard the incoming row routes to</strong>, and routing is by shard key. So if a row's shard key changes, the new version routes to a different shard, finds no conflict there, and is <strong>inserted alongside</strong> the original. Two rows, one primary key.</p>
+
+<p>Measured: two rows carrying <code>id = 3001</code>, physically resident on different shards, at exit 0 with no warning. And an equality-routed read returns only one of them &mdash; so the duplication is invisible to exactly the queries a sharded application is written to use.</p>
+
+<p><strong>What to do.</strong> Put the shard key inside the primary key. That is the standard advice for a sharded schema anyway, and it makes the shard key unchangeable for a given key, which closes this hole by construction. sluice refuses a target where the routing columns are not contained in the key it conflicts on (<a href="/docs/error-codes/"><code>SLUICE-E-TARGET-SHARD-KEY-NOT-IN-UPSERT-KEY</code></a>) rather than writing duplicates.</p>
+
+<h2 id="shard-key-update">You cannot change the shard key at all</h2>
+
+<p>Naming a shard-key column in an <code>UPDATE &hellip; SET</code> list is refused outright:</p>
+
+<pre><code>ERROR: not implemented: updating index column "tenant_id" is not supported (SQLSTATE NK013)</code></pre>
+
+<p>The refusal is on the statement <strong>shape</strong>, not the data &mdash; it fires even when you assign the column its own current value. Moving a row between shards is not an update; it is a delete plus an insert.</p>
+
+<p><strong>What to do.</strong> Shard on something your application does not update. A routing key that changes is a data-model problem on every sharded system, not just this one. If a one-off correction is needed, express it as a delete followed by an insert.</p>
+
+<h2 id="transactions">Cross-shard transactions are not what you think</h2>
+
+<p>A transaction spanning shards has <strong>no shared snapshot and no atomic commit</strong>. Readers can see part of it. A failure can leave it partly applied.</p>
+
+<p><code>SET __neki.tx_mode = 'single'</code> forces single-shard transactions, which restores the guarantees at the cost of refusing anything that spans shards &mdash; often the right trade, because a loud refusal beats a partial commit.</p>
+
+<h2 id="ddl">DDL behaves differently in two ways that will surprise you</h2>
+
+<p><strong>DDL inside a transaction is invisible to the rest of that transaction, and does not survive the commit.</strong> This fails:</p>
+
+<pre><code>BEGIN;
+CREATE TABLE t (...);
+INSERT INTO t VALUES (...);   -- ERROR: relation "t" does not exist
+COMMIT;                       -- and no table is left behind</code></pre>
+
+<p>That is the shape essentially every schema-migration framework emits, so expect tooling that works on single-node Postgres to fail here &mdash; loudly, but pointing at the wrong thing.</p>
+
+<p><strong>DDL is eventually consistent across routers.</strong> Every <code>CREATE</code>/<code>ALTER</code> returns a notice saying the change is visible on <em>this</em> router and may not be on others, with <code>__neki.wait_for_ddl()</code> to wait. This matters for any tool that creates a table and then writes to it <strong>over a connection pool</strong>, since different connections can land on different routers.</p>
+
+<h2 id="topology">The topology is a document someone writes, not an inventory</h2>
+
+<p>A table created with a plain <code>CREATE TABLE</code> is fully routable and takes writes &mdash; and is <strong>never enrolled in the data topology</strong>. It simply falls through to the default shard group. On the cluster we measured, 6 of 19 tables were in that state, all working normally.</p>
+
+<p>You find out when a workflow refuses it: <code>move_tables_create</code> answers <code>NK604 &mdash; table doesn't exist in the existing topology</code> for a table that plainly exists and holds rows. Add it with <code>__neki.set_data_topology()</code> first.</p>
+
+<h2 id="extensions">Not every extension in the catalogue can be created</h2>
+
+<p>The default role is not a superuser, and the platform allows a specific set rather than everything <code>pg_available_extensions</code> lists. Measured:</p>
+
+<table>
+<thead><tr><th>installs</th><th>refuses (<code>permission denied</code>, 42501)</th></tr></thead>
+<tbody><tr><td class="desc"><code>btree_gist</code>, <code>btree_gin</code>, <code>citext</code>, <code>hstore</code>, <code>ltree</code>, <code>pg_trgm</code>, <code>pgcrypto</code>, <code>uuid-ossp</code>, <code>vector</code></td><td class="desc"><code>postgis</code>, <code>postgres_fdw</code>, <code>pg_stat_statements</code></td></tr></tbody>
+</table>
+
+<p><code>postgis</code> is the trap: it is listed at version 3.6.4 and still cannot be created, so its presence in the catalogue proves nothing. And the allowlist is <strong>not</strong> PostgreSQL's own <code>trusted</code> flag &mdash; <code>vector</code> is marked untrusted and installs anyway, while <code>postgres_fdw</code> and <code>pg_stat_statements</code> are equally untrusted and do not. Probe the specific extensions your schema needs; do not extrapolate.</p>
+
+<h2 id="expressions">Some expressions the router evaluates do not match PostgreSQL</h2>
+
+<p>Where the router computes a result itself rather than delegating, the answer can differ from what PostgreSQL would give. Measured: <code>avg(float8)</code> returns a number where PostgreSQL raises <code>22003</code>, and <code>sqrt</code>/<code>power</code> on <code>numeric</code> return a value PostgreSQL then reports as <em>not equal</em> to its own result.</p>
+
+<p>Low impact for a bulk copy, which moves stored values rather than computed ones &mdash; we measured copies as byte-identical. Higher impact if you are porting an application that computes in SQL and compares the results.</p>
+
+<h2 id="cdc">Neki cannot be a continuous-sync source</h2>
+
+<p>Getting data <em>out</em> continuously is not currently possible: the router refuses a replication connection outright.</p>
+
+<pre><code>FATAL: replication connections must target a specific shard (SQLSTATE 0A000)</code></pre>
+
+<p>Measured on an <strong>unsharded</strong> Neki database, so this is not a consequence of sharding you can avoid by keeping one shard. Logical replication in Neki is a per-shard facility and the endpoint an application connects to is not one. A one-shot <code>migrate</code> out of Neki works fine, including from a sharded database &mdash; plan a cutover window rather than a continuous tail if you ever need to move back off.</p>
+
+<h2 id="checklist">Before you migrate</h2>
+
+<p>Run these against your <strong>existing</strong> database, before anything moves:</p>
+
+<ul>
+  <li><strong>Which tables would lack the shard key in their primary key?</strong> Those are the ones where an upsert can duplicate. Fixing the key is cheaper before the data moves.</li>
+  <li><strong>Which <code>UNIQUE</code> constraints are correctness requirements rather than conveniences?</strong> Each one needs an answer: shard on it, move it to an unsharded table, or enforce it in the application.</li>
+  <li><strong>Do you have <code>EXCLUDE</code> constraints?</strong> Same question, same three answers.</li>
+  <li><strong>Does anything update what would become the shard key?</strong> If so, the shard key is wrong.</li>
+  <li><strong>Which extensions do you use?</strong> Check each against the table above &mdash; on the target, not from the catalogue.</li>
+  <li><strong>Do you need continuous replication out of Neki later?</strong> If yes, that is not available today.</li>
+</ul>
+
+<p>sluice refuses the shapes above that would corrupt silently &mdash; before any data moves where the condition is knowable from the schema, and mid-stream where it is a property of a row. That is the argument for using it here rather than a generic copy tool: on a sharded target, the failure modes that matter are the quiet ones.</p>
+
+<p>When you are ready, <a href="/docs/planetscale-postgres-to-neki/">Migrate PlanetScale Postgres to Neki</a> is the tested step-by-step procedure.</p>
+`,
+    next: { href: "/docs/planetscale-postgres-to-neki/", label: "Migrate PlanetScale Postgres to Neki" },
   })
 );
 
