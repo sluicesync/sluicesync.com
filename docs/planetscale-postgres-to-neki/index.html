@@ -52,7 +52,16 @@ SELECT extname, extversion FROM pg_extension ORDER BY 1;
 -- on the target, for each one your schema uses
 CREATE EXTENSION IF NOT EXISTS btree_gist;</code></pre>
 
-<p><code>btree_gist</code>, <code>btree_gin</code>, <code>pgcrypto</code> and <code>postgis</code> are all available on Neki. Miss one and sluice refuses with <code>SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED</code> naming the extension and the exact command — not PostgreSQL's raw <em>"no default operator class"</em> message.</p>
+<p><strong>Not every extension in the catalog can actually be created.</strong> The default role Neki hands you is not a superuser (<code>rolsuper = false</code>), and the platform allows a specific set rather than everything <code>pg_available_extensions</code> lists. Measured on a live Neki database, 2026-09-10:</p>
+
+<div class="table-scroll"><table>
+<thead><tr><th>installs</th><th>refuses with <code>permission denied to create extension</code> (SQLSTATE 42501)</th></tr></thead>
+<tbody><tr><td class="desc"><code>btree_gist</code>, <code>btree_gin</code>, <code>citext</code>, <code>hstore</code>, <code>ltree</code>, <code>pg_trgm</code>, <code>pgcrypto</code>, <code>uuid-ossp</code>, <code>vector</code></td><td class="desc"><code>postgis</code>, <code>postgres_fdw</code>, <code>pg_stat_statements</code></td></tr></tbody>
+</table></div>
+
+<p>Check the target before you plan the migration, not during it — <code>postgis</code> in particular is listed in <code>pg_available_extensions</code> at 3.6.4 and still cannot be created, so its presence there proves nothing. And the allowlist is <strong>not</strong> PostgreSQL's own <code>trusted</code> flag: <code>vector</code> is marked untrusted and installs anyway, while <code>postgres_fdw</code> and <code>pg_stat_statements</code> are equally untrusted and do not. Treat the table above as measurements rather than a rule to extrapolate from, and probe the specific extensions your schema needs.</p>
+
+<p>If a needed extension is missing on the target, sluice refuses with <code>SLUICE-E-SCHEMA-EXTENSION-NOT-ENABLED</code> naming the extension and the exact command — not PostgreSQL's raw <em>"no default operator class"</em> message. That refusal is what you want; a <code>postgis</code> source is a reason to stop and talk to PlanetScale, not something to work around.</p>
 
 <p><strong>Nothing to configure for CDC.</strong> Measured on PlanetScale Postgres: <code>wal_level</code> is already <code>logical</code> and the default <code>postgres</code> role already has <code>rolreplication</code>. There is no operator action here, unlike most managed PostgreSQL. <code>max_replication_slots</code> was 20.</p>
 
@@ -110,7 +119,14 @@ FROM (SELECT coalesce("col1"::text,'~NULL~') || '|' || coalesce("col2"::text,'~N
 <p>Both point the same way: <strong>if you intend to shard, get the shard key into the primary key of the tables that will be sharded — ideally before the migration.</strong></p>
 
 <h2 id="notsupported">Not supported: Neki as a continuous-sync source <a class="hlink" href="#notsupported" aria-label="Permalink to this section">#</a></h2>
-<p><code>migrate</code> <em>out of</em> Neki works, including from a sharded database. <code>sync</code> out of it does not, and that is a platform limitation rather than missing work: a Neki replication connection can export a snapshot but there is no way to import one (<code>pg_export_snapshot()</code> and <code>SET TRANSACTION SNAPSHOT</code> are unimplemented), so there is no consistent handoff from the bulk copy to the change stream. Plan a cutover window if you ever need to move back off Neki.</p>
+<p><code>migrate</code> <em>out of</em> Neki works, including from a sharded database. <code>sync</code> out of it does not, and the reason is earlier and more absolute than this page previously said: <strong>the router does not accept a replication connection at all.</strong></p>
+
+<pre><code>sluice: error: pipeline: open snapshot stream: postgres: snapshot: open replication conn:
+  FATAL: replication connections must target a specific shard (SQLSTATE 0A000)</code></pre>
+
+<p>Measured 2026-09-10, and measured against an <strong>unsharded</strong> Neki database — so this is not a sharding consequence you can avoid by keeping one shard. Logical replication in Neki is a per-shard facility; the endpoint an application connects to is not one. sluice fails here, at the snapshot open, before any of the downstream questions arise.</p>
+
+<p>An earlier version of this page attributed the limitation to snapshot import — <code>pg_export_snapshot()</code> / <code>SET TRANSACTION SNAPSHOT</code> being unimplemented. That would be a real obstacle if you got that far; you do not, because the connection is refused first. Corrected because a wrong mechanism sends you looking for a workaround at the wrong layer. Plan a cutover window if you ever need to move back off Neki.</p>
 
 <h2 id="untested">What we have not tested <a class="hlink" href="#untested" aria-label="Permalink to this section">#</a></h2>
 <p>Stated so this page cannot be read as broader than it is:</p>
@@ -118,7 +134,14 @@ FROM (SELECT coalesce("col1"::text,'~NULL~') || '|' || coalesce("col2"::text,'~N
   <li>Migrating <strong>into an already-sharded</strong> Neki database. Every measurement here targeted an unsharded one, which is where a migration lands by default.</li>
   <li>Volume — the fixture was correctness-shaped (every value family, adversarial values), not volume-shaped.</li>
   <li>Multiple schemas. Everything here used <code>public</code>.</li>
-  <li>MoveTables and online DDL running underneath a live stream. A <strong>reshard</strong> underneath a live stream <em>is</em> tested and clean — no loss, no duplication, source and target checksums equal afterwards.</li>
+  <li>Online DDL running underneath a live stream. A <strong>reshard</strong> and a <strong>MoveTables</strong> underneath a live stream are both tested and clean — no loss, no duplication, source and target checksums equal afterwards.</li>
+</ul>
+
+<p><strong>MoveTables underneath a live stream is measured</strong> (2026-09-10, a 3-shard cluster, 2,000 rows byte-identical end to end). Two things are worth knowing before you run one:</p>
+
+<ul>
+  <li><code>move_tables_create</code> and <code>move_tables_switch_reads</code> are transparent to a running sluice stream. The <strong>write</strong> switch is not: it blocks the table on the database it came from, and sluice halts on the next statement, on the router refusal <code>access to table … is blocked</code> (SQLSTATE <code>NK213</code>). A coded refusal naming the workflow and the query that identifies it lands in the next release. That is the intended outcome — nothing is lost, the persisted position stops before the block, and restarting after you finish or reverse the move replays the gap. Do not treat the halt as a failure to work around.</li>
+  <li>A table created with a plain <code>CREATE TABLE</code> is <strong>not</strong> enrolled in Neki's data topology, so <code>move_tables_create</code> refuses it (<code>NK604</code>, <em>"table doesn't exist in the existing topology"</em>) even though the table plainly exists and holds rows. Add it with <code>__neki.set_data_topology()</code> first.</li>
 </ul>
 
 <p>Neki is in platform preview and its surface moves. Treat the behaviours above as measured-on-a-date rather than permanent, and re-check before relying on a limitation staying put.</p>
