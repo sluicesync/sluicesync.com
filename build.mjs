@@ -102,6 +102,8 @@ const NAV = [
       { slug: "planetscale-schema-changes", label: "Online schema changes" },
       { slug: "planetscale-postgres", label: "PlanetScale Postgres" },
       { slug: "sharded-postgres-semantics", label: "What changes when Postgres is sharded" },
+      { slug: "sharding-readiness-checklist", label: "Is your schema ready to be sharded?" },
+      { slug: "sharded-target-refusals", label: "What sluice refuses on a sharded target" },
       { slug: "planetscale-postgres-to-neki", label: "PlanetScale Postgres → Neki" },
       { slug: "planetscale-mysql-to-postgres", label: "PlanetScale MySQL → Postgres" },
       { slug: "planetscale-postgres-upgrade", label: "Upgrade PlanetScale Postgres" },
@@ -5238,6 +5240,220 @@ ${pre(`sluice verify \\
 `,
     prev: { href: "/docs/planetscale-postgres/", label: "PlanetScale Postgres" },
     next: { href: "/docs/planetscale-region-move/", label: "Move PlanetScale regions" },
+  })
+);
+
+
+// nav-label: What sluice refuses on a sharded target
+write(
+  "sharded-target-refusals",
+  page({
+    slug: "sharded-target-refusals",
+    title: "What sluice refuses on a sharded target",
+    subtitle: "Each refusal exists because a specific silent-corruption shape was measured on a live cluster. This page is the reasoning.",
+    body: `
+<p>sluice refuses several things on a sharded target that it accepts everywhere else. Each refusal exists because a specific way of losing or corrupting data was <strong>measured on a live cluster</strong> &mdash; not because sharded targets warrant extra caution in the abstract.</p>
+
+<p>This page is the reasoning. <a href="/docs/error-codes/">Error codes</a> is the reference.</p>
+
+<div class="note"><strong>Why refuse instead of warn.</strong> Every shape below fails <em>quietly</em> if allowed through: exit 0, no error, correct-looking row counts, and a target that disagrees with the source in a way you find out about later. A loud refusal you can act on is strictly better than a silent divergence you cannot see. Where the condition is knowable from the schema, the refusal comes before any data moves.</p></div>
+
+<h2 id="upsert-key">The shard key is not in the key sluice conflicts on</h2>
+
+<p><code>SLUICE-E-TARGET-SHARD-KEY-NOT-IN-UPSERT-KEY</code> &mdash; refused at preflight, before anything is written.</p>
+
+<p>sluice's idempotent write is <code>INSERT &hellip; ON CONFLICT (key) DO UPDATE</code>. Both the CDC applier and the bulk-copy resume path use it. On a sharded table whose shard key is outside that key, <strong>both available spellings fail, and they fail in opposite directions</strong>:</p>
+
+<ul>
+  <li><strong>Naming the shard key in the <code>SET</code> list</strong> is refused by the platform outright (<code>SQLSTATE NK013</code>), on the statement shape, even when the value is unchanged.</li>
+  <li><strong>Leaving it out</strong> &mdash; the obvious workaround &mdash; is worse. <code>ON CONFLICT</code> is evaluated only on the shard the incoming row routes to, so a row whose shard key differs from the stored row's finds no conflict there and is <strong>inserted alongside it</strong>.</li>
+</ul>
+
+<p><strong>Measured:</strong> two rows carrying <code>id = 3001</code>, physically resident on different shards, at exit 0 with no warning &mdash; and an equality-routed read returns only one of them, so the duplication is invisible to exactly the queries a sharded application is written to use. A CDC replay of an update that changed the shard key produces this, and an at-least-once pipeline will eventually emit one.</p>
+
+<p>There is no third spelling, which is why this is a refusal rather than a degradation. The safe condition is a property of the <em>schema</em> &mdash; every shard-key column contained in the conflict key &mdash; so it is knowable before any data moves and fixable by you.</p>
+
+<p><strong>The fix:</strong> put the shard key in the primary key. That is the standard advice for a sharded schema anyway, and it makes the shard key unchangeable for a given key.</p>
+
+<h2 id="placement">Routing and placement disagree</h2>
+
+<p><code>SLUICE-E-TARGET-SHARD-PLACEMENT-MISMATCH</code> &mdash; refused before any data moves.</p>
+
+<p>If a table is attached to a shard group without moving its rows to the shards that routing now points at, the table's <code>PRIMARY KEY</code> stops being globally enforced: equality-routed queries look on the shard the key routes to, find nothing, and an upsert inserts a second copy.</p>
+
+<p>The usual cause is attaching a <em>populated</em> table to a shard group without running a reshard workflow. sluice probes for it rather than assuming, and refuses if it finds it.</p>
+
+<p><strong>The fix:</strong> run the platform's reshard workflow so the rows are where the topology says they are, then re-run.</p>
+
+<h2 id="shard-key-update">A change would move a row between shards</h2>
+
+<p><code>SLUICE-E-TARGET-SHARD-KEY-UPDATE-UNSUPPORTED</code> &mdash; refused mid-stream, on a target that passed the preflight above.</p>
+
+<p>A CDC change that alters a shard-key value would have to move the row to a different shard, which a sharded target cannot express. sluice refuses rather than applying the other columns and leaving the routing column behind &mdash; that would make the target's row disagree with the source's on the one value that decides where the row lives, silently, with the stream still reporting healthy.</p>
+
+<p>Only a <em>genuine</em> change reaches here. An unchanged shard key is dropped from the <code>UPDATE</code>'s <code>SET</code> list automatically, because the before-image proves the assignment is a no-op and the <code>WHERE</code> clause still routes the statement correctly.</p>
+
+<p><strong>The fix:</strong> shard on a column your application does not update. If the change is a one-off, apply it on the source as a delete plus an insert, which sluice replicates as two changes that both route correctly.</p>
+
+<h2 id="blocked">A workflow has taken the table away</h2>
+
+<p><code>SLUICE-E-TARGET-TABLE-BLOCKED-BY-WORKFLOW</code> &mdash; the stream halts.</p>
+
+<p>A PlanetScale Neki <strong>MoveTables</strong> cutover moves tables between <em>databases</em>. Because a Postgres client chooses its database at connect time, the write switch cannot redirect a connection that named the old one &mdash; so it blocks the table there instead, on every shard primary, and every statement sluice makes is refused (<code>SQLSTATE NK213</code>).</p>
+
+<p><strong>Nothing is lost when this fires.</strong> Measured across a full cutover with a live stream and a running writer: 2,000 rows byte-identical end to end. <code>move_tables_create</code> and the read switch are completely transparent; it is the write switch that takes the table. The persisted CDC position stops <em>before</em> the block rather than advancing past unapplied changes, which is what makes a restart replay the gap instead of skipping it.</p>
+
+<p>It is terminal rather than retried: the block carries a one-year expiry and clears only on an operator action, and the resolution changes which database the data lives in &mdash; not a decision a migration tool should make for you.</p>
+
+<p><strong>The fix:</strong> <code>__neki.list_blocked_tables()</code> names the database and table; <code>__neki.move_tables_status()</code> names the workflow. Then either finish the move and restart sluice against the new database, or reverse the cutover.</p>
+
+<h2 id="not-refused">What sluice does <em>not</em> protect you from</h2>
+
+<p>Stated plainly, because a page listing refusals can read as a claim of total coverage:</p>
+
+<ul>
+  <li><strong>Per-shard <code>UNIQUE</code> and <code>EXCLUDE</code> constraints.</strong> sluice copies your schema faithfully, and the platform enforces those constraints within a shard. sluice does not warn that a constraint means less than it says &mdash; see <a href="/docs/sharding-readiness-checklist/#unique">the readiness checklist</a> to find them yourself before migrating.</li>
+  <li><strong>Cross-shard transaction semantics.</strong> Reads that span shards have no shared snapshot. That is a property of your queries after the migration, not of the copy.</li>
+  <li><strong>Router-evaluated expression differences.</strong> Bulk copy moves stored values, which we measured byte-identical; computed results are an application concern.</li>
+  <li><strong>Choosing the shard key.</strong> sluice checks that your schema is consistent with the key you chose. Whether it is a good key is a design question.</li>
+</ul>
+
+<p>The pattern is consistent: sluice refuses what it can <em>prove</em> would diverge, and tells you plainly where it cannot see.</p>
+`,
+    next: { href: "/docs/planetscale-postgres-to-neki/", label: "Migrate PlanetScale Postgres to Neki" },
+  })
+);
+
+
+// nav-label: Is your schema ready to be sharded?
+write(
+  "sharding-readiness-checklist",
+  page({
+    slug: "sharding-readiness-checklist",
+    title: "Is your schema ready to be sharded?",
+    subtitle: "A checklist of read-only queries you run against the database you already have, before anything moves.",
+    body: `
+<p><a href="/docs/sharded-postgres-semantics/">What changes when your Postgres is sharded</a> explains which guarantees stop holding. This page answers the narrower question: <strong>do any of them matter for your schema?</strong></p>
+
+<p>Every query below runs against the <strong>database you already have</strong> &mdash; no Neki, no migration, no commitment. Each one is cheap, read-only, and answers in seconds. Pick your intended shard key first; most of the checks are relative to it.</p>
+
+<div class="note"><strong>Why before rather than after.</strong> Every problem on this list is cheaper to fix while the data is still on one node. Changing a primary key on a live sharded table means moving rows between shards; changing it beforehand is an <code>ALTER TABLE</code>.</div>
+
+<h2 id="shard-key">0. Choose a shard key, and sanity-check it</h2>
+
+<p>A shard key that changes is a data-model problem on every sharded system &mdash; and on Neki it is refused outright, so it is worth ruling out first. If your candidate column is ever updated, pick a different one.</p>
+
+<pre><code>-- Columns your application updates are the WRONG shard key.
+-- This finds candidates: high-cardinality, NOT NULL, never-updated columns.
+SELECT c.table_name, c.column_name, c.data_type
+FROM information_schema.columns c
+JOIN information_schema.tables t
+  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+WHERE c.table_schema = 'public'
+  AND t.table_type = 'BASE TABLE'
+  AND c.is_nullable = 'NO'
+  AND c.column_name IN ('tenant_id','account_id','org_id','customer_id','workspace_id')
+ORDER BY 1, 2;</code></pre>
+
+<p>Adjust the name list to your own conventions. The point is to find the column that already partitions your data logically &mdash; if one exists, it is almost always the right shard key.</p>
+
+<h2 id="pk">1. Which tables would lack the shard key in their primary key?</h2>
+
+<p><strong>This is the most important query on the page.</strong> A sharded table whose primary key does not contain the shard key is the shape where an upsert inserts a duplicate instead of updating &mdash; silently, because <code>ON CONFLICT</code> is only evaluated on the shard the incoming row routes to.</p>
+
+<pre><code>-- Replace 'tenant_id' with your shard key.
+SELECT t.tablename AS needs_shard_key_in_pk
+FROM pg_tables t
+LEFT JOIN (
+  SELECT i.indrelid::regclass::text AS tbl
+  FROM pg_index i
+  JOIN pg_attribute a
+    ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+  WHERE i.indisprimary AND a.attname = 'tenant_id'
+) ok ON ok.tbl = t.tablename
+WHERE t.schemaname = 'public' AND ok.tbl IS NULL
+ORDER BY 1;</code></pre>
+
+<p>Every table this returns needs one of: the shard key added to its primary key, exclusion from the sharded set, or a deliberate decision that it is append-only and never upserted.</p>
+
+<p>sluice refuses a target in this shape before writing anything (<a href="/docs/error-codes/"><code>SLUICE-E-TARGET-SHARD-KEY-NOT-IN-UPSERT-KEY</code></a>), so a missed table fails loudly rather than corrupting &mdash; but finding it now is cheaper than finding it mid-migration.</p>
+
+<h2 id="nopk">2. Which tables have no primary key at all?</h2>
+
+<pre><code>SELECT t.tablename AS no_primary_key
+FROM pg_tables t
+LEFT JOIN pg_index i
+  ON i.indrelid = (quote_ident(t.schemaname)||'.'||quote_ident(t.tablename))::regclass
+ AND i.indisprimary
+WHERE t.schemaname = 'public' AND i.indrelid IS NULL
+ORDER BY 1;</code></pre>
+
+<p>Keyless tables are a problem before sharding is even considered &mdash; they block continuous replication generally, because there is no way to identify a row for an <code>UPDATE</code> or <code>DELETE</code>. Sharding makes it worse, not different.</p>
+
+<h2 id="unique">3. Which <code>UNIQUE</code> constraints are correctness requirements?</h2>
+
+<p>On a sharded table, <code>UNIQUE</code> is enforced <strong>within a shard</strong>. The constraint is still created; it just means less than it says.</p>
+
+<pre><code>-- Every UNIQUE constraint that does NOT contain the shard key.
+-- These are the ones that stop being global.
+SELECT c.conrelid::regclass AS table_name,
+       c.conname            AS constraint_name,
+       pg_get_constraintdef(c.oid) AS definition
+FROM pg_constraint c
+WHERE c.contype = 'u'
+  AND c.connamespace = 'public'::regnamespace
+  AND NOT EXISTS (
+    SELECT 1 FROM unnest(c.conkey) k
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k
+    WHERE a.attname = 'tenant_id'   -- your shard key
+  )
+ORDER BY 1, 2;</code></pre>
+
+<p>For each row returned, decide which it is:</p>
+
+<ul>
+  <li><strong>A correctness requirement</strong> (a login email, a billing reference) &mdash; it needs the shard key added, a move to an unsharded table, or an application-level check.</li>
+  <li><strong>A convenience</strong> (a natural key you happen to index) &mdash; nothing to do; per-shard uniqueness is fine.</li>
+</ul>
+
+<h2 id="exclude">4. Do you have <code>EXCLUDE</code> constraints?</h2>
+
+<pre><code>SELECT conrelid::regclass AS table_name, conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE contype = 'x' AND connamespace = 'public'::regnamespace
+ORDER BY 1;</code></pre>
+
+<p>Same story as <code>UNIQUE</code>, and usually more surprising &mdash; an <code>EXCLUDE</code> preventing overlapping bookings prevents them <em>within a shard</em>. Two overlapping rows on different shards coexist happily.</p>
+
+<h2 id="extensions">5. Which extensions do you use?</h2>
+
+<pre><code>SELECT extname, extversion FROM pg_extension ORDER BY 1;</code></pre>
+
+<p>Check each against the target &mdash; not against the target's catalogue. <code>pg_available_extensions</code> lists things that cannot actually be created: on the cluster we measured, <code>postgis</code> appears at version 3.6.4 and <code>CREATE EXTENSION postgis</code> fails with <code>permission denied</code> (SQLSTATE 42501), because the default role is not a superuser.</p>
+
+<p>The measured allowlist is in <a href="/docs/sharded-postgres-semantics/#extensions">the semantics page</a>. Treat it as a point-in-time measurement of a preview platform, not a rule &mdash; and note it is <strong>not</strong> PostgreSQL's own <code>trusted</code> flag, so you cannot derive it.</p>
+
+<h2 id="updates">6. Does anything update your candidate shard key?</h2>
+
+<p>No query can answer this from the catalogue &mdash; it is a property of your application, not your schema. Grep your codebase for <code>UPDATE</code> statements touching the column, and check any ORM-driven writes that set a whole row.</p>
+
+<p>If the answer is yes, the shard key is wrong. On Neki the update is refused outright (<code>SQLSTATE NK013</code>), on the statement shape, even when the value is unchanged.</p>
+
+<h2 id="cdc">7. Will you need continuous replication <em>out</em> later?</h2>
+
+<p>If your plan involves streaming out of the sharded database &mdash; to a warehouse, a search index, a second region &mdash; check that it is available before you commit. On Neki today it is not: the router refuses a replication connection outright, measured even on an unsharded database. A one-shot <code>migrate</code> out works fine.</p>
+
+<h2 id="verdict">Reading the result</h2>
+
+<p><strong>All empty?</strong> Your schema is already shaped for sharding, which is more common than it sounds if you built multi-tenant from the start.</p>
+
+<p><strong>A handful of tables in check 1?</strong> Normal, and a contained <code>ALTER TABLE</code> each.</p>
+
+<p><strong>Many rows in check 3, most of them correctness requirements?</strong> Worth pausing. Global uniqueness across a sharded table is the constraint sharding is least able to give you, and designing around it after the fact is expensive.</p>
+
+<p>When you are ready, <a href="/docs/planetscale-postgres-to-neki/">Migrate PlanetScale Postgres to Neki</a> is the tested procedure, and <a href="/docs/sharded-target-refusals/">what sluice refuses on a sharded target</a> covers what happens if something on this list is missed.</p>
+`,
+    next: { href: "/docs/sharded-target-refusals/", label: "What sluice refuses on a sharded target" },
   })
 );
 
