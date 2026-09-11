@@ -119,6 +119,8 @@ It is mutually exclusive with --allow-degraded-fks (opposite intents — one ski
 
 - Migrate many databases or schemas — the full fan-out story across every schema or database at once.
 
+- PlanetScale Postgres → Neki — moving an existing PlanetScale Postgres database onto Neki, PlanetScale's sharded Postgres.
+
 - PlanetScale Postgres, Move PlanetScale regions, and PlanetScale & Vitess — the target-side setup for each PlanetScale flavor.
 
 - Verify & reconcile — confirm only the tables you scoped landed, with matching --include-table.
