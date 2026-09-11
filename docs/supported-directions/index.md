@@ -6,7 +6,7 @@ sluice moves data between database engines through two surfaces: migrate (a one-
 
     sluice engines   # lists every engine built into this binary and its role (migrate / CDC, source / target)
 
-Where PlanetScale Neki sits in these tables. Neki is PlanetScale's sharded Postgres and is reached with the postgres driver, so it rides the Postgres row and column below — with one asymmetry that breaks this page's usual rule. As a target it supports both migrate and sync, including into a sharded database and across a live reshard. As a source it supports migrate only: a Neki replication connection can export a snapshot but nothing can import one, so there is no cold-start-to-CDC handoff out of it. Full procedure: Migrate PlanetScale Postgres to Neki.
+Where PlanetScale Neki sits in these tables. Neki is PlanetScale's sharded Postgres and is reached with the postgres driver, so it rides the Postgres row and column below — with one asymmetry that breaks this page's usual rule. As a target it supports both migrate and sync, including into a sharded database and across a live reshard. As a source it supports migrate only: the router refuses a replication connection outright (FATAL: replication connections must target a specific shard) — measured on an unsharded Neki database, so it is not a sharding consequence — and a CDC stream has nowhere to attach. Full procedure: Migrate PlanetScale Postgres to Neki.
 
 ## Migrate — one-shot copy
 
