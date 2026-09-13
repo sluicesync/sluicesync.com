@@ -117,6 +117,8 @@ Threshold · Fires when… ·
 
 --notify-storage-util / --notify-cpu-util / --notify-mem-util · Target utilisation (0–1 fraction) is at or above the given level. Requires PlanetScale telemetry. ·
 
+--notify-router-cpu-util · The routing layer in front of a sharded target (Neki's routers) is at or above the given CPU fraction. A separate machine from the database, with a separate remedy &mdash; a larger router tier. Inert where there is no routing layer. ·
+
 --notify-storage-growth-per-min · Storage is climbing at or above N fraction-of-capacity per minute — a pre-grow early warning. A value outside 0–1 refuses at start (since v0.124.0, same as the util fractions). Requires telemetry. ·
 
 notify-dead-tuple-ratio / notify-xid-age · Postgres-target autovacuum advisories (v0.99.288): the worst user table's dead-tuple ratio, and the database's age(datfrozenxid) wraparound headroom. Ungated — probed from the target's own catalog; Postgres targets only. ·

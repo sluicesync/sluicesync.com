@@ -256,6 +256,8 @@ Flag · Purpose ·
 
 --notify-storage-util / --notify-cpu-util / --notify-mem-util · Alert when the target's storage / CPU / memory utilisation (a fraction 0–1, used/capacity) is at or above the threshold. Edge-triggered + cooldown'd. 0 disables a rule. A value outside 0–1 refuses at start with the corrected value named (since v0.124.0 — 85 meaning 85% previously armed a rule that could never fire, silently). Requires --planetscale-org telemetry. ·
 
+--notify-router-cpu-util · Alert when the routing layer's CPU (a fraction 0&ndash;1) is at or above the threshold &mdash; PlanetScale Neki's routers, the hop a connection lands on before a shard, the way Vitess routes through VTGate. Separate from --notify-cpu-util (the database's own CPU): the two saturate independently and are fixed by different controls, so arming one does not arm the other. Inert on a target with no routing layer &mdash; the reading is unobserved there, and an unobserved metric never fires. 0 disables. Same out-of-range refusal and the same --planetscale-org telemetry requirement as the rules above. (v0.152.0) ·
+
 --notify-lag-seconds / --notify-storage-growth-per-min · Alert when the target's control-plane replica lag (seconds) is at or above the value, or when storage utilisation is climbing at or above this fraction-of-capacity per minute (a pre-grow early warning, e.g. 0.02 = +2%/min). 0 disables. Requires --planetscale-org telemetry. ·
 
 --notify-cooldown · Minimum interval between re-fires of a still-breached alert (default 15m) — a sustained breach reminds at most once per interval, not every poll. ·
@@ -992,7 +994,7 @@ Flag · Purpose ·
 
 --metrics-listen · Also serve a Prometheus /metrics endpoint re-exporting the watched database's CPU/mem/storage/lag as the sluice_target_* gauge family — turning the daemon into a standalone PlanetScale-metrics exporter. Ignored with --once. ·
 
---notify-* · The telemetry-backed alerter set — --notify-webhook / --notify-slack sinks (env SLUICE_NOTIFY_WEBHOOK / SLUICE_NOTIFY_SLACK) and the --notify-storage-util / --notify-cpu-util / --notify-mem-util / --notify-lag-seconds / --notify-storage-growth-per-min thresholds + --notify-cooldown — identical semantics to sync start, including the whole --notify-smtp-* email-relay family. (The target-probe rules — sync lag and the v0.99.288 vacuum advisories — live on sync start only; the daemon holds no database connection.) ·
+--notify-* · The telemetry-backed alerter set — --notify-webhook / --notify-slack sinks (env SLUICE_NOTIFY_WEBHOOK / SLUICE_NOTIFY_SLACK) and the --notify-storage-util / --notify-cpu-util / --notify-mem-util / --notify-router-cpu-util / --notify-lag-seconds / --notify-storage-growth-per-min thresholds + --notify-cooldown — identical semantics to sync start, including the whole --notify-smtp-* email-relay family. (The target-probe rules — sync lag and the v0.99.288 vacuum advisories — live on sync start only; the daemon holds no database connection.) ·
 
   Run as an alert-only daemon (tokens via env; fire on 85% storage):
 
