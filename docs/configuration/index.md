@@ -70,7 +70,7 @@ precedence over config values. Common keys:
     # dictionaries referenced by tokenize:dict / randomize:dict strategies
     dictionaries:
       first_names:
-        values: ["Alex", "Sam", "Jordan"]
+        entries: ["Alex", "Sam", "Jordan"]   # or file: ./names.txt (one per line); never both
 
 Then run, for example:
 

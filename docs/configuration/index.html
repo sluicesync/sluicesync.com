@@ -90,7 +90,7 @@ redactions:
 <span class="c"># dictionaries referenced by tokenize:dict / randomize:dict strategies</span>
 dictionaries:
   first_names:
-    values: ["Alex", "Sam", "Jordan"]</code></pre>
+    entries: ["Alex", "Sam", "Jordan"]   # or file: ./names.txt (one per line); never both</code></pre>
 <p>Then run, for example:</p>
 <pre><code><span class="k">sluice</span> migrate -c sluice.yaml <span class="f">--source-driver</span> mysql <span class="f">--source</span> ... <span class="f">--target-driver</span> postgres <span class="f">--target</span> ...</code></pre>
 
