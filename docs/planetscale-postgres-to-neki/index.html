@@ -29,7 +29,7 @@
     <h1>Migrate PlanetScale Postgres to Neki</h1>
     <p class="subtitle">Neki is PlanetScale's sharded Postgres. sluice reaches it with the ordinary postgres driver — no new engine, no flag — and this page is the procedure we measured end to end against live databases.</p>
     
-    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#before">Before you start</a></li><li><a href="#oneshot">Option A — one-shot migration</a></li><li><a href="#sync">Option B — minimal downtime</a></li><li><a href="#verify">Verifying</a></li><li><a href="#sharding">Before you shard</a></li><li><a href="#notsupported">Not supported: Neki as a continuous-sync source</a></li><li><a href="#untested">What we have not tested</a></li></ul></nav>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#before">Before you start</a></li><li><a href="#oneshot">Option A — one-shot migration</a></li><li><a href="#sync">Option B — minimal downtime</a></li><li><a href="#verify">Verifying</a></li><li><a href="#sharding">Before you shard</a></li><li><a href="#controltables">Sharded targets and sluice's control tables</a></li><li><a href="#notsupported">Not supported: Neki as a continuous-sync source</a></li><li><a href="#untested">What we have not tested</a></li></ul></nav>
     
 <p><a href="https://planetscale.com/docs/neki">Neki</a> is PlanetScale's horizontally-sharded PostgreSQL: a router speaking the PostgreSQL wire protocol in front of real PostgreSQL clusters. It is the Postgres counterpart of what Vitess does for MySQL, and it is in <strong>platform preview</strong>.</p>
 
@@ -117,6 +117,50 @@ FROM (SELECT coalesce("col1"::text,'~NULL~') || '|' || coalesce("col2"::text,'~N
 <p>And sluice <strong>requires the shard key to be in the primary key</strong> to keep syncing into a sharded table, refusing with <code>SLUICE-E-TARGET-SHARD-KEY-NOT-IN-UPSERT-KEY</code> otherwise. That refusal exists because <code>ON CONFLICT</code> on a sharded table is evaluated only on the shard the incoming row routes to, so an upsert can insert a duplicate of the key instead of updating it.</p>
 
 <p>Both point the same way: <strong>if you intend to shard, get the shard key into the primary key of the tables that will be sharded — ideally before the migration.</strong></p>
+
+<h2 id="controltables">Sharded targets and sluice's control tables <a class="hlink" href="#controltables" aria-label="Permalink to this section">#</a></h2>
+<p>sluice keeps a small set of bookkeeping tables on the target — the CDC position (<code>sluice_cdc_state</code>), the migrate breadcrumbs (<code>sluice_migrate_state</code>, <code>sluice_migrate_table_progress</code>), the schema-history and skipped-table ledgers, the shard-consolidation lease, the target-metrics history and the keyset store. None of them carries a shard key, because on every other database in the world there is no reason for one. On a <strong>sharded</strong> Neki that is a problem: the database's default shard group covers <code>public</code>, so the router refuses every write to them with <code>NK306</code> (<code>shard-key column "…" of primary index 0 is required but missing from INSERT</code>). Left alone it stops a stream at its position write and makes a <code>--resume</code> re-copy a table it had already finished.</p>
+
+<div class="note"><strong>You do not have to do anything about this.</strong> When the target is a Neki, sluice checks its own control tables against the data topology after creating them, and if a shard index would route any of them it assigns those tables to the topology's <strong>authoritative shard group</strong> — the unsharded group PlanetScale's own guidance describes as holding metadata, catalog work and sequences — and waits for every router to pick the change up.</div>
+
+<p>Points worth knowing:</p>
+<ul>
+  <li><strong>Nothing happens on an unsharded database.</strong> The placement is made only when a shard index actually routes the table, so an unsharded Neki never sees a topology revision from sluice.</li>
+  <li><strong>It happens at most once.</strong> sluice compares before it writes, so a start that finds the placement already in place writes nothing. (This matters: re-writing an identical topology document still mints a new revision.)</li>
+  <li><strong>It is attributable.</strong> The write carries the comment <code>sluice: place control tables in the authoritative shard group</code>, so it shows up in the topology's own audit log — <code>SELECT * FROM __neki.list_data_topology_changes();</code>. An entry with that comment, naming only the <code>sluice_*</code> tables, is this and nothing else. <code>SELECT __neki.get_data_topology()</code> shows the result: each control table listed under <code>databases.&lt;db&gt;.schemas.&lt;schema&gt;.tables</code> with a <code>shard_group</code> naming the authoritative group.</li>
+</ul>
+
+<p><strong>The role requirement.</strong> sluice's role needs <code>SELECT</code> on <code>__neki.get_data_topology()</code> to plan the placement and the right to call <code>__neki.set_data_topology</code> to make it. The default role a Neki database hands you could do both when this was measured. If the read is not permitted, sluice logs a warning and carries on — which is safe on an unsharded database and will fail loudly on a sharded one rather than losing anything.</p>
+
+<h3 id="placement-refusal">When <code>SLUICE-E-TARGET-CONTROL-TABLE-PLACEMENT</code> fires <a class="hlink" href="#placement-refusal" aria-label="Permalink to this section">#</a></h3>
+<p>This refusal arrives at control-table creation, <strong>before any data moves</strong>, and means sluice could not make the placement itself. The usual cause is that its role may not write the topology (<code>permission denied</code>, SQLSTATE <code>42501</code>); the others are a topology with no <code>authoritative_shard_group</code>, an authoritative group that itself declares a <code>default_shard_index</code> (a table placed there would still be routed, so remove the index — that group is meant to hold unsharded data), or a control table an operator has pinned to a shard index, which sluice will not overwrite.</p>
+
+<p>Either grant sluice's role the right to call <code>set_data_topology</code> and re-run — it will make the placement on the next start — or make it by hand with a role that may, using the table names the error lists:</p>
+
+<pre><code>-- 1. read the current document
+SELECT __neki.get_data_topology();</code></pre>
+
+<p>Add an entry per table under <code>databases.&lt;your-db&gt;.schemas.&lt;your-schema&gt;.tables</code>, naming the authoritative group the error reports:</p>
+
+<pre><code>"tables": {
+  "sluice_cdc_state":      { "shard_group": "&lt;authoritative group&gt;" },
+  "sluice_migrate_state":  { "shard_group": "&lt;authoritative group&gt;" },
+  // … one per table the refusal names
+}</code></pre>
+
+<p>Then write it back and re-run sluice:</p>
+
+<pre><code>SELECT * FROM __neki.set_data_topology(
+  '&lt;the edited document&gt;',
+  true,
+  '{"comment":"sluice control tables"}'
+);</code></pre>
+
+<p>A <code>success</code> of <code>false</code> means the document was refused; <code>SELECT * FROM __neki.validate_data_topology('&lt;document&gt;')</code> explains why.</p>
+
+<p>There is deliberately <strong>no flag to proceed without the placement</strong>. The next write to a control table would be refused anyway, and a breadcrumb sluice cannot write is exactly what makes a fully-copied table read as never copied on <code>--resume</code>.</p>
+
+<p>If you see <a href="/docs/error-codes/"><code>SLUICE-E-TARGET-SHARD-KEY-MISSING</code></a> instead, that is <code>NK306</code> itself reaching sluice at run time. For one of sluice's own tables it means the placement was never made — most often because the topology could not be read, which is a warning rather than a refusal so that unsharded databases keep working — and the recipe above is the fix. For one of <em>your</em> tables it means the <code>INSERT</code> sluice emitted carries no column by the target's shard-key name: give the target a routing column the source rows actually have, or take the table out of scope with <code>--exclude-table</code>.</p>
 
 <h2 id="notsupported">Not supported: Neki as a continuous-sync source <a class="hlink" href="#notsupported" aria-label="Permalink to this section">#</a></h2>
 <p><code>migrate</code> <em>out of</em> Neki works, including from a sharded database. <code>sync</code> out of it does not, and the reason is earlier and more absolute than this page previously said: <strong>the router does not accept a replication connection at all.</strong></p>
