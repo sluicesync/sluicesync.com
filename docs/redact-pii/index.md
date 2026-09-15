@@ -19,7 +19,39 @@ The flag is repeatable — pass it once per column. Rules are applied in the bul
         --target-driver postgres --target "$DST" \
         --redact users.email=hash:sha256
 
-Every rule also has a YAML form under a redactions: block in the config file (see Configuration). CLI and YAML mix: CLI rules are processed first, YAML appends, and a duplicate on the same schema.table.column is last-write-wins with a WARN. Keep the bulk in version-controlled YAML; reach for the flag for per-environment overrides (--redact users.email=null in staging).
+Every rule also has a YAML form under a redactions: block in the config file (see Configuration). CLI and YAML mix, and the CLI rule wins: the --redact flags are registered first, the YAML block is merged in after them, and a YAML rule for a schema.table.column the CLI already declared is skipped, with a WARN naming the column (since v0.96.0; before that the YAML rule silently overwrote the CLI one). Keep the bulk in version-controlled YAML; reach for the flag for per-environment overrides (--redact users.email=null in staging) — that override is exactly what the precedence exists for.
+
+### The YAML spelling of each spec
+
+Every CLI spec has a YAML form: the strategy name goes in strategy: and the colon-separated options become sibling keys. The Required column is enforced at config load.
+
+CLI spec · YAML keys · Required ·
+
+null · strategy: "null" — MUST be quoted; bare null is YAML's null literal · — ·
+
+static:<value> · strategy: static, value: <value> · — (value may be omitted or empty for an explicit empty-out) ·
+
+hash:sha256 / hash:hmac-sha256[:<key>] · strategy: hash, algo: sha256 | hmac-sha256, key: <keyset key> · algo ·
+
+truncate:<n> · strategy: truncate, length: <n> · length ·
+
+mask:inner:<m1>,<m2>[,<char>] / mask:outer:… · strategy: mask, form: inner | outer, m1: <n>, m2: <n>, char: <one rune> · m1, m2 ·
+
+mask:<preset> · strategy: mask, form: ssn | pan | pan-relaxed | email | ca-sin | uk-nin | iban | uuid · form (no m1 / m2 / char) ·
+
+randomize:int:<min>,<max> · strategy: randomize, form: int, min: <n>, max: <n> · min, max ·
+
+randomize:pan[:<brand>] · strategy: randomize, form: pan, brand: visa | mastercard | amex · form ·
+
+randomize:iban[:<country-code>] · strategy: randomize, form: iban, country_code: DE | GB | FR · form ·
+
+randomize:email / us-phone / uuid / ssn / ca-sin / uk-nin · strategy: randomize, form: <name> · form ·
+
+randomize:dict:<name> · strategy: randomize, form: dict, dict: <name> · dict ·
+
+tokenize:dict:<name>[:<key>] · strategy: tokenize, dict: <name>, key: <keyset key> · dict ·
+
+A required numeric key that is omitted is refused at config load (v0.153.2), with the same error the CLI gives for the option-less spec — strategy: truncate without length: fails exactly like --redact users.email=truncate. Through v0.153.1 an omitted length, m1, m2, min or max decoded to 0 and the rule ran at exit 0: truncate emptied every row, randomize / int wrote 0 to every row, mask / inner masked the whole value, and mask / outer masked nothing — the source value shipped unchanged under a rule that declared it masked — on migrate, sync, backup and preview, while the identical --redact spec was refused. If a config that loaded on v0.153.1 refuses on v0.153.2, the rule it names was never doing what it said; under mask / outer, treat every target or backup written under it as unredacted. Two edges: a key that is present with the value 0 is honoured (length: 0, m1: 0, min: 0), exactly as truncate:0 / mask:inner:0,4 / randomize:int:0,9 are on the CLI; and a numeric key present on a form that takes none — m1: 0 on a preset mask, min: 0 on form: email — is refused as spurious (before v0.153.2 it was silently ignored). An unknown key name is refused by the loader itself.
 
 ## Where redaction applies
 
