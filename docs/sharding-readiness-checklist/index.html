@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Is your schema ready to be sharded? — sluice docs</title>
+<meta name="description" content="A checklist of read-only queries you run against the database you already have, before anything moves.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d1b22">
+<link rel="stylesheet" href="/assets/docs.css">
+<link rel="alternate" type="text/markdown" href="/docs/sharding-readiness-checklist/index.md" title="This page as Markdown (for AI agents)">
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="/"><img src="/sluice-logo-dark.png" alt="sluice"></a>
+    <nav>
+      <button class="menu-btn" onclick="document.querySelector('aside.sidebar').classList.toggle('open')">Menu</button>
+      <a class="" href="/docs/">Docs</a><a class="" href="/field-notes/">Field Notes</a><a href="/screenshots/">Screenshots</a>
+      <a href="https://github.com/sluicesync/sluice">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar"><div class="grp">Documentation</div><a class="lnk" href="/docs/">Overview</a><a class="lnk" href="/docs/getting-started/">Getting started</a><a class="lnk" href="/docs/configuration/">Configuration</a><div class="grp">General Guides</div><a class="lnk" href="/docs/migrate-mysql-to-postgres/">Migrate MySQL → Postgres</a><a class="lnk" href="/docs/preview-and-validate/">Preview &amp; validate before you migrate</a><a class="lnk" href="/docs/sizing/">Sizing &amp; plan recommendations</a><a class="lnk" href="/docs/verify-reconcile/">Verify &amp; reconcile</a><a class="lnk" href="/docs/zero-downtime-cutover/">Zero-downtime migration (continuous sync)</a><a class="lnk" href="/docs/staged-wave-migration/">Staged (wave) migration</a><a class="lnk" href="/docs/schema-changes/">Schema changes during a sync</a><a class="lnk" href="/docs/redact-pii/">Redact PII</a><a class="lnk" href="/docs/import-sqlite-d1/">Import SQLite or Cloudflare D1</a><a class="lnk" href="/docs/multi-database/">Migrate many databases or schemas</a><a class="lnk" href="/docs/copy-table-subset/">Copy a subset of tables</a><a class="lnk" href="/docs/postgres-source-prep/">Prepare a Postgres source</a><a class="lnk" href="/docs/managed-postgres-slotless/">Managed Postgres (slot-less)</a><a class="lnk" href="/docs/operate-fleet/">Operate a sync fleet</a><a class="lnk" href="/docs/encrypted-backups/">Take encrypted backups</a><a class="lnk" href="/docs/from-backup-sync/">Sync from a backup chain</a><a class="lnk" href="/docs/agent-skills/">Drive sluice from an AI agent</a><div class="grp">Platform Guides</div><a class="lnk" href="/docs/migrate-from-neon/">Migrating from Neon</a><a class="lnk" href="/docs/migrate-from-supabase/">Migrating from Supabase</a><a class="lnk" href="/docs/migrate-from-supabase-read-replica/">Migrating from a Supabase read replica</a><a class="lnk" href="/docs/migrate-from-digitalocean-mysql/">Migrating from DigitalOcean MySQL</a><a class="lnk" href="/docs/migrate-from-rds-mysql/">Migrating from AWS RDS MySQL</a><a class="lnk" href="/docs/migrate-from-rds-postgres/">Migrating from AWS RDS Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-postgres/">Migrating from Google Cloud SQL Postgres</a><a class="lnk" href="/docs/migrate-from-cloudsql-mysql/">Migrating from Google Cloud SQL MySQL</a><a class="lnk" href="/docs/migrate-from-azure-mysql/">Migrating from Azure Database for MySQL</a><a class="lnk" href="/docs/migrate-from-azure-postgres/">Migrating from Azure Database for PostgreSQL</a><a class="lnk" href="/docs/migrate-from-vultr-mysql/">Migrating from Vultr Managed MySQL</a><a class="lnk" href="/docs/migrate-from-vultr-postgres/">Migrating from Vultr Managed PostgreSQL</a><a class="lnk" href="/docs/migrate-from-mariadb/">Migrating from MariaDB</a><div class="grp">PlanetScale Guides</div><a class="lnk" href="/docs/planetscale-vitess/">PlanetScale &amp; Vitess</a><a class="lnk" href="/docs/mysql-to-planetscale/">Self-hosted MySQL → PlanetScale</a><a class="lnk" href="/docs/foreign-keys-vitess/">Foreign keys on Vitess</a><a class="lnk" href="/docs/planetscale-schema-changes/">Online schema changes</a><a class="lnk" href="/docs/planetscale-postgres/">PlanetScale Postgres</a><a class="lnk" href="/docs/sharded-postgres-semantics/">What changes when Postgres is sharded</a><a class="lnk active" href="/docs/sharding-readiness-checklist/">Is your schema ready to be sharded?</a><a class="lnk" href="/docs/sharded-target-refusals/">What sluice refuses on a sharded target</a><a class="lnk" href="/docs/planetscale-postgres-to-neki/">PlanetScale Postgres → Neki</a><a class="lnk" href="/docs/planetscale-mysql-to-postgres/">PlanetScale MySQL → Postgres</a><a class="lnk" href="/docs/planetscale-postgres-upgrade/">Upgrade PlanetScale Postgres</a><a class="lnk" href="/docs/planetscale-postgres-analytics-replica/">PlanetScale Postgres analytics replica</a><a class="lnk" href="/docs/planetscale-region-move/">Move PlanetScale regions</a><a class="lnk" href="/docs/planetscale-org-move/">Move to another organization</a><a class="lnk" href="/docs/split-rows-by-region/">Split rows by region</a><div class="grp">Reference</div><a class="lnk" href="/docs/supported-directions/">Supported directions</a><a class="lnk" href="/docs/how-sluice-copies/">How sluice copies your data</a><a class="lnk" href="/docs/commands/">Command reference</a><a class="lnk" href="/docs/error-codes/">Error &amp; exit codes</a><a class="lnk" href="/docs/type-mapping/">Type mapping</a><a class="lnk" href="/docs/database-objects/">Objects sluice creates</a></aside>
+  <main class="content">
+    <h1>Is your schema ready to be sharded?</h1>
+    <p class="subtitle">A checklist of read-only queries you run against the database you already have, before anything moves.</p>
+    
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#shard-key">0. Choose a shard key, and sanity-check it</a></li><li><a href="#pk">1. Which tables would lack the shard key in their primary key?</a></li><li><a href="#nopk">2. Which tables have no primary key at all?</a></li><li><a href="#unique">3. Which UNIQUE constraints are correctness requirements?</a></li><li><a href="#exclude">4. Do you have EXCLUDE constraints?</a></li><li><a href="#extensions">5. Which extensions do you use?</a></li><li><a href="#updates">6. Does anything update your candidate shard key?</a></li><li><a href="#cdc">7. Will you need continuous replication out later?</a></li><li><a href="#verdict">Reading the result</a></li></ul></nav>
+    
+<p><a href="/docs/sharded-postgres-semantics/">What changes when your Postgres is sharded</a> explains which guarantees stop holding. This page answers the narrower question: <strong>do any of them matter for your schema?</strong></p>
+
+<p>Every query below runs against the <strong>database you already have</strong> &mdash; no Neki, no migration, no commitment. Each one is cheap, read-only, and answers in seconds. Pick your intended shard key first; most of the checks are relative to it.</p>
+
+<div class="note"><strong>Why before rather than after.</strong> Every problem on this list is cheaper to fix while the data is still on one node. Changing a primary key on a live sharded table means moving rows between shards; changing it beforehand is an <code>ALTER TABLE</code>.</div>
+
+<h2 id="shard-key">0. Choose a shard key, and sanity-check it <a class="hlink" href="#shard-key" aria-label="Permalink to this section">#</a></h2>
+
+<p>A shard key that changes is a data-model problem on every sharded system &mdash; and on Neki it is refused outright, so it is worth ruling out first. If your candidate column is ever updated, pick a different one.</p>
+
+<pre><code>-- Columns your application updates are the WRONG shard key.
+-- This finds candidates: high-cardinality, NOT NULL, never-updated columns.
+SELECT c.table_name, c.column_name, c.data_type
+FROM information_schema.columns c
+JOIN information_schema.tables t
+  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+WHERE c.table_schema = 'public'
+  AND t.table_type = 'BASE TABLE'
+  AND c.is_nullable = 'NO'
+  AND c.column_name IN ('tenant_id','account_id','org_id','customer_id','workspace_id')
+ORDER BY 1, 2;</code></pre>
+
+<p>Adjust the name list to your own conventions. The point is to find the column that already partitions your data logically &mdash; if one exists, it is almost always the right shard key.</p>
+
+<h2 id="pk">1. Which tables would lack the shard key in their primary key? <a class="hlink" href="#pk" aria-label="Permalink to this section">#</a></h2>
+
+<p><strong>This is the most important query on the page.</strong> A sharded table whose primary key does not contain the shard key is the shape where an upsert inserts a duplicate instead of updating &mdash; silently, because <code>ON CONFLICT</code> is only evaluated on the shard the incoming row routes to.</p>
+
+<pre><code>-- Replace 'tenant_id' with your shard key.
+SELECT t.tablename AS needs_shard_key_in_pk
+FROM pg_tables t
+LEFT JOIN (
+  SELECT i.indrelid::regclass::text AS tbl
+  FROM pg_index i
+  JOIN pg_attribute a
+    ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+  WHERE i.indisprimary AND a.attname = 'tenant_id'
+) ok ON ok.tbl = t.tablename
+WHERE t.schemaname = 'public' AND ok.tbl IS NULL
+ORDER BY 1;</code></pre>
+
+<p>Every table this returns needs one of: the shard key added to its primary key, exclusion from the sharded set, or a deliberate decision that it is append-only and never upserted.</p>
+
+<p>sluice refuses a target in this shape before writing anything (<a href="/docs/error-codes/"><code>SLUICE-E-TARGET-SHARD-KEY-NOT-IN-UPSERT-KEY</code></a>), so a missed table fails loudly rather than corrupting &mdash; but finding it now is cheaper than finding it mid-migration.</p>
+
+<h2 id="nopk">2. Which tables have no primary key at all? <a class="hlink" href="#nopk" aria-label="Permalink to this section">#</a></h2>
+
+<pre><code>SELECT t.tablename AS no_primary_key
+FROM pg_tables t
+LEFT JOIN pg_index i
+  ON i.indrelid = (quote_ident(t.schemaname)||'.'||quote_ident(t.tablename))::regclass
+ AND i.indisprimary
+WHERE t.schemaname = 'public' AND i.indrelid IS NULL
+ORDER BY 1;</code></pre>
+
+<p>Keyless tables are a problem before sharding is even considered &mdash; they block continuous replication generally, because there is no way to identify a row for an <code>UPDATE</code> or <code>DELETE</code>. Sharding makes it worse, not different.</p>
+
+<h2 id="unique">3. Which <code>UNIQUE</code> constraints are correctness requirements? <a class="hlink" href="#unique" aria-label="Permalink to this section">#</a></h2>
+
+<p>On a sharded table, <code>UNIQUE</code> is enforced <strong>within a shard</strong>. The constraint is still created; it just means less than it says.</p>
+
+<pre><code>-- Every UNIQUE constraint that does NOT contain the shard key.
+-- These are the ones that stop being global.
+SELECT c.conrelid::regclass AS table_name,
+       c.conname            AS constraint_name,
+       pg_get_constraintdef(c.oid) AS definition
+FROM pg_constraint c
+WHERE c.contype = 'u'
+  AND c.connamespace = 'public'::regnamespace
+  AND NOT EXISTS (
+    SELECT 1 FROM unnest(c.conkey) k
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k
+    WHERE a.attname = 'tenant_id'   -- your shard key
+  )
+ORDER BY 1, 2;</code></pre>
+
+<p>For each row returned, decide which it is:</p>
+
+<ul>
+  <li><strong>A correctness requirement</strong> (a login email, a billing reference) &mdash; it needs the shard key added, a move to an unsharded table, or an application-level check.</li>
+  <li><strong>A convenience</strong> (a natural key you happen to index) &mdash; nothing to do; per-shard uniqueness is fine.</li>
+</ul>
+
+<h2 id="exclude">4. Do you have <code>EXCLUDE</code> constraints? <a class="hlink" href="#exclude" aria-label="Permalink to this section">#</a></h2>
+
+<pre><code>SELECT conrelid::regclass AS table_name, conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE contype = 'x' AND connamespace = 'public'::regnamespace
+ORDER BY 1;</code></pre>
+
+<p>Same story as <code>UNIQUE</code>, and usually more surprising &mdash; an <code>EXCLUDE</code> preventing overlapping bookings prevents them <em>within a shard</em>. Two overlapping rows on different shards coexist happily.</p>
+
+<h2 id="extensions">5. Which extensions do you use? <a class="hlink" href="#extensions" aria-label="Permalink to this section">#</a></h2>
+
+<pre><code>SELECT extname, extversion FROM pg_extension ORDER BY 1;</code></pre>
+
+<p>Check each against the target &mdash; not against the target's catalogue. <code>pg_available_extensions</code> lists things that cannot actually be created: on the cluster we measured, <code>postgis</code> appears at version 3.6.4 and <code>CREATE EXTENSION postgis</code> fails with <code>permission denied</code> (SQLSTATE 42501), because the default role is not a superuser.</p>
+
+<p>The measured allowlist is in <a href="/docs/sharded-postgres-semantics/#extensions">the semantics page</a>. Treat it as a point-in-time measurement of a preview platform, not a rule &mdash; and note it is <strong>not</strong> PostgreSQL's own <code>trusted</code> flag, so you cannot derive it.</p>
+
+<h2 id="updates">6. Does anything update your candidate shard key? <a class="hlink" href="#updates" aria-label="Permalink to this section">#</a></h2>
+
+<p>No query can answer this from the catalogue &mdash; it is a property of your application, not your schema. Grep your codebase for <code>UPDATE</code> statements touching the column, and check any ORM-driven writes that set a whole row.</p>
+
+<p>If the answer is yes, the shard key is wrong. On Neki the update is refused outright (<code>SQLSTATE NK013</code>), on the statement shape, even when the value is unchanged.</p>
+
+<h2 id="cdc">7. Will you need continuous replication <em>out</em> later? <a class="hlink" href="#cdc" aria-label="Permalink to this section">#</a></h2>
+
+<p>If your plan involves streaming out of the sharded database &mdash; to a warehouse, a search index, a second region &mdash; check that it is available before you commit. On Neki today it is not: the router refuses a replication connection outright, measured even on an unsharded database. A one-shot <code>migrate</code> out works fine.</p>
+
+<h2 id="verdict">Reading the result <a class="hlink" href="#verdict" aria-label="Permalink to this section">#</a></h2>
+
+<p><strong>All empty?</strong> Your schema is already shaped for sharding, which is more common than it sounds if you built multi-tenant from the start.</p>
+
+<p><strong>A handful of tables in check 1?</strong> Normal, and a contained <code>ALTER TABLE</code> each.</p>
+
+<p><strong>Many rows in check 3, most of them correctness requirements?</strong> Worth pausing. Global uniqueness across a sharded table is the constraint sharding is least able to give you, and designing around it after the fact is expensive.</p>
+
+<p>When you are ready, <a href="/docs/planetscale-postgres-to-neki/">Migrate PlanetScale Postgres to Neki</a> is the tested procedure, and <a href="/docs/sharded-target-refusals/">what sluice refuses on a sharded target</a> covers what happens if something on this list is missed.</p>
+
+    <div class="pager"><span></span><a class="next" href="/docs/sharded-target-refusals/">What sluice refuses on a sharded target →</a></div>
+  </main>
+</div>
+<footer class="foot">Apache 2.0 · <a href="https://github.com/sluicesync/sluice">github.com/sluicesync/sluice</a> · <code>go install sluicesync.dev/sluice/cmd/sluice@latest</code> · <a href="/docs/sharding-readiness-checklist/index.md">View this page as Markdown</a></footer>
+</body>
+</html>
