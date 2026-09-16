@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The Parquet library nulled every false — and the round-trip test couldn't see it
 
 > Hand parquet-go rows as map[string]any and it decides NULL-vs-present for optional columns by asking whether the Go value is the zero value — so false, 0, -0.0, "", the epoch, and midnight all silently export as NULL. The sharper half is why nobody notices: a Parquet NULL's accessors read back as exactly the Go zero value, so a naive write-then-read test writes false, reads false, and goes green while the file says NULL.

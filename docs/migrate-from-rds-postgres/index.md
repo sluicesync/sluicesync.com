@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from AWS RDS Postgres with sluice
 
 > The rds.logical_replication parameter-group flip, the rds_replication role-membership model (nothing to grant for the master user), force_ssl and the trust bundle, and the trigger-engine fallback.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The alert cleared at the exact moment the slot died
 
 > Monitor a Postgres replication slot by WAL-retention pressure and you inherit a sign flip at the terminal event: when Postgres invalidates the slot, pg_replication_slots reports wal_status='lost' and the lag columns go NULL — not huge. Coerce NULL to zero, compute 0% pressure, and your threshold evaluator concludes the condition cleared. The operator is told the pressure resolved at precisely the moment it became fatal.

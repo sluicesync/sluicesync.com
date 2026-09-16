@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # A long-open transaction anywhere freezes your trigger-CDC
 
 > Gap-free trigger-CDC on Postgres emits only provably-settled rows: txid below the current snapshot's xmin. Any open write transaction anywhere on the server — any table, captured or not — pins that xmin and prefix-cuts the entire poll window: zero rows, healthy-idle logs, replication lag growing without bound. It resumes the moment the transaction ends and loses nothing; until v0.131.3, nothing said it was happening.

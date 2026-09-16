@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your replication "position" is an unbounded set — and a 64 KB column caps it near 1,000 servers
 
 > A MySQL GTID set grows with every server UUID that has ever written to the topology; a Vitess VGTID is that set again per shard. Checkpoint "the position" into a MySQL TEXT column and you've stored an unbounded value in a 64 KB box — and on a server without strict mode, the overflow is a silently truncated position, discovered only at the next resume.

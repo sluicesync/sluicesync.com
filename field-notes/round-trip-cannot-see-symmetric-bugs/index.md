@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The round-trip test that cannot see symmetric bugs
 
 > Write false, the file says NULL, read it back as false — green. A writer bug whose read-back is symmetric is invisible to every round-trip test, and the general condition is worse than one bug: if your writer and every test pin read through the same library, the entire format boundary is self-consistent, and a symmetric regression ships files the rest of the world can't read while your suite stays green. The fix isn't another test; it's an outside reader. And the checker we built to be that reader promptly demonstrated the class inside its own harness.

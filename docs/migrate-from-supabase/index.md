@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from Supabase with sluice
 
 > Session vs transaction Supavisor pooler modes, the IPv6-only free-tier direct endpoint and what it means for CDC, float display vs float identity, and the platform schemas sluice already scopes out.

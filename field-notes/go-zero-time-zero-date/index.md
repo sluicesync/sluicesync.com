@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Go's zero time.Time is a live wire against MySQL
 
 > In Go, var t time.Time is the real instant 0001-01-01 00:00:00 UTC — and Postgres happily stores year-1 dates, which decode to exactly that value. go-sql-driver/mysql serializes any IsZero() instant as MySQL's invalid '0000-00-00' sentinel, so a legitimate year-1 date either false-refuses under strict sql_mode — with an error naming a value the source never held — or is silently stored wrong under a relaxed one. The fix is to take the encoding away from the driver.

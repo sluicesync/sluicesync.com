@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # A poller that re-reads all of history every tick
 
 > A backup broker rebuilt its entire lineage chain on every 30-second tick — one object-store GET per manifest, even when nothing had changed. On a week-old stream that's ~2,000 GETs a tick, forever, with a tick that could outlast its own interval. The cost was tied to the age of the stream, not the size of the change.

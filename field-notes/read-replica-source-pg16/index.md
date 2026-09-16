@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The read replica is a better migrate source and a worse CDC source than the docs
 
 > "You can't do logical replication from a read replica" is Postgres ≤15 lore, and PG 16 quietly flipped both halves of it — in opposite directions for a migration tool. On the read side it got better than the docs: pg_export_snapshot() now works on a standby, so a parallel bulk copy from a replica is fully snapshot-consistent. On the CDC side it got more fragile than "impossible": a slot can be created on a PG 16+ standby, but CREATE_REPLICATION_SLOT blocks until the idle primary emits its next running-xacts record, and the publication DDL CDC needs can't run on a hot standby at all.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MySQL has had this collation column since 8.0; MariaDB added it in 12.1
 
 > MySQL 8 has an information_schema.COLLATIONS.PAD_ATTRIBUTE column that says whether a collation is PAD SPACE (trailing spaces ignored in =) or NO PAD. MariaDB shipped without it for years — absent through the whole 11.x LTS line and 12.0, added only in 12.1 — so on the MariaDB most people run, the attribute that decides whether 'EU' matches a stored 'EU ' is not in the catalog and you read the _nopad_ collation name instead. A portable reader can't assume the column is present or absent across versions; the version-robust signals are the name token and the server's own behavior, and sluice's parity gate anchors to both.

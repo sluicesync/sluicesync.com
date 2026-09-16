@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Disconnect is not release — Postgres lets go of a replication slot asynchronously, and 55006 means two opposite things
 
 > When a logical-replication client disconnects, Postgres does not synchronously mark the slot inactive — the walsender releases it on its own schedule: near-instant in practice, whole seconds under a contended CI scheduler, bounded in the worst case only by wal_sender_timeout (default 60s). Anything that runs at 'the client is gone' races that window and hits SQLSTATE 55006 — on both sides of the slot lifecycle — and the error text gives you nothing to distinguish 'prior owner not yet reaped' from 'genuinely concurrent second writer'.

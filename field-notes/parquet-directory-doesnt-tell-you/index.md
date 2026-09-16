@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Two things the Parquet export directory doesn't tell you
 
 > Two things a file-based export doesn't tell its readers — and what spec-compliant readers assume in the silence. GeoParquet defines an omitted crs as "this is lon/lat degrees" — so omission is an assertion, and an EPSG:3857 export without the stamp reads Web-Mercator meters as degrees, no error, wrong planet positions. And the standard read_parquet('dir/*.parquet') recipe treats the directory as the catalog — but a re-export doesn't unwrite old files, so a dropped table's stale .parquet keeps answering the glob as current data. The fix for the second grew a third act: the first orphan sweep deleted without an ownership proof, and a cleanup pass without one is a hazard of its own.

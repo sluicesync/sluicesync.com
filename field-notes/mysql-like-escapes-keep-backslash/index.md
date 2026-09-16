@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The two MySQL escapes that keep their backslash
 
 > MySQL's string-literal escape table has a trap in its last two rows: \% and \_ do not evaluate to % and _ — they evaluate to the two bytes \% and \_, backslash included. Every other unrecognized escape drops the backslash. A uniform unescaper — which is what almost every hand-rolled MySQL-literal decoder is — silently shortens data containing literal backslash-percent sequences by one byte.

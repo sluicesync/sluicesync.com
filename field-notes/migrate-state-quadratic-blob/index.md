@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # One JSON blob in one row is a quadratic write
 
 > Storing all per-table progress as a single growing JSON blob and re-upserting it on every checkpoint is O(n²) work. On Postgres the amplification lands somewhere specific: a new tuple version plus a re-TOAST of the whole value, every time, on one hot row — while the clone runs inside the lock your workers are waiting on.

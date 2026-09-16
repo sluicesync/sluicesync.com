@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # pgx's AfterConnect replaces, it doesn't chain
 
 > pgx stdlib gives you one slot to run setup on each new physical connection. Install two features through it — a session GUC pin and a PostGIS codec registration — and the second silently evicts the first. Whichever you register last is the only one that runs. No error, no warning; one of your two features just quietly stops working, on exactly the connections that need it.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Rewriting the whole manifest, once per chunk
 
 > Every backup checkpoint re-wrote the entire manifest.json, schema included. Since the manifest grows with table count, the total was quadratic — a measured ~78 hours of pure manifest rewriting at 100k tables. And the two obvious ways to fix it are the same quadratic in disguise.

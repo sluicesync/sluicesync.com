@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from a Supabase read replica with sluice
 
 > A Supabase read replica (an -rr- endpoint) is a fine bulk-migrate source that offloads the copy's read load from your primary — PG 16+ standby parallel snapshots engage unreduced — but CDC and backup are refused: a replica can't host the sluice publication and can't be asked for a CDC end position, so continuous sync and backups must point at the primary. Plus the corrected CDC-preflight facts and how to verify safely against a lagging replica.

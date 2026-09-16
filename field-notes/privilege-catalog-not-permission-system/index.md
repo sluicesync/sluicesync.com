@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The privilege catalog is not the permission system
 
 > Three live-proven ways a cloud provider's privilege catalog lied, in both directions. On RDS the master role shows rolreplication=f permanently yet creates and drops logical slots, because the capability is gated on membership in rds_replication, not the role attribute — so the stock "rolsuper OR rolreplication" preflight false-refuses the entire platform. On RDS MySQL, SHOW GRANTS shows RELOAD yet FLUSH TABLES WITH READ LOCK returns 1045. And a capability probe checked pg_create_event_trigger — a predefined role that exists in no stock PostgreSQL. The catalog describes a permission model; it is not the permission model.

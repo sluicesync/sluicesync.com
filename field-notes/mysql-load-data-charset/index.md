@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # One LOAD DATA can't load a BLOB and a JSON column at once
 
 > A BLOB column needs CHARACTER SET binary or the server rejects its first non-ASCII byte; a JSON column rejects its input under CHARACTER SET binary. The two requirements point opposite ways, and there is no statement-level clause that satisfies both.

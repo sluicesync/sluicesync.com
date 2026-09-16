@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # TINYINT(1) is a display width, not a value constraint
 
 > MySQL's BOOL and BOOLEAN are aliases for TINYINT(1), so every migration tool reads TINYINT(1) as a boolean — and the (1) is a formatting hint, not a range. The column stores the full signed 8-bit range, so a legacy column holding 0–6 collapsed to true under the boolean mapping, at exit 0. sluice WARNed — and carried the collapsed value anyway. And on the VStream wire, --type-override structurally cannot fix it.

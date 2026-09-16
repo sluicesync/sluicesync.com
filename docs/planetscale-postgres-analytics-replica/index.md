@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # A live analytics replica on PlanetScale Postgres
 
 > Analytics queries on a streaming replica get canceled after ~30 seconds of recovery conflict. Stand up a second PlanetScale Postgres database and let sluice keep it continuously synced — its primary never cancels a query for recovery, so analytics can run for minutes or hours.

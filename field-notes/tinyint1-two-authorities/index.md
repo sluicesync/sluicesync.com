@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The same tool disagreed with itself about whether a TINYINT(1) is a boolean
 
 > MySQL's BOOL alias does not extend to UNSIGNED or AUTO_INCREMENT tinyint(1) — those are integers. The schema translator knew that; the VStream replication decoder answered the same yes/no question from a different input, the wire's own column_type string, and answered it differently. An auto-increment tinyint(1) primary key silently collapsed every value ≥2 to 1 on the change stream — while the cold copy of the same table was correct.

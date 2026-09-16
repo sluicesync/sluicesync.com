@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your usage is invisible in the API for exactly as long as it's free
 
 > The billing API omits every $0.00 line item, so a metered-but-unbilled resource returns nothing at all. The metrics endpoint can measure it — but its counters live on pods that rotate away, and the textbook increase() rule reads routine backend skew as counter resets and over-counts by 2.2×.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # PlanetScale acked our rows, then a storage-grow reparent un-acked them
 
 > A 5.5M-row migrate into PlanetScale MySQL returned exit 0 and “migration complete” — and landed 5,496,003 rows. About four thousand, gone in scattered whole-batch units, no error anywhere.

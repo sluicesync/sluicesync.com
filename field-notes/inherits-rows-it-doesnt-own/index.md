@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The parent table that returns rows it doesn't own
 
 > Old-style Postgres inheritance presents parent and children to information_schema as ordinary, unrelated BASE TABLEs — while a SELECT on the parent, without ONLY, also returns every child's rows. The standard migration recipe (enumerate BASE TABLEs, copy each) therefore lands the child data twice: flattened into the parent's target table and again in each child's. Silently, exit 0; the only symptom is a row count that's too big.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The forensics table MariaDB doesn't have
 
 > MySQL session forensics — which connected session holds a binlog_format or sql_log_bin override — is a two-table JOIN on performance_schema.variables_by_thread and threads. On MariaDB that query dies with ERROR 1146: the table doesn't exist, whether performance_schema is ON or OFF, because MariaDB's performance_schema never implemented it. And under MariaDB's OFF default, the tables it does have answer empty instead of erroring — so a ported runbook fails both ways, at exactly the mid-incident moment it's reached for.

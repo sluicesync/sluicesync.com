@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The platform default that eats every UPDATE
 
 > Point a MySQL CDC pipeline at Azure Database for MySQL and the cold copy is exact, the stream stays green, the counts stay equal — and every UPDATE silently vanishes. The cause is a one-line server default nobody set on purpose: Azure ships binlog_row_image=MINIMAL, and under MINIMAL an UPDATE's before-image carries only the primary key. Azure is the first major managed platform to make MINIMAL the out-of-box posture.

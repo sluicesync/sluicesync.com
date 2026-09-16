@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The join that's 1:1 on MySQL 8 and fans out on MariaDB
 
 > MariaDB has no distinct JSON storage type — a JSON column is LONGTEXT plus an auto-generated CHECK named after the column — and its constraint names are unique per table, not per schema. A catalog join that is provably 1:1 on MySQL 8 becomes a cartesian fan-out on MariaDB, and because JSON columns are named after their column it fires for the most ordinary schema imaginable: two tables that each have a `meta` JSON column. The fix cannot be symmetric, because MySQL 8's CHECK_CONSTRAINTS has no TABLE_NAME column to join on.

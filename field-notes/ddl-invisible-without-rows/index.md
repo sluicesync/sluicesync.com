@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # An ALTER with no rows behind it is invisible to Postgres CDC
 
 > Change-data-capture tools quietly assume a schema change leaves a mark in the replication stream. It does on MySQL and it does not on Postgres, and the divergence is sharp: pgoutput never streams DDL at all — a schema change surfaces only as a RelationMessage, and only right before the first row that follows it. A pure ALTER with no writes behind it produces nothing.

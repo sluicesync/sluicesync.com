@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your floats are fine; your diff tool is comparing two renderings
 
 > One server sets extra_float_digits=0, another runs the modern default of 1, and every text-level float comparison between them reports differences that do not exist. The stored bits are identical; only the rendering moved. The reassuring direction of this bug — data exact, report wrong — is exactly what makes it waste hours: everything you inspect by hand re-renders through the same setting that skewed the report.

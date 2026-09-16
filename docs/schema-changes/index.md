@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Schema changes during a live sync
 
 > How sluice keeps a running sync online while the source schema evolves — what forwards automatically, what refuses loudly, and how to recover.

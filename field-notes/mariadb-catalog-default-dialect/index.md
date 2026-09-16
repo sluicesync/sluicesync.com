@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MariaDB reports its defaults in a different dialect
 
 > "MariaDB is basically MySQL" survives the wire protocol and dies in information_schema. Point the same DDL at both and COLUMN_DEFAULT speaks two dialects: MySQL 8 reports a string default as bare abc, MariaDB reports 'abc' with the quotes; a defaultless nullable column is SQL NULL on MySQL and the four-character string NULL on MariaDB; DEFAULT CURRENT_TIMESTAMP reads as current_timestamp() with an empty extra. A MySQL-convention reader emits corrupted defaults — and MariaDB's SYSTEM VERSIONED tables and SEQUENCEs vanish behind the near-universal table_type='BASE TABLE' filter.

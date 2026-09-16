@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Operate a sync fleet
 
 > Supervise many continuous syncs from one process — failure-isolated, observable, and reconfigurable without a restart.

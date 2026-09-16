@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # mydumper chunk numbers are PK ranges, not a sequence
 
 > Every consumer's instinct says numbered chunk files — table.00000.sql, 00001, … — form a sequence, so a missing file is detectable as a gap. Ground truth from real mydumper: the numbers are derived from primary-key ranges. Healthy dumps have gaps, -r dumps start at 00001, and a deleted trailing chunk leaves no gap at all — so contiguity is neither necessary nor sufficient. Meanwhile a deleted middle chunk streams silently short at exit 0, and the loss detector the format actually ships is the metadata everyone skips as informational.

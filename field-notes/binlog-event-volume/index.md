@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # One INSERT is three binlog events (or four)
 
 > The binlog is a log of events, not row changes. A single-row INSERT lands as three (BEGIN / WRITE_ROWS / XID), plus a spurious empty BEGIN/COMMIT per new connection — so if you size a rollover bound by INSERT count, budget 4×. Postgres counts differently again.

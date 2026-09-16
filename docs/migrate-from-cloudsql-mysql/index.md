@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from Google Cloud SQL MySQL with sluice
 
 > The first managed MySQL whose binlog retention is honest and safe by default (a 1-day floor), the --retained-transaction-log-days decoy, the PITR toggle that invalidates every position, and the per-instance-CA TLS recipe.

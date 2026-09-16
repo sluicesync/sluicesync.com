@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from Vultr Managed PostgreSQL with sluice
 
 > The only provider validated so far that ships CDC-ready with zero preparation: wal_level=logical and a REPLICATION-bearing admin role out of the box. Plus the pghoard_local platform-internal slot you must not drop, and Vultr's managed PgBouncer — the live counter-example where CDC actually traverses the pooler.

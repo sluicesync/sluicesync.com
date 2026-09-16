@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Supported directions
 
 > Every source → target pair sluice can move, for one-shot migrate and for continuous sync — and which pairs each surface does not cover.

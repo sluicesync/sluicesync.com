@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Comparing 32-bit transaction ids breaks after four billion of them
 
 > A trigger-CDC hold-back compared a change row's 32-bit xmin against a 64-bit xid8 snapshot bound. At XID epoch 0 the two domains coincide and everything works; once a cluster crosses 2^32 lifetime transactions the predicate goes always-true and silently skips an in-flight transaction's rows.

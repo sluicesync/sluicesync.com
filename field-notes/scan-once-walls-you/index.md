@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The scan-once optimization that walls you
 
 > Collapsing a table's index builds into one ALTER so InnoDB scans once is a real win — until a per-statement time limit. On PlanetScale a 12.8 GB table's four-index ALTER hit the ~900 s wall at 900,004 ms, and --resume re-issued the identical statement, so the build could never converge. The very property that makes the optimization efficient — one big statement — is what the wall kills.

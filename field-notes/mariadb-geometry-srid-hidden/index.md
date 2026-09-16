@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MariaDB accepts a geometry SRID it won't show you
 
 > Declare POINT REF_SYSTEM_ID=4326 and MariaDB really stores the SRID — but SHOW CREATE TABLE drops the attribute and echoes a bare `point DEFAULT NULL`, and unlike MySQL 8 there is no srs_id column in information_schema.COLUMNS. Parse the SRID the documented way and every geometry column silently reads back as SRID 0. The declared value lives only in the OGC-standard GEOMETRY_COLUMNS view.

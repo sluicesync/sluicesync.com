@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # pgoutput won't tell you a column's DEFAULT — and the obvious fix drops every default on your target
 
 > pgoutput's Relation message carries each column's name, type OID, typmod, and key flag. No DEFAULT. No NOT NULL. So the obvious fix for 'a source SET DEFAULT is silently skipped' — add DEFAULT to the schema-diff classifier — was implemented, found to be simultaneously dangerous and ineffective, and reverted: it would emit DROP DEFAULT across the whole target at the first seed→CDC boundary of every sync, while a real mid-stream SET DEFAULT still went undetected. A shape classifier can only classify what the change stream actually carries.

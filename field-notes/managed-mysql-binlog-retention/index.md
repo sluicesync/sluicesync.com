@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The retention variable that tells five different truths
 
 > binlog_expire_logs_seconds is the variable every MySQL CDC preflight checks to learn how long it has before the resume position is purged. On five managed platforms it means five different things: on two it lies (the number is days, the real window is minutes); on one it is honest and enforced; on one it is honest the other way (never-expire); and on one there is no knob behind it at all. Whether anything SQL-visible is the answer decides whether a tool can detect the trap or only guess at it from the hostname.

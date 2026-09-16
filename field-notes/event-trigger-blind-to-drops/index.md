@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your event trigger fires for the DROP and sees zero rows
 
 > An event trigger on ddl_command_end fires for a DROP, and the loop body never executes: pg_event_trigger_ddl_commands() returns zero rows for object removal, because dropped-object information is reachable only from the sql_drop event through a different context function. So a WHEN TAG list naming DROP TABLE reads as coverage while being incapable of producing a row — the trigger fires, records nothing, and a dropped table streams on at exit 0.

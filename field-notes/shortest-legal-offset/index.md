@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Postgres writes +00; your parser expects +00:00 — and every date ends in the shape of the shortest legal offset
 
 > ISO 8601 admits at least four spellings of a UTC offset, and Postgres COPY picks the shortest: 2026-07-15 08:09:10.123456+00. A layout list that stops at ±hh:mm refuses Postgres's own default text output. And the fix has its own trap — a bare date like 2026-07-02 ends in -02, exactly the naive two-digit offset shape.

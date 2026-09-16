@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The dump reader skipped what it couldn't lex — and the verifier rode the same reader
 
 > A statement-splitting dump reader dispatched on the first token and let anything that lexed empty fall through as "comment-only." A UTF-8 BOM glued to the first INSERT made it lex empty: the whole statement vanished at exit 0. And verify --depth count counted through the identical blind spot, so the safety net confirmed the loss instead of catching it. Then the fix's own third act: the refusal reached verify's report but not its exit code.

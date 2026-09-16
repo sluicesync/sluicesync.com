@@ -340,7 +340,15 @@ function fnPager(fullSlug) {
 // entry is the manual flagship marker, used sparingly (~5%).
 function fnDepth(slug) {
   try {
-    const md = readFileSync(join(ROOT, "field-notes", slug, "index.md"), "utf8");
+    // Strip HTML comments before counting. The generated pages carry a
+    // "GENERATED — DO NOT EDIT" banner (see the per-page emitter below), and
+    // these thresholds are calibrated on a corpus that predates it — counting
+    // the banner would shift every note by its length and silently drift the
+    // ones near the 650/1000 boundaries into the wrong tier. A no-op on a file
+    // with no comments, which is how it was verified to change no tier when
+    // the banner landed.
+    const md = readFileSync(join(ROOT, "field-notes", slug, "index.md"), "utf8")
+      .replace(/<!--[\s\S]*?-->/g, "");
     // Thresholds calibrated on the 2026-08-14 corpus (n=112: min 478,
     // p25 659, median 765, p75 985, max 1875) so each tier is a real
     // population, roughly quartile / half / quartile.
@@ -12315,7 +12323,21 @@ for (const p of EMITTED) {
   const rel = p.slug === "" ? "docs" : isFieldNote(p.slug) ? p.slug : "docs/" + p.slug;
   const dir = join(ROOT, rel);
   mkdirSync(dir, { recursive: true });
-  let md = `# ${p.title}\n`;
+  // GENERATED-FILE BANNER. An HTML comment, so it is invisible wherever the
+  // markdown is rendered and costs a reader nothing — but it is the first
+  // thing anyone sees on opening the file in an editor, which is the moment
+  // the mistake happens.
+  //
+  // It exists because editing one of these instead of its SOURCE is a mistake
+  // that has been made here repeatedly, and it is a quiet one: the edit looks
+  // right, survives review, and is silently reverted by the next `node
+  // build.mjs`. The error-code table is the sharpest case — its rows live in
+  // ERROR_CODE_ROWS in this file, and docs/error-codes/index.md is output.
+  //
+  // fnDepth() strips comments before its word count so this banner cannot
+  // drift the field-note depth tiers.
+  let md = "<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->\n";
+  md += `# ${p.title}\n`;
   if (p.subtitle) md += `\n> ${p.subtitle}\n`;
   md += `\n${textify(p.body)}\n\n---\nCanonical page: ${pageURL(p.slug)} · Full docs index: ${SITE}/llms.txt\n`;
   writeFileSync(join(dir, "index.md"), md);

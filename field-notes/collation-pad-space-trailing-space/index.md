@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The = that ignores your trailing spaces
 
 > MySQL's WHERE region = 'EU' matches a stored 'EU ' — on a legacy collation. Every collation except the 8.0 utf8mb4_0900_* family is PAD SPACE, which ignores trailing spaces in comparison; the modern default is NO PAD and doesn't. That single per-collation attribute is easy to miss, and a client-side comparator that reproduces a collation's case and accent folding but not its pad attribute silently disagrees with the source on the most common legacy collation. This one shipped as a real silent row-loss — and it shipped green because the test compared the comparator to itself instead of to a real server.

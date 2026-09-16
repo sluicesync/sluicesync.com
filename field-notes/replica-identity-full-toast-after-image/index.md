@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # REPLICA IDENTITY FULL completes the before-image, not the after-image
 
 > REPLICA IDENTITY FULL is sold as 'the whole row in every change' — and it delivers that for the OLD tuple only. Whenever an UPDATE changes a different column of a row whose large column is TOASTed out-of-line, pgoutput sends that column in the NEW tuple as unchanged-toast-datum, so the decoded after-image simply omits it while the before-image arrives complete. sluice's --where router evaluated the predicate over that partial after-image, classified an in-scope UPDATE as a move-OUT, and DELETEd a row the source still holds — exit 0, sync status green.

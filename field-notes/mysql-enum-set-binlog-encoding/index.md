@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # ENUM is an ordinal and SET is a bitmask on the wire
 
 > In a raw binlog row event a MySQL ENUM cell is its 1-based ordinal and a SET cell is a numeric bitmask; the member-name list lives only in the table definition, never in the event. Decode without the schema and SET('a','c') becomes "5". Snapshot and VStream hand you text, so it hides until raw CDC.

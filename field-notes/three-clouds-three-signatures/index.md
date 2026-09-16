@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Three clouds, three ways to return an ECDSA signature
 
 > AWS and GCP hand back an ECDSA signature as ASN.1 DER; Azure returns raw r‖s. Only GCP signs Ed25519, and only GCP wants a CRC32C integrity handshake in both directions. Adding two clouds to a working KMS signer was not a copy-paste — it was normalizing three wire formats to one.

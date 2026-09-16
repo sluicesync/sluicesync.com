@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The CDC stream that reports green and applies nothing
 
 > Everyone knows row-based CDC needs binlog_format=ROW — the surprise is what a non-ROW source looks like from the consumer's side: nothing. A STATEMENT-format source cold-copies clean, then every change arrives as a QueryEvent the row dispatcher ignores — the target freezes at the snapshot, the persisted position never advances, the stream runs green, and shutdown exits nil. MIXED is the same class, and MIXED is MariaDB's platform default.

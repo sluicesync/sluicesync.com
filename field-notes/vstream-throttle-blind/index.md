@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # vtgate erases the throttle signal: every VStream consumer is throttle-blind
 
 > Our stream went silent under a write burst, a progress watchdog called it a failover hang, the process restarted, resumed at the same stuck position, and stalled again — indefinitely. The one in-band signal that would have said “this is a throttle, wait” is deleted before any client can see it.

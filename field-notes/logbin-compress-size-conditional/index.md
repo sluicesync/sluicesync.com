@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MariaDB's log_bin_compress makes the binlog size-conditional
 
 > Turn on MariaDB's log_bin_compress and any row image at or above log_bin_compress_min_len (256 bytes by default) is written under compressed event types — MARIADB_WRITE/UPDATE/DELETE_ROWS_COMPRESSED_EVENT_V1 — while smaller rows keep the plain types. A binlog consumer whose event-type switch doesn't enumerate the compressed trio loses rows conditioned on their size: small rows kept, big rows gone, exit 0, with the resume position advanced past the loss. All three DML verbs are affected — a big row's DELETE compresses too, via its before-image.

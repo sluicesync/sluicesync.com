@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # How sluice copies your data
 
 > Same-engine vs cross-engine: which internal path a copy takes, and why the fast path never trades correctness for speed.

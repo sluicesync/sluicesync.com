@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # SQLite's format('%.17g') silently caps floats at 16 significant digits
 
 > format('%.17g', x) is the textbook way to render a double as text that reads back exactly — 17 significant digits is the IEEE-754 round-trip guarantee, and C's printf has honored it for decades. SQLite's format() looks exactly like C's printf and silently isn't: its %g conversion caps output at 16 significant digits, one short of what a double needs, and %.16g, %.17g, %.20g, %.25g all emit the same 16-digit render. ~46% of swept doubles came back a different double. Only the obscure ! flag lifts the cap.

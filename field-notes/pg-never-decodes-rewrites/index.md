@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Postgres never logically decodes a table rewrite
 
 > Everyone who works with pgoutput knows it streams no DDL; the sharper fact is that a table-rewriting ALTER's row rewrites are invisible too. ALTER COLUMN TYPE numeric(10,1) on a numeric(10,4) column rounds every stored value while the replication slot decodes zero messages — Postgres rewrites into a transient relation that logical decoding deliberately skips. The only wire artifact is one number in the next RelationMessage, invisible to a classifier that compares type OIDs; the same-type USING rewrite leaves no artifact at all and is provably undetectable from the stream.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # BIGINT UNSIGNED overflows both bigint and int64
 
 > A MySQL BIGINT UNSIGNED reaches 2⁶⁴−1, past Postgres bigint's 2⁶³−1 — and past Go's int64, so above that boundary the driver hands the value back as a uint64 a []byte/string-only decoder can't route. The type mismatch is known; the driver-representation switch is the sharp edge.

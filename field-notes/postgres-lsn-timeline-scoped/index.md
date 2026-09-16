@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # A Postgres LSN means nothing without its timeline
 
 > A logical-replication LSN is only comparable within a (system_id, timeline) tuple. Resume after a PITR or a promotion and the same slot name and same stored LSN point into a different WAL reference frame — the source streams from it happily, and events are silently skipped or replayed.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # A CDC position isn't a universal coordinate
 
 > A change-stream gives you a position token to resume from and to reason about order — but engines disagree, non-obviously, on whether that token sits before or after the rows it names. Postgres and MySQL put a schema/DDL position ahead of the rows it introduces; Vitess stamps its commit token after them. Any “did we reach the boundary?” check written against one engine silently false-negatives on the other.

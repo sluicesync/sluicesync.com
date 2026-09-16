@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Move a PlanetScale database to another organization
 
 > PlanetScale has no in-place org transfer — its documented path is an offline dump and restore. sluice turns the same move into a zero-downtime sync, and lets you change region or cluster size in the same pass.

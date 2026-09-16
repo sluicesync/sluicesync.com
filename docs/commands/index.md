@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Command reference
 
 > Every sluice command, its purpose, the flags that matter most, and worked examples.

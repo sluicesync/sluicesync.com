@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Sizing & plan recommendations
 
 > What to change as your dataset grows — because past a certain size the limit stops being sluice and starts being the target platform's plan, storage architecture, and per-statement limits.

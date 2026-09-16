@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MySQL never binlogs the cascade
 
 > Delete a parent row with ON DELETE CASCADE children and MySQL's binlog carries exactly one event: the parent's. The cascaded child changes are never logged — MySQL's replication design makes re-running the cascade the replica's job, through its own FK definitions. But virtually every heterogeneous replication tool disables FK enforcement on apply, precisely to be free of row-ordering constraints — which switches off exactly the mechanism MySQL delegated the cascade to. Postgres answers the same design question the opposite way: it WAL-logs cascaded DML, so the child changes stream as ordinary messages.

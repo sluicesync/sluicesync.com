@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your dump already rounded your floats
 
 > mydumper renders single-precision FLOAT through mysqld's ~6-significant-digit float-to-text formatter: 8388608 lands in the dump file as 8.38861e6, which parses back to a different float32 — while DOUBLE columns in the very same run dump at full round-trip precision. The loss is in the file, at dump time. Restore it, archive it, trust it: the low bits are already gone.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # gocloud classifies "301" by substring — and ~2% of your S3 request IDs contain it
 
 > sluice's backup-chain concurrent-writer guard is a compare-and-swap on S3's create-only conditional PUT: the loser of two racing PUTs gets a 412 PreconditionFailed, mapped to a coded conflict refusal. It was reading that 412 through gocloud's portable error class — and gocloud's s3blob classifier carries strings.Contains(err.Error(), "301"). S3 stamps a random hex RequestID on every response, so whenever that hex happens to contain the digits 301 — about 2% of requests — a genuine 412 is misclassified as NoSuchBucket. Classify from the structured API error, never from a substring of the rendered one.

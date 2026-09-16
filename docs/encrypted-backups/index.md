@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Take encrypted backups
 
 > sluice's logical backup model in depth — chains, compression, encryption at rest, object stores, retention, and restore.

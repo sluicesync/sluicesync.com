@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MariaDB 11.4's default collation doesn't exist on MySQL 8
 
 > Migrate a MariaDB 11.4 schema to a MySQL-family target and sluice WARNs on nearly every string column — because 11.4 made utf8mb4_uca1400_ai_ci (UCA 14.0.0) the server default, and no MySQL 8 server implements it. sluice maps each affected column to the closest equivalent MySQL 8 has, utf8mb4_0900_ai_ci (UCA 9.0.0), preserves every byte, and surfaces the swap. This note is why that WARN is correct-by-design, not a data problem: the bytes are intact; only the collation weights (and PAD semantics) for a small set of characters change.

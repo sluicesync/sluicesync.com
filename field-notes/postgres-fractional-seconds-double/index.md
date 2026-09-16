@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Postgres rounds your fractional seconds through a C double
 
 > PostgreSQL parses a timestamp's fractional seconds as rint(strtod(fraction) * 1000000) — the digit string goes through an IEEE-754 double before rounding, so the result is not exact decimal round-half-even: .0001255 becomes 125.4999…µs in the double and rounds to .000125, where exact half-even on the digits gives .000126. A textbook half-even reimplementation agreed with PG on every hand-picked boundary value and silently diverged on ~0.1% of 7-digit fractions.

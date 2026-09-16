@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # FOR ALL TABLES doesn't mean all tables
 
 > Postgres silently excludes UNLOGGED tables from a FOR ALL TABLES publication — no error, no NOTICE, the table simply never appears in pg_publication_tables — while a scoped FOR TABLE publication refuses the same table loudly. The asymmetry extends mid-sync: ALTER TABLE … SET UNLOGGED on a scoped-publication member errors, but under FOR ALL TABLES the identical flip succeeds and the table silently drops out of the stream. For a sync tool the trap composes with the cold copy, which does include unlogged tables: the target receives the snapshot, then freezes forever while everything reports green.

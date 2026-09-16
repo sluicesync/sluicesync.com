@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Vitess's copy phase rounds your FLOATs; its binlog phase doesn't
 
 > MySQL renders FLOAT to 6 significant digits over the text protocol, so a stored, exact 8388608 comes back as 8388610. Vitess's VStream copy phase inherits it; its binlog phase doesn't — the same column, same row, arrives exact or rounded depending on which phase delivered it.

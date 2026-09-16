@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from Vultr Managed MySQL with sluice
 
 > The binlog-retention hazard is the headline: an out-of-band reaper purges every binlog file ~10–16 minutes after creation while the variable reads 3 days — and uniquely among managed MySQL, Vultr exposes no retention knob at all. That makes CDC migrate-and-cutover-shaped: keep any pause well under 10 minutes. Same Aiven-derived platform as DigitalOcean, without DigitalOcean's fix.

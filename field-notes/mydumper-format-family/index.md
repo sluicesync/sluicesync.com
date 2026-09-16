@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # "mydumper format" is a family, not a spec
 
 > pscale database dump produces "mydumper format" — same metadata file, same schema files, same ~1 MB extended-INSERT chunks, byte-compatible enough that one reader serves both. The shared layout hides three producer forks: binary travels differently, string quoting differs, and TIMESTAMP semantics hinge on a header one producer always writes and the other never does.

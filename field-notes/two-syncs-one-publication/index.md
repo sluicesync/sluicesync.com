@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The healthiest-looking way to lose rows on Postgres: two syncs, one publication
 
 > Postgres logical replication splits the cursor from the filter: the slot records your position and pins WAL; the publication tells pgoutput which tables to emit — and nothing binds one to the other. Cold-start a second sync with a different table scope against a shared publication and its ALTER PUBLICATION … SET TABLE atomically replaces the member set, silently de-scoping the first stream: its slot stays healthy and keeps advancing while zero rows arrive, and every health surface stays green.

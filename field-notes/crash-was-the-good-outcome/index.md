@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The crash was the good outcome
 
 > sluice's trigger-based Postgres CDC captures change images with to_jsonb(), and JSON has no token for a non-finite float — so ±Infinity and NaN travel as the strings "Infinity"/"NaN". The decoder normalized scalar leaves but skipped array elements, so the first UPDATE touching a float8[] column crashed the apply loop loudly and re-crashed on every restart. That loud crash was the value contract working: the fix not taken — blindly coercing every array leaf to float64 — would have truncated a numeric[] element and turned a text[] holding the literal word "Infinity" into a number.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # One literal, three verdicts
 
 > Hand Postgres, MySQL, and MariaDB the same WHERE d = '2024-01-01 08:30' on a DATE column and you get three different comparison semantics: PG casts the literal down to the column's type (time-of-day discarded — the row matches), MySQL promotes the column up to datetime (no match), and MariaDB promotes like MySQL but truncates extra fractional digits where MySQL rounds half-up. Any system that evaluates one predicate in two places disagrees with itself exactly on these boundaries — so normalize each literal under the source engine's own lens, and refuse when you don't have one.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Configuration
 
 > Connection strings, environment variables, the YAML config file, and the global flags every command shares.

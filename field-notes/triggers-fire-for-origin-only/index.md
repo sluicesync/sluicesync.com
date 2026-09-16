@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your trigger-based CDC can't see replicated writes
 
 > Postgres triggers have a firing dimension most people never touch: a plain CREATE TRIGGER fires for origin sessions only, never for DML applied under session_replication_role = 'replica'. That role is how logical-replication apply workers run — and how replication tools, sluice included, apply their own writes to bypass FK enforcement mid-stream. So a trigger-based capture installed on a database that is itself a replication target is silently blind to every replicated row: the rows land, the change log stays empty, the sync exits 0. And the privileged production applier is blind where the unprivileged dev one wasn't.

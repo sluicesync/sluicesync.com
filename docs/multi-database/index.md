@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrate many databases or schemas at once
 
 > Fan a whole MySQL server or a multi-schema Postgres source out to same-named target namespaces in one run.

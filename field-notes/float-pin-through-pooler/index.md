@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The one-line fix that unpinned itself through the pooler
 
 > A server that ships extra_float_digits=0 rounds every float Postgres renders as text, and sluice renders floats as text in four different sessions. The fix reads like one line — SET extra_float_digits = 3 before you read. It is four pins and a transaction, because a bare SET followed by a COPY silently lands on two different backends under a transaction-mode pooler, the fix's own error hint was steering users onto that pooler, and one of the four sessions is the verifier — which had been blessing the corruption it exists to catch.

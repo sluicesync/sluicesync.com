@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrate a self-hosted MySQL to PlanetScale
 
 > Move an on-prem / self-hosted MySQL onto PlanetScale MySQL — a one-shot bulk migrate plus continuous binlog-CDC sync, so you cold-copy, keep the old primary writable, and cut over in a controlled window.

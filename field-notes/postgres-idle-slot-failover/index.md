@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Every HA knob on, and the slot still vanished at failover
 
 > Patroni slot-sync on, sync_replication_slots on, hot_standby_feedback on — and a logical slot that hadn't advanced during the sync window was still lost on promotion. “HA-replicated” means the slot's LSN is copied on a timer, not that the slot can't be lost.

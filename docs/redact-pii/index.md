@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Redact PII while you migrate & sync
 
 > Seed staging, dev, analytics, and vendor handoffs from production without letting personal data leave with the rows.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MySQL TIME is a duration, not a time of day
 
 > A MySQL TIME column ranges -838:59:59 to 838:59:59 and models elapsed duration, not clock time. Postgres time is a time-of-day, 00:00 to 24:00 — so any negative or over-24-hour MySQL TIME has no home there. The faithful target is interval.

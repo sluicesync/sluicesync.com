@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # A Postgres domain has a different type OID on each of the two wires
 
 > On a regular query's wire, a domain column reports its base type's OID, so a driver decodes it with zero special handling. On the logical-replication wire, pgoutput reports the domain's own dynamic OID — with typmod -1, so even a varchar(10) base loses its length. The same driver round-trips the entire cold copy and then halts on the first CDC row.

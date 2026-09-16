@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from Neon with sluice
 
 > Direct vs -pooler endpoints (and why CDC needs the direct one), the irreversible enable_logical_replication project setting, TLS interop, and the live-validated migrate + continuous-sync recipe.

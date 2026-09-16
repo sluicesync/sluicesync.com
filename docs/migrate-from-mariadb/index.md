@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from MariaDB with sluice
 
 > MariaDB is a first-class MySQL-family source engine — use the mariadb driver, not mysql. Bulk migrate to vanilla MySQL or PlanetScale round-trips cleanly (validated live); the divergences are all on the catalog and CDC side — a different COLUMN_DEFAULT dialect, per-table CHECK-constraint names, a geometry SRID it stores but won't echo, native uuid/inet types, domain-based GTIDs for continuous sync, and MariaDB 11.4's new default collation that remaps on a MySQL target.

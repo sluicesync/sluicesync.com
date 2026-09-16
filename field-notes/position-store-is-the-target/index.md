@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The retry budget whose only proof of progress lived in the database that was down
 
 > sluice persists its CDC apply position in a control table on the TARGET — the standard exactly-once move, since the position write rides the batch transaction. But the retry budget's only reset path was a successful position read against that same target, so when the store WAS the outage, progress between outages was never credited: the second target outage of a stream's lifetime exited 'budget exhausted' on its first failures, despite hours of verified progress in between.

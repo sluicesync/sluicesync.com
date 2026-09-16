@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # When the row's own identity gets rounded
 
 > The VStream FLOAT repair re-reads the source exactly and matches rows by primary key. That works perfectly — until the FLOAT is part of the primary key. Then the target's copy of the key is itself rounded, the exact re-read never finds its row, the repair silently no-ops, and --strict-float exits 0 with a rounded archive.
