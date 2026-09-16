@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The row image you can't preflight, because a proxy is in the way
 
 > A self-hosted Vitess running binlog_row_image=NOBLOB drops an unchanged BLOB from an UPDATE's after-image — the same silent-overwrite class as the binlog NOBLOB case, reached through the Vitess door. But the vanilla defense, reading @@GLOBAL.binlog_row_image before the stream starts, cannot exist here: sluice connects to a vtgate, a proxy in front of a fleet of tablets, and there is no single row-image posture to read. The only authoritative signal is the wire itself — and the tablet underneath is loud when the experimental flag is off and goes silent at exactly the setting the guard exists for.

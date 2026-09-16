@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The catalog stats that lag your bulk load
 
 > Right after a bulk COPY, a 36 MB PlanetScale table reported DATA_LENGTH = 16384 (16 KB) and TABLE_ROWS = 5,925 — the catalog statistics hadn't caught up. A size gate keyed off the just-copied target read three orders of magnitude low and never fired, so the safeguard was absent on exactly the platform it protects. Nothing errored; the threshold just never tripped.

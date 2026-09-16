@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Split a database by region — move just the rows for one region
 
 > Data-residency splits with a per-table --where predicate: keep US users in a US-region database and move only the EU users' rows into an EU-region database, in one shot or as a continuous filtered sync.

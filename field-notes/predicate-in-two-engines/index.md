@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The predicate you evaluate twice has to agree, or refuse
 
 > Continuous filtered sync applies one --where predicate in two places: pushed down to the source for the initial snapshot, and evaluated client-side per event for the change stream, because no source delivers a filtered stream. If the two evaluations can disagree, the stream silently leaks or drops rows — and string equality is the canonical trap, because equality itself is collation-defined, not byte-defined. A byte-exact client-side compare of name = 'ANA' diverges from a case- or accent-insensitive source collation. So sluice restricts the client-side grammar to what it can reproduce faithfully and refuses everything else loudly at sync-start, rather than approximate a comparison the source would answer differently.

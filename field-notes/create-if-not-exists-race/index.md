@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # CREATE IF NOT EXISTS is not a lock
 
 > CREATE TABLE / TYPE … IF NOT EXISTS does a catalog pre-check and then an insert, and those two steps aren't atomic against a concurrent creation of the same name. Race it and one side gets a unique_violation on pg_class — from the statement that reads like it can't fail.

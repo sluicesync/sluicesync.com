@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # 2^53 is a database boundary now
 
 > JSON has one number type, and it's a double. That single fact produced two independent silent-corruption incidents in one week — one in third-party tooling, one in our own decoder.

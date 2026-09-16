@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Documentation
 
 > Migrate and continuously sync MySQL and Postgres — including PlanetScale Neki, sharded Postgres — and import SQLite / Cloudflare D1. Correctness-first, loud failure by default.

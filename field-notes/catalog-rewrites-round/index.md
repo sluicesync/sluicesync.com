@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The catalog rewrote round(x), and the target lacks the overload it wrote
 
 > MySQL doesn't store your CHECK (round(d) >= -100000) — it materializes the function's default scale into the text, round(d,0). PostgreSQL's overload set has round(double precision) and round(numeric, integer) but no round(double precision, integer), so the faithfully-carried constraint dies at CREATE TABLE with 42883. The identical CHECK on a DECIMAL column migrates fine — which is exactly why the test corpus missed it.

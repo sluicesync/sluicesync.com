@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MySQL's own certificate can't pass verify-full
 
 > The moment you decide to do MySQL TLS properly — tls=true, encrypt and verify the server — the handshake fails against a stock MySQL. Not because anything is misconfigured: the certificate mysqld generated for itself on first boot carries no SubjectAltName, and modern Go won't fall back to the Common Name to check the hostname. The two facts are structurally incompatible, and neither one makes that obvious on its own.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The transaction that lands in neither the snapshot nor the binlog
 
 > Capture the consistent snapshot and the binlog position as two separate statements, and a transaction committing between them falls into the gap: after the frozen read view, below the recorded offset. It's in neither the bulk copy nor the CDC tail. A global read lock across both closes the seam.

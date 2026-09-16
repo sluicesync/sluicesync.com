@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # found=false is two different facts
 
 > A sync retry loop read the persisted CDC position between attempts to choose 'force a clean re-establishment' vs 'warm resume' — through a (found bool, err error) API whose error it discarded, and both engines report found=false when the read FAILS. So 'the target is down and I could not read the anchor row' was indistinguishable from 'no anchor row exists', and the destructive branch latched. The kicker: a pure reliability improvement made it reachable, by keeping the process alive through the outage window a terminal exit had always masked.

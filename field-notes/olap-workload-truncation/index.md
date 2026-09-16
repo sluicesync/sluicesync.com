@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Setting workload=olap silently truncated our chunked reads
 
 > A one-line change set vtgate's workload=olap session-wide to lift a 100k-row cap on no-PK scans. The parallel chunked reader inherited the setting, each concurrent chunk streamed only a prefix, and a 1.5M-row migrate copied 7,536 rows — exit 0, migration complete.

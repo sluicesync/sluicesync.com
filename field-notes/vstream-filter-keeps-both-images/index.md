@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The change stream that won't drop your row
 
 > Filtering a continuous change stream has one genuinely hard case: a row updated so it no longer matches the filter has to become a target DELETE, or the now-out-of-scope row leaks forever. When you push that filter server-side into someone else's stream — a Vitess VStream rule — the load-bearing question is what the stream emits for a row that leaves the filter. Assume it drops the event and you leak. The Vitess source settles it: for a non-vindex filter, when either the before- or after-image passes, VStream emits the change with BOTH images — so the move-out arrives as a full UPDATE, never dropped. The catch is that it tells you the row touched the filter, not which side matched, so you still have to decide the move direction yourself.

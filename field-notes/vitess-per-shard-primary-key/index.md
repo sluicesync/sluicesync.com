@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your primary key is only unique per shard
 
 > vtgate merges every Vitess/PlanetScale shard into one logical stream, but per-shard id ranges mean the same primary-key value legitimately exists on several shards. Copy them into one target table with that key and the collisions silently overwrite — exit 0, rows short.

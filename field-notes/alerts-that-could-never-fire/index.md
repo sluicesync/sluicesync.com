@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Three alerts that could never fire, and nobody noticed because no wrong number was ever reported
 
 > A metric fanned across pods, a selection cascade that honestly refused to guess, and three thresholds that sat silent for months. Honest-but-silent degradation is harder to catch than a wrong value, because everything downstream looks exactly like healthy.

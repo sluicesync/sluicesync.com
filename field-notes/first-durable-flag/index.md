@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The first durable flag
 
 > Pushing a sync predicate into a Postgres publication row filter quietly changes the flag's lifetime: --where stops being per-process configuration and becomes durable source-side catalog state that outlives every restart. Warm resume deliberately never re-ensures the publication — so restarting with a widened, changed, or removed --where would leave the SERVER filtering on the stale predicate, unobservable client-side by construction. The honest options for a durable filter: re-assert idempotently, or record-and-compare.

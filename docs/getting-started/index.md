@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Getting started
 
 > Install sluice, point it at a source and target, and run your first migration and continuous sync.

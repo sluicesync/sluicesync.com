@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from DigitalOcean MySQL with sluice
 
 > The ~13–16-minute binlog purge window on defaults (and the config-API knob that fixes it), the private CA via --source-tls-ca, sql_mode differences, and the resnapshot-livelock hazard sluice warns about.

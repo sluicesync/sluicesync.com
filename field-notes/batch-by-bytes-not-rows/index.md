@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Count your bytes, not your rows
 
 > A batch size tuned for narrow OLTP rows — 5,000 rows, under 10 MB — quietly pins hundreds of MB the moment the workload is MB-scale TEXT, BYTEA, JSON, or geometry. Row count is a proxy for memory, and it's only honest when rows are uniform.

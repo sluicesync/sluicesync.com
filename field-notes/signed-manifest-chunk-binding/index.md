@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # A signature that verified green while restoring the wrong table's rows
 
 > A signed, encrypted backup flattened every table's row chunks into one file-sorted list with no parent-table token. Swap the chunk lists of two tables that share a column set and the signed bytes are byte-identical — every guard passes, and one table's rows restore into the other.

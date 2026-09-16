@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The same unsigned primary key is int64 to one reader and uint64 to the other
 
 > sluice's backup float repair matches rows across two readers of the same MySQL table — the exact-scan query reader and the VStream COPY decoder — and they hand back the same unsigned-integer primary key as different Go types. So the type tag you'd reach for to harden the match key is precisely the wrong move: it would split int64 from uint64 and silently miss the repair for every unsigned PK. The collision that did ship was quieter — a NUL-joined composite key merged two distinct rows, writing one row's floats into the other row's archived record, in a backup that verifies green.

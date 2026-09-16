@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # proto_version lets you parse streaming; only streaming='on' emits it
 
 > Two pgoutput knobs are easy to conflate. The receiver flag equips you to parse streamed transactions; a separate publisher flag makes the server actually send them. The gap between them hides a silent-loss shape: a dropped StreamAbort leaves already-committed chunks on the target.

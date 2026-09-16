@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # One redaction flag: clamp on MySQL, refuse on Postgres
 
 > --redact randomize:int:100000,200000 into a SMALLINT column loud-refused on a Postgres target and silently clamped every row to 32767 on a MySQL one — turning an anonymization rule into a constant, and a compliance guarantee into a compliance failure.

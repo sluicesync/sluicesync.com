@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Quoted CREATE PUBLICATION preserves case; START_REPLICATION downcases it
 
 > SQL's quoting rules stop at the replication protocol: a quoted CREATE PUBLICATION name like sluice_MyPub preserves case because it's quoted DDL, but the name passed to START_REPLICATION's publication_names option is parsed as an unquoted identifier and folded to lowercase — so pgoutput looks up sluice_mypub, which doesn't exist. Nothing checks at stream start: the slot creates, the whole bulk copy runs green, and the 42704 fires only inside the first change callback — arbitrarily delayed, or never on a quiet source.

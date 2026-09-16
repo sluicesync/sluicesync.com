@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrate & sync PlanetScale Postgres
 
 > PlanetScale Postgres is managed PostgreSQL, so sluice drives it with the plain postgres engine — native logical-replication CDC, not the planetscale driver.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Pushing NOT through a quantifier is the wrong De Morgan
 
 > Two catalogs store the same negated CHECK in different spellings, so a cross-engine diff has to canonicalize. But a canonicalizer that simplifies NOT by negating the comparison operator — exact for scalars — is invalid the moment a quantifier appears: NOT (x = ANY S) is x <> ALL S, not the x <> ANY S operator-negation produces. A correct NOT IN and a hand-gutted <> ANY canonicalized to the same string, and schema diff certified a hollowed-out constraint as in sync.

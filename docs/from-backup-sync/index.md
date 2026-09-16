@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Continuous sync from a backup chain (the broker)
 
 > Replay a backup chain into a target as a long-running broker — no direct source↔target connectivity required.

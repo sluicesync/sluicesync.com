@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # ACTIVE_HEALTHY through a five-minute recovery
 
 > Flooding a 1 GB Supabase Micro instance with WAL pushed it into crash recovery — FATAL 57P03, every connection refused for five and a half minutes while it replayed — and the Supabase Management API kept reporting status=ACTIVE_HEALTHY. A control-plane status field is an assertion of intent, not a data-plane liveness signal, so it is misleading for backend readiness: probe with a real query. The finding rode a separate, concrete result: a logical replication slot's WAL runway is set by the compute tier (512 MB on Micro, 2 GB on Small), not by the PITR add-on, live-proven with a paired differential.

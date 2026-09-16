@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # parseTime governs the query protocol, not the binlog
 
 > parseTime=true on the DSN makes the query driver return time.Time. But the replication stream is a different code path, and it hands temporal columns back as raw strings regardless. The first TIMESTAMP row killed the CDC pump — and the silent channel-close looked exactly like a network stall for two release cycles.

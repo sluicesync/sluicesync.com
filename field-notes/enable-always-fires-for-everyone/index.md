@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # ENABLE ALWAYS fires for everyone
 
 > The prequel note ends on the trap: ENABLE ALWAYS makes triggers fire for replicated writes — including writes you wish it didn't. The sequel is what shipping it actually takes. The posture is not a CREATE TRIGGER clause but a separate ALTER TABLE per trigger; a native subscriber's TRUNCATE, applied through a separate executor path, still fires an ALWAYS statement trigger, observed end-to-end on a real subscription; and Postgres exposes no origin evidence to a trigger, so 'capture replicated writes, except my own applier's' cannot be built — the safety boundary has to move from filtering rows to refusing topologies, keyed on what can recur, not what is currently running.

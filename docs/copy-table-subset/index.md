@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Copy a subset of tables (cross-engine, with continuous sync)
 
 > Copy one-to-several tables from an existing Postgres database to a PlanetScale MySQL/Vitess (or plain MySQL) target and keep just those continuously in sync.

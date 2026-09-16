@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # A whole transaction in one zstd binlog event
 
 > MySQL 8.0.20+ can pack an entire transaction into a single compressed TRANSACTION_PAYLOAD_EVENT. A binlog reader without a handler for it applies nothing and freezes its position with no error — and the server zeroes the inner events' end_log_pos, so a naive resume restarts mid-payload and dies.

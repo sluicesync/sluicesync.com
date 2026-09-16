@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # A Postgres function's name is not its identity
 
 > PostgreSQL identifies a function by (name, argument types), so a catalog read scoped by proname alone can resolve to a row that nothing executes — and CREATE OR REPLACE of the real function cannot remove an overload, so the obvious repair never clears the decoy. Three checkable catalog facts decide whether auditing an installed function against the one your tool renders means anything: overloading, the three columns a definition actually spans, and the one genuinely helpful property — prosrc is stored byte-verbatim.

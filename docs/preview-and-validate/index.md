@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Preview & validate before you migrate
 
 > See the exact target DDL, steer the type translation, and confirm the copy — without guessing.

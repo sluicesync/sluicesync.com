@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The transport said “please reconnect”; the driver reported “your request is malformed”
 
 > HTTP/2's polite drain arrives through gRPC as InvalidArgument, because the status code describes the envelope-parse failure rather than your request. A classifier that correctly treats InvalidArgument as terminal therefore kills an unattended stream on routine platform maintenance.

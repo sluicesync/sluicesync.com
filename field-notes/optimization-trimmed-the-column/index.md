@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The optimization that trimmed away the column a later feature needed
 
 > Continuous filtered sync — replicate only the rows matching --where — has one genuinely hard case: an UPDATE can move a row out of the filter's scope, and that has to become a target DELETE or the now-out-of-scope row silently leaks. sluice designed exactly that, a before×after row-move truth table. Then end-to-end testing over a real change stream caught it leaking anyway, because both CDC readers already narrow the UPDATE before-image down to the primary key — an earlier correctness fix — so by the time the filter evaluated the OLD row, the filtered column was no longer in it. A data-narrowing optimization can silently defeat a feature added later that needs the trimmed-away data, and neither piece's own unit test can see it.

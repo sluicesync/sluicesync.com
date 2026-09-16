@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Persist a resume cursor as JSON and it silently teleports
 
 > A resumable keyset walk persists its last-processed PK between runs, and the obvious store is JSON — which quietly rewrites database values on the way through. We saw half the class at design time ([]byte → base64, time.Time → RFC 3339) and normalized it. The half we missed fired live: Go's json.Marshal replaces invalid-UTF-8 bytes with U+FFFD, and numbers ride float64 past 2^53 — so a resumed walk skipped 73,100 of 100,000 rows at exit 0. Resume state is a codec too, and ours had zero coverage.

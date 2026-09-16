@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your dump reader is quadratic in a knob somebody else set — twice
 
 > A dump reader's cost was quadratic in statement size — and statement size isn't the reader's variable, it's the --statement-size flag chosen by whoever took the dump. We found it, fixed it, benchmarked the fix, shipped "order-of-magnitude on the giant chunk" — and the same-day regression cycle measured no end-to-end difference at all, because the same complexity class lived one layer down, in a buffer sized to the statement tail. Two acts: the quadratic, and the quadratic that survived its own fix.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The cold-start that buffered a whole table into swap
 
 > A 13 GB PlanetScale table drove the process to ~41 GB of RAM and got OOM-killed with zero rows written — the VStream snapshot reader held the entire copy phase in memory before a single row reached the target. The buffer wasn't laziness; three engine behaviors forced it.

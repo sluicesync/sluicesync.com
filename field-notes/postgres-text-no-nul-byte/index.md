@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Postgres text can't hold a NUL byte
 
 > text, varchar, and char reject an embedded 0x00 with SQLSTATE 22021; MySQL char/text store it without complaint. A cross-engine copy hits it, and because it fires inside the COPY protocol the error lands far from the offending row.

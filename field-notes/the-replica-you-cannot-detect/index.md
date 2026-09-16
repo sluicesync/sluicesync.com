@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The replica you can't detect is the replica that loses your writes
 
 > A MySQL replica with log_replica_updates=OFF applies replicated writes without entering them in its own binlog, so CDC pointed at it silently misses the entire write stream the replica exists to carry — and GTID arithmetic (purged = executed − binlogged) turns the gap into a perpetual resnapshot loop. The probe that should refuse this configuration has a dialect trap of its own: on MariaDB, bare SHOW REPLICA STATUS lists only the default connection, so a named multi-source replica — on the fork that also defaults log_slave_updates to OFF — answers zero rows to every MySQL-style question.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The slot is the registry you already have
 
 > sluice needed to answer 'is another stream still claiming a table scope on this Postgres source?'. The airtight-looking answer — a purpose-built stream→scope binding table — was rejected for a reason that generalizes: a source-side registry table is CREATE TABLE-permission-gated on exactly the restricted managed services where the guard matters most. The replication slot turned out to be the registry that was wanted all along: durable, source-side, per-stream, unconditionally present, and held for precisely as long as a stream intends to resume.

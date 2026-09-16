@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The heartbeat aged seven hours at write time
 
 > A concurrent-run guard refuses to start a second backfill walk while the state row's heartbeat is fresher than five minutes. The heartbeat was a bare timestamp written with CURRENT_TIMESTAMP — which Postgres renders in the server's timezone before storing — while the reading driver scans a bare timestamp back as UTC. Two individually defensible behaviors compose into an age reading wrong by exactly the server's UTC offset, and the sign of that offset picks your failure mode. It shipped because every CI container runs UTC, where the bug is arithmetically invisible.

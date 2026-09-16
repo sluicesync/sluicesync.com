@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The same bytes, a different codec: how numeric[][] silently flattened
 
 > We pinned multi-dimensional array support green on int[][] and text[][] and shipped. numeric[][] — running through byte-identical code — flattened a 2×2 matrix into a 1-D four-element array. Exit 0, no warning.

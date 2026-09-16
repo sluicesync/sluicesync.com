@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Online schema changes on PlanetScale with sluice
 
 > The expand→migrate→contract pattern as one gated command, the standalone resumable backfill with its verify gate, the deploy-ddl governed channel for safe-migrations branches, and the freshness gates that guard your production schema.

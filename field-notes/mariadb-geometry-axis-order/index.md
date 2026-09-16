@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MariaDB and MySQL 8 disagree on which coordinate comes first
 
 > Migrate a POINT in SRID 4326 from MariaDB to MySQL 8 and a naive ST_AsText diff shows the longitude and latitude swapped — POINT(-122.4194 37.7749) on the source reads POINT(37.7749 -122.4194) on the target. Nothing is corrupt. sluice copied the WKB faithfully and re-attached the SRID; the point is in the same place, and ST_Latitude/ST_Longitude match to the digit. The two engines just default to opposite axis orders when they render a geographic SRID as text. Compare the coordinates, not the string.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # One cancel, three different errors — database/sql's abort identity depends on where the cancel lands
 
 > Cancel a context mid-way through a database/sql loop and the error you get back is chosen by scheduling: 'sql: statement is closed' when the pool reaps the prepared statement out from under you, 'context canceled' when the exec observes it directly, or a driver-specific message on a Commit/BeginTx/Prepare. All three mean 'we were cancelled' — but errors.Is(err, context.Canceled), or a retry classifier, sees three different identities. Normalize at the single return boundary, not per call site.

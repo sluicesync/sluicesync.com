@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The binlog keeps your SQL comments — and our TRUNCATE parser didn't know
 
 > A leading -- comment on a TRUNCATE made our CDC reader miss the statement entirely. The source emptied; the target kept every row, forever, with no error and no lag.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your own next statement erases the warning
 
 > Under a relaxed sql_mode MySQL coerces 300 into a TINYINT as 127 and tells you exactly once — on the session diagnostics area, which the next statement clears. For a CDC applier whose position write shares the batch transaction, the statement that makes the batch durable is the statement that destroys the evidence.

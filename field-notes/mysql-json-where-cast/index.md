@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MySQL won't match a JSON column by bind parameter
 
 > WHERE json_col = ? matches zero rows in MySQL whether you bind the value as a string or as bytes — the server won't cast the parameter to JSON for the comparison. On a CDC UPDATE, replay-idempotency tolerance turns that zero-row match into silent divergence.

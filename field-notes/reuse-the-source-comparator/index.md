@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # You can't reimplement MySQL's =, so link its comparator in
 
 > A filtered change stream evaluates the same predicate in two places — pushed down to the source, and client-side per event — and they have to agree exactly or the stream silently leaks or drops rows. String equality is where they diverge, because MySQL's default collation is case- and accent-insensitive: 'EU' equals 'eu' equals 'Eu'. sluice first refused such filters rather than approximate them. The resolution wasn't a better approximation — it was to stop reimplementing the comparison and link in the source engine's own comparator, so the two evaluations are the same code by construction.

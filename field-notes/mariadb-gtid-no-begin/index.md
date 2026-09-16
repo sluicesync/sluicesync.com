@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # MariaDB has no BEGIN, and won't tell you if your position survived
 
 > Porting a MySQL binlog CDC reader to MariaDB surfaces two assumptions MySQL quietly baked in. A MariaDB transaction opens with a MariadbGTIDEvent and no BEGIN, so a pump that only handles MySQL's GTIDEvent never advances its position. And you cannot pre-check whether your resume position still exists: @@gtid_binlog_state is unchanged across PURGE BINARY LOGS, so a dead position looks live — the only honest signal is the stream itself throwing error 1236.

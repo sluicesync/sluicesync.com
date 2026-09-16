@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your UNIQUE constraint survived the migration; its semantics didn't
 
 > NULLS NOT DISTINCT, DEFERRABLE, and WITHOUT OVERLAPS all land on the target as a plain UNIQUE — including Postgres→Postgres. The constraint has the right name and the right columns, and quietly accepts rows the source would have rejected.

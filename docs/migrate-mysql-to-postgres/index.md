@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrate MySQL → Postgres
 
 > The flagship first migration: connect, preview the plan, copy the data, and verify it landed.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrate PlanetScale Postgres to Neki
 
 > Neki is PlanetScale's sharded Postgres. sluice reaches it with the ordinary postgres driver — no new engine, no flag — and this page is the procedure we measured end to end against live databases.

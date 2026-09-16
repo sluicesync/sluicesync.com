@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # You can't filter a parent table without orphaning its children
 
 > Row-level filtering — copy only the rows matching --where — reads like a per-table setting: give each table a predicate, keep the rows that match. But a relational schema couples those filters through its foreign keys. Filter a parent table down to a subset and the child rows you copied still point at parent rows the filter excluded, so the deferred ADD CONSTRAINT FOREIGN KEY fails with SQLSTATE 23503 on the target. A tool that filtered the parent quietly would hand you a database that looks complete and violates its own declared keys. sluice refuses loudly instead, names the constraint, and makes you choose how to reconcile.

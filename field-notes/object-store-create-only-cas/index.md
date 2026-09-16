@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Object stores can now say "that changed since you read it" — the portability layer can't ask
 
 > Every writer of a backup chain shared one read-modify-write JSON catalog with no arbitration — last Put wins, loser's update silently vanishes. The fix wants compare-and-swap on the object, and the major stores now have it — but the portable object-store surface exposes only create-if-absent. You can build a CAS out of create-only (since ground-truthed live on real S3, GCS, and Azure Blob — three stores that answer an occupied-key conditional write with three different status codes). You can also be honest about the millisecond window it can't close — and about the fact that the primitive that would close it exists upstream, one abstraction layer away.

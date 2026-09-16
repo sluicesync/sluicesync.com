@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Error text is data, error codes are contract
 
 > A retry classifier that text-scans the whole error string for transient wording (reparent, not serving, connection refused, disk full…) can be flipped by the data: server error messages routinely echo row values, key values, and table names. The worst observed chain: a duplicate-key failure on a table named reparent_history classified RETRIABLE, the byte-identical retry hit 1062 again, and a tolerate-on-retry path whose safety proof assumed a first-attempt 1062 stays terminal swallowed the whole batch — silently absent while the migration reported success.

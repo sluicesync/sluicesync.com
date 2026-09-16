@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # What changes when your Postgres is sharded
 
 > Sharding changes what your schema guarantees, and several of the changes are silent. Measured on a live PlanetScale Neki cluster.

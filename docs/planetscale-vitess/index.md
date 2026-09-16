@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # PlanetScale & Vitess
 
 > Migrate and continuously sync from PlanetScale-MySQL or any Vitess deployment through the VStream gRPC feed.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from AWS RDS MySQL with sluice
 
 > The detect-first binlog-retention advisory (what the WARN means and the one-line SQL remedy), 8.0-family parameter groups, the platform-blocked FTWRL, and the regional truststore bundle.

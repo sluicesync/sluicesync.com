@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The index that shares only a name
 
 > Idempotent index builds are detect-then-skip: if an index with the intended name already exists on the target, skip the build. But a name is not a definition — and index names live in a tiny convention-driven namespace (idx_email, uq_name). The sharpest cell is uniqueness: when the source's UNIQUE index name-matches a plain INDEX on the target, the existing definition silently decides which duplicate writes the target accepts or refuses. Every step exits green.

@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from Google Cloud SQL Postgres with sluice
 
 > The cloudsql.logical_decoding flag (restart included, about a minute), the self-service ALTER ROLE ... REPLICATION grant, default-plaintext TLS and the per-instance CA, and the validated migrate + CDC recipe.

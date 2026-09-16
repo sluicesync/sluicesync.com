@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Staged (wave) migration — a few tables at a time
 
 > Move your biggest or most self-contained tables first, cut them over, then bring the rest across in later waves.

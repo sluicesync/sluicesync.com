@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Your retry loop's blind spot is its own reconnect — and the errors there arrive with their causes stripped
 
 > Three multi-day soaks against real managed infrastructure each died on an error the retry machinery was built for but couldn't recognize. The machinery existed and worked; the gap was classification coverage, twice over: a gRPC transport drop reported under the one status code a careful policy refuses to blanket-retry, and a reconnect failure inside the retry loop itself, where the driver flattens 'the peer dropped your pooled connection' into bare text with the structured cause gone.

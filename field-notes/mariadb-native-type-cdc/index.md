@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # The type that migrates clean and corrupts under CDC
 
 > MariaDB's native uuid/inet6/inet4 round-trip perfectly under a bulk migrate, because the driver hands them back as formatted text. Turn on CDC and the same columns can corrupt: the binlog carries the raw storage bytes, not the text — bulk copy and the binlog are different transports with different representations. sluice met that first with a loud refusal, then decoded the bytes faithfully one release later — and the real byte layout was not the one the roadmap predicted, which is the richer lesson.

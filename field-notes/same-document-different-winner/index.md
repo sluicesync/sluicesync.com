@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Same document, different winner — SQLite reads the FIRST duplicate JSON key, Postgres jsonb keeps the LAST
 
 > RFC 8259 declines to define what a duplicate object key means, and two mainstream engines quietly picked opposite answers. So "this text column validated as JSON, promote it to jsonb" silently changes which value every future query reads — at exit 0, with the stored bytes looking fine in any spot check. The sharpest edge: the promotion's validator was SQLite's own json_valid, a validator that happily accepts exactly what the target type destroys.

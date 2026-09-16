@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # CSV has no NULL — and in a one-column file, the "blank line" you skip was a NULL row
 
 > RFC 4180 defines quoting, delimiters, and line endings, and says nothing about NULL. NULL-vs-empty is pure producer convention riding on the quoted/unquoted distinction — which Go's encoding/csv collapses. And at exactly one column wide, the universal skip-blank-lines convention is byte-indistinguishable from a legitimate record whose only field is empty.

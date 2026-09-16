@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Postgres NUMERIC stores NaN — and NaN sorts above Infinity
 
 > SQL comparison is three-valued, so mapping a NaN operand to UNKNOWN feels principled — but Postgres doesn't do that: for sorting and range comparisons it defines a total order in which NaN is greater than every other value. The surprise stacks twice more: NUMERIC, the exact type, also stores NaN (plus ±Infinity in unconstrained columns since PG 14), and NaN sorts above Infinity. A client evaluator that mapped non-finite values to UNKNOWN→drop destroyed changes the server had faithfully delivered.

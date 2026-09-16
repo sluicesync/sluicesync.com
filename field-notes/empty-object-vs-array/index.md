@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # {}: two characters, two types, one silent corruption
 
 > In Postgres, {} is an empty array literal. In JSON, it's an empty object. Funnel both through one value-preparation path and []byte("{}") is genuinely ambiguous — and for nine releases our MySQL writer resolved it the wrong way.

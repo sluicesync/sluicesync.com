@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrate PlanetScale MySQL to PlanetScale Postgres
 
 > PlanetScale now offers managed Postgres alongside its Vitess/MySQL product. Moving between them is a CROSS-ENGINE migration — MySQL to Postgres — so type translation applies; sluice does it zero-downtime or in one shot.

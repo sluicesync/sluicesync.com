@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from Azure Database for MySQL (Flexible Server) with sluice
 
 > The one required knob: binlog_row_image defaults to MINIMAL, under which binlog CDC silently loses UPDATEs (Bug 193) — set it FULL first. In exchange, Azure has the safest binlog retention of any managed MySQL probed (an honest 0 = never-expire default, no reaper), zero-setup public-CA TLS, and an -azure version fingerprint.

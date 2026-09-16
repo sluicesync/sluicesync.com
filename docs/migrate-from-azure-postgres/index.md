@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Migrating from Azure Database for PostgreSQL (Flexible Server) with sluice
 
 > The self-grantable REPLICATION attribute (ALTER ROLE ... WITH REPLICATION works as the admin user), the best TLS story in the series (verify-full with zero setup against public roots), and the wal_level flip that needs an explicit restart. The built-in PgBouncer is General-Purpose-tier-plus only.

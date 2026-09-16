@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Two MySQL replication wire formats disagree about padding
 
 > MySQL right-pads a fixed BINARY(N) column to exactly N bytes, and a SELECT returns all N. The classic binlog's ROW image strips the trailing 0x00 padding, so BINARY(8) holding 0xDEAD000000000000 traveled the CDC wire as 2 bytes — snapshot 8 bytes, every later change 2, at exit 0. Vitess's VStream doesn't strip: full width on both its COPY and CDC legs, verified on a real cluster. The same tool needed opposite handling on its two MySQL replication lanes.

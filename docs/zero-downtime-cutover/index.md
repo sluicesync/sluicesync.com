@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # Zero-downtime migration with continuous sync
 
 > Cold-start the data, let CDC catch up while the app keeps writing, then cut over in a brief, controlled window.

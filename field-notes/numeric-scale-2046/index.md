@@ -1,3 +1,4 @@
+<!-- GENERATED FILE — DO NOT EDIT. Written by build.mjs; edit the page source there and re-run `node build.mjs`. -->
 # information_schema reports a numeric scale of 2046
 
 > Ask information_schema.columns for the scale of a numeric(5,-2) column and it answers 2046. The real scale is -2. The standards-blessed, portable way to read numeric precision and scale is quietly wrong for every negative-scale column — because the catalog view forgot to sign-extend a field the rest of Postgres sign-extends.
