@@ -40,9 +40,9 @@ Later, bring users into the same stream. On a Postgres source this works without
         --target-driver postgres --target "$DST" \
         --stream-id appdb --no-drain
 
-schema add-table creates the table on the target, bulk-copies its rows from a consistent snapshot, extends the source publication, and hands the table to the running CDC stream — the same gapless snapshot to CDC boundary a cold start gets. It prompts for typed confirmation (the table name) unless you pass --yes.
+schema add-table creates the table on the target, bulk-copies its rows from a consistent snapshot, extends the source publication, and hands the table to the running CDC stream — the same gapless snapshot to CDC boundary a cold start gets. At a terminal it prompts for typed confirmation (the table name) unless you pass --yes; on a non-terminal stdin it refuses SLUICE-E-CONFIRMATION-REQUIRED (exit 3) before touching anything.
 
---no-drain is Postgres-only in this release. On a MySQL-family source, use the drained workflow: sync stop --wait, then schema add-table, then sync start again. Re-running sync start with the same --stream-id warm-resumes from the persisted position — it does not re-snapshot.
+--no-drain has two live paths. A Postgres source (publication-add, ADR-0030) with any target, and a MySQL-family binlog source writing to a MySQL-family target (streamer filter-flip via sluice_cdc_state.live_added_tables, ADR-0034). Any other pair — MySQL → Postgres, and every VStream (PlanetScale / Vitess) source — refuses loudly and names the drained workflow: sync stop --wait, then schema add-table, then sync start again. Re-running sync start with the same --stream-id warm-resumes from the persisted position — it does not re-snapshot. The PG path is strict zero-loss since v0.32.0 (ADR-0036); the MySQL filter-flip path keeps ADR-0034's best-effort caveat for writes landing during the streamer's poll lag, so use the drained flow there when you need strict zero-loss.
 
 One table per invocation; repeat it per table or script the loop. On a Postgres source this is the mechanism that grows scope safely — it extends the publication additively, so it can't disturb tables already in scope.
 

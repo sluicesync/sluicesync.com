@@ -32,6 +32,10 @@ Flag · What it controls ·
 
 On sync start, --table-parallelism / --bulk-parallelism are PG-source-only — they're inert on MySQL / VStream sources. For a MySQL or Vitess/PlanetScale source's cold-copy concurrency, use the source-DSN knobs copy_table_parallelism (native MySQL) / vstream_copy_table_parallelism (VStream) for read concurrency, and --copy-fanout-degree for write fan-out.
 
+A tuning flag the run cannot use is named, not dropped (INERT-FLAG). Many of the tuning flags below govern one engine family and say so — "PG source only", "inert on MySQL/VStream sources", "MySQL/PlanetScale/Vitess target only". Passing one on a run whose engines never read it used to be accepted silently: the flag parsed, nothing consumed it, and the operator who set --bulk-parallelism=8 to speed up a Vitess cold copy got a serial copy and no signal. Since ADR-0118 every such case logs one WARN carrying the grep-stable INERT-FLAG marker, naming the flag, the command, the engine it is inert on and why &mdash; with the knob that applies instead where one exists. Nothing is refused; the run proceeds exactly as it would have.
+
+Destructive confirmation and --yes: no command ever blocks on a prompt when a machine drives it. A destructive command asks for confirmation only when stdin is a real terminal and --yes (-y) is absent. On a pipe, an EOF, a CI runner or an agent — any non-terminal stdin — it refuses with SLUICE-E-CONFIRMATION-REQUIRED (exit 3) before the prompt is printed and before either database is touched, naming --yes as the remedy. The prompting sites are --reset-target-data (on migrate, sync start and sync from-backup run), schema add-table and trigger teardown. slot drop and sync decommission never prompt at all — they refuse without --yes even at a terminal (sync decommission --dry-run is exempt; it touches nothing). At a terminal, declining the prompt is a non-zero exit (1), never a silent exit 0.
+
 ## engines
 
 ### sluice engines
@@ -126,7 +130,7 @@ Flag · Purpose ·
 
 --table-parallelism · Tables copied concurrently (0 = auto: 4, 1 = off). Multiplies with --bulk-parallelism; the product is bounded by the target connection budget. ·
 
---max-target-connections · Connection budget on the target the parallelism product must fit inside. ·
+--max-target-connections · Connection budget on the target the parallelism product must fit inside. Postgres and MySQL-family targets measure their own budget — MySQL has implemented the connection-budget probe (ProbeTargetConnectionBudget, ADR-0116) since v0.100.0, so the effective bound is the target's measured budget clamped by this flag, and a failed probe degrades rather than refusing. The flag is inert only on SQLite/D1 and the trigger-CDC targets, where passing it logs the INERT-FLAG WARN naming the flag and the engine. ·
 
 --index-build-parallelism · Postgres-only: deferred indexes built concurrently after the bulk copy. ·
 
@@ -150,7 +154,7 @@ Flag · Purpose ·
 
 --allow-cross-shard-merge · Opt out of the cross-shard-collision preflight (Bug 152). Off by default the guard is active: a multi-shard Vitess/PlanetScale source without --inject-shard-column refuses to merge into a single PK/UNIQUE target. Pass this only when the key is globally unique across shards. ·
 
---reset-target-data · Destructive recovery: drop source-schema tables on the target, then cold-start. Prompts (type reset) unless --yes. Mutually exclusive with --resume. ·
+--reset-target-data · Destructive recovery: drop source-schema tables on the target, then cold-start. At a terminal it prompts for a typed reset unless --yes; on a non-terminal stdin it refuses SLUICE-E-CONFIRMATION-REQUIRED (exit 3) before touching either database — see confirmation and --yes. Mutually exclusive with --resume. ·
 
 --source-tls-ca / --target-tls-ca · Path to a PEM CA certificate for CA-pinned verify-ca TLS to a MySQL source / target (ADR-0158): trust this CA, verify the server certificate chains to it, skip the hostname check — the strongest mode that works against MySQL's SAN-less auto-generated certs. On the source it covers both the data connection and the binlog/CDC stream. Refused if the DSN already sets tls=; refused on non-MySQL endpoints (Postgres uses sslrootcert=/path/ca.pem in the DSN instead). Also accepted by sync start, verify, backup, and restore (target side). ·
 
@@ -223,9 +227,9 @@ Flag · Purpose ·
 
 --no-auto-tune · Disable the AIMD controller. --apply-batch-size=N then becomes a strictly static row cap (floor stays 1) instead of an adaptive ceiling. For workloads where you've hand-tuned the batch size and want no auto-adaptation. ·
 
---apply-concurrency · CDC apply lane count W (ADR-0104/0105/0106; engine-general — MySQL and Postgres). The merged change stream is fanned across W in-order lanes by primary-key hash (same key → same lane → applied in source order, so dependent INSERT→UPDATE→DELETE never reorder), each lane committing concurrently on its own connection with its own AIMD batch controller. 0 (default, unset) = auto:N — the new fast-by-default adaptive concurrent path: Postgres min(4, slot-budget), MySQL/PlanetScale a fixed 4. 1 = explicit serial opt-out (byte-identical to the pre-fast-by-default behaviour). W>1 honored verbatim. Exactly-once for keyed tables (the position advances only to a boundary durable across all lanes). An in-lane PlanetScale tx-killer (MySQL) or serialization/deadlock (Postgres) is recovered in-lane — split-and-retried idempotently, no stream restart. ·
+--apply-concurrency · CDC apply lane count W (ADR-0104/0105/0106; engine-general — MySQL and Postgres). The merged change stream is fanned across W in-order lanes by primary-key hash (same key → same lane → applied in source order, so dependent INSERT→UPDATE→DELETE never reorder), each lane committing concurrently on its own connection with its own AIMD batch controller. 0 (default, unset) = auto:N — the new fast-by-default adaptive concurrent path: min(4, budget) on both engine families, where budget comes from the same connection-slot probe --max-target-connections drives (MySQL has implemented that probe — ProbeTargetConnectionBudget, ADR-0116 — since v0.100.0; a failed probe degrades to serial apply rather than refusing). 1 = explicit serial opt-out (byte-identical to the pre-fast-by-default behaviour). W>1 honored verbatim. Exactly-once for keyed tables (the position advances only to a boundary durable across all lanes). An in-lane PlanetScale tx-killer (MySQL) or serialization/deadlock (Postgres) is recovered in-lane — split-and-retried idempotently, no stream restart. ·
 
---schema-changes · forward (default, ADR-0091) auto-applies unambiguous source DDL — ADD/DROP/ALTER COLUMN, CREATE/DROP INDEX, ADD/DROP/MODIFY CHECK — on the target so the sync stays online through schema evolution (shape support; whether a given shape actually arrives depends on the source engine's CDC surface — see the per-source matrix in the schema-changes guide). refuse restores the conservative pre-v0.92 behavior: any source DDL surfaces loudly with the drained-model recovery hint. RENAME COLUMN and a computed/volatile DEFAULT on ADD COLUMN always refuse loudly. See the warn box below. ·
+--schema-changes · forward (default, ADR-0091) applies every unambiguous source schema change on the target — ADD/DROP COLUMN, ALTER COLUMN TYPE, and (MySQL source) ALTER NULLABILITY — logging each applied DDL at INFO, so the sync stays online through schema evolution. CREATE/DROP INDEX and ADD/DROP/MODIFY CHECK reach the target on no source: the MySQL reader's boundary projection carries neither and pgoutput carries neither (ADR-0091 §1d), so they never produce a forwardable boundary — add them on the target out-of-band. See the per-source matrix in the schema-changes guide. refuse restores the conservative pre-v0.92 behavior: any source DDL surfaces loudly with the drained-model recovery hint. RENAME COLUMN and multi-shape combos always refuse loudly, as does a computed/volatile DEFAULT on ADD COLUMN. See the warn box below. ·
 
 --copy-fanout-degree · VStream/CDC snapshot cold-start (PlanetScale-MySQL target) only, ADR-0097: WRITE-side fan-out — the incoming snapshot row stream is PK-hash-partitioned out to N concurrent batched-INSERT writers, each on its own connection, to beat the single round-trip-bound INSERT connection vtgate forces. 0 = auto: 4; 1 = serial. Bounded by the target connection budget. ·
 
@@ -293,7 +297,7 @@ Flag · Purpose ·
 
 --force-cold-start · Skip the pre-flight check that refuses to bulk-copy into a populated target. Use with caution — an INSERT into a non-empty table can collide on the primary key. Still warm-resumes from a persisted position (it only skips the check); ignored on the warm-resume path. ·
 
---reset-target-data · Destructive recovery: delete the CDC-state row, DROP every source-schema table on the target, then run a fresh cold-start. For a wedged-state recovery (e.g. slot-missing fall-through). Prompts (type reset) unless --yes. See ADR-0023. ·
+--reset-target-data · Destructive recovery: delete the CDC-state row, DROP every source-schema table on the target, then run a fresh cold-start. For a wedged-state recovery (e.g. slot-missing fall-through). At a terminal it prompts for a typed reset unless --yes; on a non-terminal stdin it refuses SLUICE-E-CONFIRMATION-REQUIRED (exit 3) before touching either database — see confirmation and --yes. See ADR-0023. ·
 
 --restart-from-scratch · Force a fresh cold-start re-copy from the beginning, ignoring any persisted resume position (incl. a mid-COPY cursor) — without dropping the target (the idempotent copy absorbs the overlap). For a bad checkpoint. Differs from --force-cold-start (keeps the position) and --reset-target-data (drops tables). (v0.99.10) ·
 
@@ -335,7 +339,7 @@ Shared with migrate · The copy-phase flags documented under migrate apply to th
 
   Tables the target lacks: skip-and-count, never halt (v0.123.0). When the stream carries changes for a table the target doesn't have — a drifted publication scope, a table dropped on the target, a keyspace-wide stream whose target was migrated with --include-table — every engine's applier skips those events instead of halting: for a skipped INSERT, UPDATE or DELETE the source still holds every row (recoverable with sluice schema add-table) — a skipped TRUNCATE is the one event for which it does not, and since v0.153.2 the WARN for one says so: the source has dropped those rows, so a target that holds the table under another spelling is now ahead of the source and needs the truncate applied by hand before anything is re-attached — while a halted stream lags every table and past binlog/slot retention loses the resume position itself. A skip is never log-only: one WARN per table, every event counted durably in the per-target sluice_cdc_skipped_tables control table (cumulative count + first/last skipped position tokens), rendered by sync status and the sync stop summary — and sync health exits 1 while any count is nonzero. Remedies: re-attach with schema add-table, make the exclusion explicit with a table filter — or, when the cause is revoked privileges rather than a missing table (the catalog hides tables the apply role cannot see), restore the grant and the skip clears on the next change, no re-snapshot.
 
-  The apply path is adaptive-concurrent by default (v0.99.100+, ADR-0106). With --apply-concurrency unset, CDC apply fans out across an auto-chosen number of PK-hash lanes (Postgres min(4, slot-budget); MySQL/PlanetScale 4) — exactly-once for keyed tables, with per-lane AIMD and in-lane tx-killer/deadlock recovery. To force the old strictly-serial apply, pass --apply-concurrency 1.
+  The apply path is adaptive-concurrent by default (v0.99.100+, ADR-0106). With --apply-concurrency unset, CDC apply fans out across an auto-chosen number of PK-hash lanes — min(4, budget) on Postgres and MySQL/PlanetScale alike, the budget coming from the same connection-slot probe --max-target-connections drives (MySQL has had that probe since v0.100.0, ADR-0116; the flag is inert only on SQLite/D1 and trigger-CDC targets, which say so with an INERT-FLAG WARN) — exactly-once for keyed tables, with per-lane AIMD and in-lane tx-killer/deadlock recovery. To force the old strictly-serial apply, pass --apply-concurrency 1.
 
   Resilient on managed / PlanetScale targets (no flags needed). sluice automatically rides PlanetScale storage-grow and primary-reparent serving transitions without operator intervention — across cold-copy writes, cold-copy source reads, the coordinated grow-gate, restore reconciliation, and (new in v0.99.118) the post-copy DDL phase (index / constraint / view build). Transient errors during a transition are bounded-retried and loud only on genuine exhaustion.
 
@@ -459,9 +463,9 @@ Flag · Purpose ·
 
 --target-schema · Postgres-only: must match the active stream's --target-schema, or be omitted to inherit the recorded value. ·
 
---no-drain · Phase 2 live add: run against an actively-streaming sync without first running sync stop --wait. PG-only in this release; MySQL sources still require the drained workflow. ·
+--no-drain · Phase 2 live add: run against an actively-streaming sync without first running sync stop --wait. Two live paths: a Postgres source (publication-add, ADR-0030), and a MySQL-family binlog source writing to a MySQL-family target (streamer filter-flip via sluice_cdc_state.live_added_tables, ADR-0034, v0.27.0). Any other pair — MySQL → Postgres, and every VStream source — refuses loudly and names the drained workflow. The PG path is strict zero-loss since v0.32.0 (ADR-0036); the MySQL filter-flip path keeps ADR-0034's best-effort caveat for writes landing during the streamer's poll lag — use the drained flow there for strict zero-loss. ·
 
---dry-run, -n / --yes, -y · Print the plan without modifying anything / skip the typed-confirmation prompt. ·
+--dry-run, -n / --yes, -y · Print the plan without modifying anything / skip the typed-confirmation prompt (the table name). The prompt fires only at a terminal; without --yes on a non-terminal stdin the command refuses SLUICE-E-CONFIRMATION-REQUIRED (exit 3) — see confirmation and --yes. ·
 
     # drain first, add the table, then resume
     sluice sync stop --stream-id app-prod --target-driver postgres --target ... --wait
@@ -487,7 +491,7 @@ Flag · Purpose ·
 
 --apply-concurrency · Key-hash concurrent-apply lane count W for incremental replay (the same machinery sync start uses). 0 (default) = auto:4; 1 = serial; W>1 honored. Matters for high-latency / cross-region targets — without it a large incremental replays through a single RTT-bound stream. Exactly-once preserved. ·
 
---reset-target-data · Cold-start recovery: drop target tables, run a chain restore (full + every incremental), then transition to live polling. Prompts (type reset) unless --yes. Mutually exclusive with --at-chain-id. ·
+--reset-target-data · Cold-start recovery: drop target tables, run a chain restore (full + every incremental), then transition to live polling. At a terminal it prompts for a typed reset unless --yes; on a non-terminal stdin it refuses SLUICE-E-CONFIRMATION-REQUIRED (exit 3) before touching either database — see confirmation and --yes. Mutually exclusive with --at-chain-id. ·
 
 --at-chain-id · Operator-asserted resume: treat the target as currently at chain ID <ID> (e.g. after a manual sluice restore), write a fresh state row, and tail forward. Mutually exclusive with --reset-target-data. ·
 
@@ -860,7 +864,7 @@ Flag · Purpose ·
 
 --keep-data · Retain sluice_change_log (and the meta table) for forensics. Default drops them — the engine's promise is to remove every trace. ·
 
---dry-run, -n / --yes, -y · Print the DDL and exit / skip the destructive-action confirmation prompt. ·
+--dry-run, -n / --yes, -y · Print the DDL and exit / skip the destructive-action confirmation prompt. The prompt fires only at a terminal; without --yes on a non-terminal stdin trigger teardown refuses SLUICE-E-CONFIRMATION-REQUIRED (exit 3) and tears nothing down — see confirmation and --yes. ·
 
     sluice trigger teardown --dsn 'postgres://user:pass@host:5432/app' --yes
 
@@ -949,9 +953,11 @@ Refresh PostgreSQL materialized views on the target (PG-only). Handy as a schedu
 Manage source-side Postgres replication slots — list sluice-created slots, or drop an orphaned one left by an interrupted stream.
 
     sluice slot list --source-driver postgres --source ...
-    sluice slot drop --source-driver postgres --source ... --slot-name sluice_slot --if-exists
+    sluice slot drop sluice_slot --source-driver postgres --source ... --yes --if-exists
 
-   slot drop --if-exists treats a missing slot as success rather than an error — the form to use in teardown scripts and re-runnable playbooks, where the slot may already be gone.
+   The slot name is a positional argument and is taken literally, exactly as the NAME column of slot list prints it — it is not the --slot-name suffix that sync and backup take (sluice prepends sluice_ to those, so --slot-name shard_a creates the slot sluice_shard_a, and sluice_shard_a is what belongs here). Drop never auto-prefixes; when the literal name is absent but its sluice_-prefixed sibling exists, the error says so and prints the exact command.
+
+   slot drop never prompts. Without --yes (-y) it refuses loudly with SLUICE-E-CONFIRMATION-REQUIRED (exit 3) — at a terminal as well as anywhere else. --if-exists treats a missing slot as success rather than an error — the form to use in teardown scripts and re-runnable playbooks, where the slot may already be gone. --force drops a slot that a CDC consumer is currently connected to.
 
 ## diagnose
 

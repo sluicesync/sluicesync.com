@@ -63,7 +63,7 @@ When the stream is finished, sluice trigger teardown drops every per-table trigg
         --source-driver postgres-trigger \
         --dsn 'postgres://user:pass@host:5432/app' --yes
 
---yes skips the destructive-action confirmation prompt (for scripted/CI use). Pass --keep-data to retain the change-log table for forensics instead of dropping it. Teardown is idempotent — re-running against a partially-uninstalled source proceeds cleanly via DROP ... IF EXISTS.
+--yes skips the destructive-action confirmation prompt, and is required for scripted/CI use: the prompt fires only when stdin is a real terminal, and without --yes anywhere else trigger teardown refuses with SLUICE-E-CONFIRMATION-REQUIRED (exit 3) having torn nothing down. Pass --keep-data to retain the change-log table for forensics instead of dropping it. Teardown is idempotent — re-running against a partially-uninstalled source proceeds cleanly via DROP ... IF EXISTS.
 
 ## Upgrading an existing install (one trigger setup re-run)
 

@@ -5,6 +5,10 @@
 
 A one-shot migrate from Postgres needs only SELECT and works anywhere, including locked-down managed tiers. Continuous sync is different: sluice's default Postgres CDC engine reads changes through a logical replication slot, which needs a handful of cluster settings and a role privilege. This guide is the practical checklist — set these before sync start, and if your host forbids them, jump to the slot-less trigger path at the end.
 
+Postgres schema reads need PostgreSQL 12 or newer. The schema reader references PG-12 catalog columns (pg_collation.collisdeterministic, pg_attribute.attgenerated) unconditionally, so migrate, sync, backup, schema preview and schema diff against a PG 10/11 source fail at the column read with SQLSTATE 42703 rather than degrading. The CDC lane's own floor (pgoutput, PG 10) is lower and does not help — nothing runs before the schema read. cutover carries the same 12–18 floor for the same reason.
+
+An identity column with no backing sequence is refused at schema read. A Postgres GENERATED … AS IDENTITY column whose identity-owned sequence is absent from the catalog refuses loudly, naming the shape and --exclude-table as the remedy — rather than carrying zero-valued options that would render START WITH 0 on the target. A partition child of an identity-bearing partitioned table is not this shape: on PG 17+ information_schema reports the child's column as identity while the only identity-owned sequence belongs to the root, and sluice resolves the child's identity through its partition root exactly as Postgres does.
+
 ## Required GUCs
 
 Logical replication is gated by a small set of server parameters. Check them as a superuser on the source:
@@ -55,9 +59,11 @@ List and drop slots from the CLI without dropping to psql:
     # List every slot on the source (columns mirror pg_replication_slots)
     sluice slot list --source-driver postgres --source 'postgres://user:pass@host:5432/app'
 
-    # Drop a named slot (prompts for confirmation; --yes skips it,
-    # --force drops an active slot, --if-exists treats a missing slot as success)
-    sluice slot drop sluice_slot --source-driver postgres --source 'postgres://user:pass@host:5432/app'
+    # Drop a named slot. It NEVER prompts: without --yes it refuses with
+    # SLUICE-E-CONFIRMATION-REQUIRED (exit 3), at a terminal as well as anywhere else.
+    # The name is positional and LITERAL (--force drops an active slot,
+    # --if-exists treats a missing slot as success)
+    sluice slot drop sluice_slot --yes --source-driver postgres --source 'postgres://user:pass@host:5432/app'
 
 When you start a stream and setup fails partway (publication permissions, START_REPLICATION rejection, cancellation), the freshly-created slot is auto-dropped before the error returns — so failed cold-start attempts don't leave sluice_slot-named slots behind. Auto-cleanup deliberately skips a slot that pre-existed the call (it may carry someone else's progress) and a slot whose pump already emitted positioned changes (that's user data); for those, sluice slot drop is the explicit path.
 
@@ -137,7 +143,7 @@ When the host forbids logical replication — Heroku Postgres, RDS without the r
         --target-driver postgres         --target 'postgres://user:pass@target:5432/app?sslmode=require' \
         --stream-id app
 
-3. Tear down cleanly when the stream is finished — this drops every per-table trigger and (by default) the sluice_change_log table, leaving zero residue. Pass --keep-data to retain the change-log for forensics, or --yes to skip the confirmation prompt:
+3. Tear down cleanly when the stream is finished — this drops every per-table trigger and (by default) the sluice_change_log table, leaving zero residue. Pass --keep-data to retain the change-log for forensics. --yes skips the confirmation prompt, and is required anywhere stdin is not a terminal &mdash; a script, a CI job or an agent gets SLUICE-E-CONFIRMATION-REQUIRED (exit 3) with nothing torn down:
 
     sluice trigger teardown \
         --source-driver postgres-trigger \

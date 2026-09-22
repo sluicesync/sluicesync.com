@@ -11,7 +11,7 @@ A single tristate flag on sync start (and per-sync in a sync run fleet spec) gov
 
 Mode · Behavior ·
 
---schema-changes=forward (default) · Apply every unambiguous source schema change on the target automatically, logging each applied DDL at INFO. The sync stays online through routine schema evolution. ·
+--schema-changes=forward (default) · Apply every unambiguous source schema change on the target automatically — ADD/DROP COLUMN, ALTER COLUMN TYPE, and, on a MySQL source, ALTER NULLABILITY — logging each applied DDL at INFO. The sync stays online through routine schema evolution. CREATE/DROP INDEX and ADD/DROP/MODIFY CHECK are not among them on any source: see the matrix below. ·
 
 --schema-changes=refuse · The conservative pre-v0.92 behavior: any source DDL surfaces loudly with a structured drift diff and the drained-model recovery hint. For operators who gate DDL through a separate change-management process. ·
 
@@ -33,9 +33,9 @@ ALTER NULLABILITY · forwards · refuses1 ·
 
 Column REORDER · no-op2 · no-op2 ·
 
-CREATE / DROP INDEX · refuses3 · never signaled on the wire — cannot forward; mirror manually1 ·
+CREATE / DROP INDEX · no boundary — never reaches the target; mirror manually3 · never signaled on the wire — cannot forward; mirror manually1 ·
 
-ADD / DROP / MODIFY CHECK · refuses3 · never signaled on the wire — cannot forward; mirror manually1 ·
+ADD / DROP / MODIFY CHECK · no boundary — never reaches the target; mirror manually3 · never signaled on the wire — cannot forward; mirror manually1 ·
 
 RENAME COLUMN · refuses (§rename) · forwards via attnum4 ·
 
@@ -43,7 +43,7 @@ RENAME TABLE / multi-shape combo · refuses · refuses ·
 
 1 pgoutput's relation message carries only column name + type + the replica-identity key flag — no nullability flag, no secondary-index or CHECK metadata. The wire never signals these on a Postgres source, so they produce no boundary to forward. A resulting incompatibility surfaces as a loud apply error on the next affected row, not silent corruption.
 2 sluice decodes rows by column name, never by position, so a pure reorder needs no DDL — it is a safe no-op.
-3 MySQL's CDC projection reads only {schema, name, columns, primary key} on a DDL boundary; it does not project secondary indexes or CHECK constraints. Forwarding them would need a new catalog projection (perf-only for indexes; cross-engine expression-translation-hazardous for checks), so both are deferred.
+3 MySQL's CDC projection reads only {schema, name, columns, primary key} on a DDL boundary; it does not project secondary indexes or CHECK constraints. An index-only or CHECK-only DDL therefore produces no boundary at all — it is not refused and nothing is logged about it; the change simply never reaches the target, and you add it there out-of-band. Forwarding them would need a new catalog projection (perf-only for indexes; cross-engine expression-translation-hazardous for checks), so both are deferred.
 4 A Postgres RENAME is proven via the stable pg_attribute.attnum — see RENAME COLUMN.
 5 With two carve-outs, both below: a cast to or from a session-normalised timestamp always refuses (session-normalised timestamp), and on a Postgres source a change your projected type cannot express refuses under both modes (projection-invisible changes).
 

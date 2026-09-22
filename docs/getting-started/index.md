@@ -173,7 +173,7 @@ When the source is a managed Postgres that blocks logical replication slots — 
         --target-driver postgres --target 'postgres://...target...' \
         --stream-id app
 
-3. Tear down cleanly when the stream is finished — this drops every per-table trigger and (by default) the sluice_change_log table, leaving the source with zero residue (the full set of objects setup installs is listed under Objects sluice creates). Pass --keep-data to retain the change-log for forensics, or --yes to skip the confirmation prompt:
+3. Tear down cleanly when the stream is finished — this drops every per-table trigger and (by default) the sluice_change_log table, leaving the source with zero residue (the full set of objects setup installs is listed under Objects sluice creates). Pass --keep-data to retain the change-log for forensics. --yes skips the confirmation prompt, and is required anywhere stdin is not a terminal &mdash; a script, a CI job or an agent gets SLUICE-E-CONFIRMATION-REQUIRED (exit 3) with nothing torn down:
 
     sluice trigger teardown \
         --dsn 'postgres://user:pass@host:5432/app?sslmode=require' --yes

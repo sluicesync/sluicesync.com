@@ -50,7 +50,7 @@ Migration state is checkpointed per table on the target. If a run dies partway (
         --target-driver postgres --target "$SLUICE_TARGET" \
         --resume
 
-To deliberately start clean over an already-populated target, --reset-target-data drops the source-schema tables on the target and re-copies (it prompts for a typed reset confirmation unless you add --yes). It's mutually exclusive with --resume.
+To deliberately start clean over an already-populated target, --reset-target-data drops the source-schema tables on the target and re-copies. At a terminal it prompts for a typed reset confirmation unless you add --yes; run from a script, a CI job or an agent — any non-terminal stdin — it refuses with SLUICE-E-CONFIRMATION-REQUIRED (exit 3) before touching either database, so --yes is required in automation. It's mutually exclusive with --resume.
 
 ## 5. Verify the copy
 

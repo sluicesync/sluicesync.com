@@ -38,7 +38,7 @@
 <div class="table-scroll"><table>
 <thead><tr><th>Mode</th><th>Behavior</th></tr></thead>
 <tbody>
-<tr><td><code>--schema-changes=forward</code> <em>(default)</em></td><td class="desc">Apply every unambiguous source schema change on the target automatically, logging each applied DDL at INFO. The sync stays online through routine schema evolution.</td></tr>
+<tr><td><code>--schema-changes=forward</code> <em>(default)</em></td><td class="desc">Apply every unambiguous source schema change on the target automatically — ADD/DROP COLUMN, ALTER COLUMN TYPE, and, on a MySQL source, ALTER NULLABILITY — logging each applied DDL at INFO. The sync stays online through routine schema evolution. <code>CREATE</code>/<code>DROP INDEX</code> and <code>ADD</code>/<code>DROP</code>/<code>MODIFY CHECK</code> are <em>not</em> among them on any source: see the matrix below.</td></tr>
 <tr><td><code>--schema-changes=refuse</code></td><td class="desc">The conservative pre-v0.92 behavior: any source DDL surfaces loudly with a structured drift diff and the drained-model recovery hint. For operators who gate DDL through a separate change-management process.</td></tr>
 </tbody>
 </table></div>
@@ -54,8 +54,8 @@
 <tr><td>ALTER COLUMN TYPE (same- or cross-engine)</td><td class="desc">forwards<sup>5</sup></td><td class="desc">forwards<sup>5</sup></td></tr>
 <tr><td>ALTER NULLABILITY</td><td class="desc">forwards</td><td class="desc">refuses<sup>1</sup></td></tr>
 <tr><td>Column REORDER</td><td class="desc">no-op<sup>2</sup></td><td class="desc">no-op<sup>2</sup></td></tr>
-<tr><td>CREATE / DROP INDEX</td><td class="desc">refuses<sup>3</sup></td><td class="desc">never signaled on the wire — cannot forward; mirror manually<sup>1</sup></td></tr>
-<tr><td>ADD / DROP / MODIFY CHECK</td><td class="desc">refuses<sup>3</sup></td><td class="desc">never signaled on the wire — cannot forward; mirror manually<sup>1</sup></td></tr>
+<tr><td>CREATE / DROP INDEX</td><td class="desc">no boundary — never reaches the target; mirror manually<sup>3</sup></td><td class="desc">never signaled on the wire — cannot forward; mirror manually<sup>1</sup></td></tr>
+<tr><td>ADD / DROP / MODIFY CHECK</td><td class="desc">no boundary — never reaches the target; mirror manually<sup>3</sup></td><td class="desc">never signaled on the wire — cannot forward; mirror manually<sup>1</sup></td></tr>
 <tr><td>RENAME COLUMN</td><td class="desc">refuses (§rename)</td><td class="desc">forwards via attnum<sup>4</sup></td></tr>
 <tr><td>RENAME TABLE / multi-shape combo</td><td class="desc">refuses</td><td class="desc">refuses</td></tr>
 </tbody>
@@ -63,7 +63,7 @@
 <p style="font-size:0.9em">
 <sup>1</sup> pgoutput's relation message carries only column name + type + the replica-identity key flag — no nullability flag, no secondary-index or CHECK metadata. The wire never signals these on a Postgres source, so they produce no boundary to forward. A resulting incompatibility surfaces as a loud apply error on the next affected row, not silent corruption.<br>
 <sup>2</sup> sluice decodes rows by column name, never by position, so a pure reorder needs no DDL — it is a safe no-op.<br>
-<sup>3</sup> MySQL's CDC projection reads only <code>{schema, name, columns, primary key}</code> on a DDL boundary; it does not project secondary indexes or CHECK constraints. Forwarding them would need a new catalog projection (perf-only for indexes; cross-engine expression-translation-hazardous for checks), so both are deferred.<br>
+<sup>3</sup> MySQL's CDC projection reads only <code>{schema, name, columns, primary key}</code> on a DDL boundary; it does not project secondary indexes or CHECK constraints. An index-only or CHECK-only DDL therefore produces <strong>no boundary at all</strong> — it is not refused and nothing is logged about it; the change simply never reaches the target, and you add it there out-of-band. Forwarding them would need a new catalog projection (perf-only for indexes; cross-engine expression-translation-hazardous for checks), so both are deferred.<br>
 <sup>4</sup> A Postgres RENAME is proven via the stable <code>pg_attribute.attnum</code> — see <a href="#rename">RENAME COLUMN</a>.<br>
 <sup>5</sup> With two carve-outs, both below: a cast <em>to or from</em> a session-normalised timestamp always refuses (<a href="#session-zone-cast">session-normalised timestamp</a>), and on a Postgres source a change your projected type cannot express refuses under both modes (<a href="#projection-invisible">projection-invisible changes</a>).
 </p>

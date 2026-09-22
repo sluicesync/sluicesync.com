@@ -62,17 +62,34 @@ The full sequence: start the stream → wait for fresh → freeze source writes 
 
 ## 6. Rolling back a cutover
 
-The safety net for a cutover is a reverse sync. Until you're confident in the new database, keep the old primary intact — do not drop or repurpose it. If something goes wrong after you flip traffic and you must fail back, you point the application at the old database again — but any writes the new database took while it was live need to travel back the other direction.
+sluice does not ship a one-button rollback. Until you're confident in the new database, keep the old primary intact — do not drop or repurpose it. If something goes wrong after you flip traffic and you must fail back, you point the application at a database that is still current — and there are two procedural ways to have one.
 
-You can't naively cold-start a reverse sync (new → old) to carry them: the old database still holds all its original rows, so it isn't empty, and a fresh cold-start refuses loudly rather than bulk-copy into a populated target — SLUICE-E-COLDSTART-TARGET-NOT-EMPTY. That refusal is the guard working as designed; you don't want a full re-copy, you want just the delta. Two ways to be ready for it:
+### Option 1: a reverse re-copy into a separate, EMPTY standby, armed before the flip
 
-- Run the reverse stream from the start (recommended for true reversibility). Right after the forward cutover, start a second stream in the opposite direction with its own --stream-id, so the old database keeps tracking the new one continuously. Failing back is then just a traffic flip plus a cutover on the old side to re-prime its sequences — no re-copy, no refusal.
+A reverse-direction sluice instance (new target → a standby) can keep a rollback database continuously fresh after the flip. It cannot be pointed at the old source as it stands. sluice's migrate is built for a target it fills: against a database whose tables already hold the data it refuses — SLUICE-E-COLDSTART-TARGET-NOT-EMPTY — and both ways past that refusal defeat the purpose. --force-cold-start skips the probe and the copy then collides with every row already present, while --reset-target-data drops every table on the old source and re-copies it from the new target — a full bulk rewrite of the one database you are keeping so you can fall back to it, during which no rollback path exists at all. There is no supported way today to start a reverse CDC stream from the drain point without a copy; that design is ADR-0188, proposed and not built.
 
-- Reconcile the delta manually. If you didn't keep a reverse stream running, resync the window of new-database writes back to the old database the other direction and verify before re-flipping traffic — rather than forcing a cold-start into the non-empty old database.
+So the supported shape is a reverse re-copy into a separate, empty standby, and it is only a rollback path once that copy has completed and the reverse stream has caught up — arm it well before the flip:
 
-Why the old primary must survive the window. The reverse path only exists while the old database is still there and consistent. Dropping it immediately after cutover throws away your rollback option; keep it until the new database has proven itself, then decommission.
+    # Before the traffic flip, on a second machine / process, into an EMPTY standby:
+    sluice migrate --config reverse-direction.yaml   # cold-start the standby from new-target
+    sluice sync start --config reverse-direction.yaml
+    # Wait for the copy to finish and the stream to report zero lag (sync health) BEFORE flipping traffic.
 
-Schema changes during a long-running sync. By default a stream forwards unambiguous source DDL (ADD/DROP/ALTER COLUMN, CREATE/DROP INDEX, …) onto the target automatically so it stays online through schema evolution — including a destructive DROP COLUMN. To gate DDL through a separate change process, start with --schema-changes=refuse. See the warning box in the sync start reference.
+    # After the flip:
+    # - Forward (sluice-1): old-source -> new-target  (stopped and drained)
+    # - Reverse (sluice-2): new-target -> standby     (the rollback path; standby is hot)
+
+If something goes wrong post-flip (the target hits a bug, query plans regress, unexpected behavior surfaces), stop sluice-2, run sluice cutover in the reverse direction to prime the standby's sequences, and flip traffic to the standby. Once you commit to the new target, stop sluice-2 and decommission the standby. The forward stream must be stopped before the reverse starts, or a change echoes new-target → standby → new-target; sluice does not detect that loop.
+
+Cross-engine caveat. A reverse stream is a fresh translation of values the application now writes natively on the new engine. A value the old engine cannot hold (a Postgres jsonb, array or uuid written after a MySQL → Postgres cutover) is refused loudly by the reverse stream rather than coerced — which halts the rollback path exactly when it is needed. For a cross-engine cutover, option 2 is the honest rollback plan unless the application is known to stay inside both type systems.
+
+### Option 2: a periodic snapshot of the new target
+
+A coarser-grained rollback: take a pg_dump / mysqldump of the new target periodically post-flip. If a rollback is needed, restore the dump on the old source and switch traffic back. The window-of-loss is the time between the last dump and the rollback decision. Less load on both endpoints than option 1, but recovery is bulk-replay rather than incremental.
+
+Why the old primary must survive the window. Either rollback path only exists while the old database is still there and consistent. Dropping it immediately after cutover throws away your rollback option; keep it until the new database has proven itself, then decommission.
+
+Schema changes during a long-running sync. By default (--schema-changes=forward) a stream applies every unambiguous source schema change on the target — ADD/DROP COLUMN, ALTER COLUMN TYPE, and, on a MySQL source, ALTER NULLABILITY — so it stays online through routine schema evolution, including a destructive DROP COLUMN. CREATE/DROP INDEX and ADD/DROP/MODIFY CHECK reach the target on no source: the MySQL reader's boundary projection carries neither and pgoutput carries neither (ADR-0091 §1d), so they never produce a forwardable boundary — add them on the target out-of-band. To gate DDL through a separate change process, start with --schema-changes=refuse. See the warning box in the sync start reference.
 
 ---
 Canonical page: https://sluicesync.com/docs/zero-downtime-cutover/ · Full docs index: https://sluicesync.com/llms.txt
