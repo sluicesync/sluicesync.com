@@ -35,6 +35,16 @@ Two data-corruption classes are refused at load, loudly. Two Postgres-source syn
 
 Each sync's own retry (ADR-0093 re-snapshot, apply-retry backoff) is the inner loop; the supervisor's restart is the outer loop. A sync that drains cleanly (a sync stop or Ctrl-C) is left stopped; a sync that dies with the process still live is logged loudly, backed off, and restarted. The consecutive-failure counter resets once a sync has run longer than the healthy threshold, so a sync that ran for hours before dying carries no restart debt.
 
+The one failure that is not restarted: UNFORWARDED-SCHEMA-CHANGE (v0.156.0+). A leg that stopped because its Postgres or MySQL/MariaDB binlog source took a constraint, row-level-security, policy or DEFAULT change the stream cannot carry (what that covers) is marked failed at once and logged at ERROR, naming the acknowledgement route; the other legs keep running. A restart could only refuse again — the refusal is recorded on the target — and this is the one refusal where a restart that somehow skipped the record would accept the change silently. Every other failure, other terminal errors included, is still restarted exactly as above. There is deliberately no syncs.yaml key for the acknowledgement, because standing config would pre-accept refusals. To bring the leg back:
+
+- Apply the same change to the target (the leg is already stopped).
+
+- Start that stream once outside the fleet with the leg's own source, target and flags: sluice sync start --stream-id <id> … --accept-unforwarded-schema-change=<fingerprint>, using the fingerprint the replayed refusal prints.
+
+- Stop it with sluice sync stop --stream-id <id> … --wait.
+
+- Restart the fleet process. On Linux and macOS a SIGHUP also works: a reload starts a failed leg that is still in syncs.yaml.
+
 ## Run the fleet
 
 Validate the config first with --dry-run (it checks required fields, stream-id and slot-name uniqueness, and retry bounds, then prints the resolved plan without starting anything), then run it:

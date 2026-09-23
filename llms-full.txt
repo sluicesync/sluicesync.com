@@ -470,7 +470,7 @@ Flag · Purpose ·
 
 --apply-concurrency · CDC apply lane count W (ADR-0104/0105/0106; engine-general — MySQL and Postgres). The merged change stream is fanned across W in-order lanes by primary-key hash (same key → same lane → applied in source order, so dependent INSERT→UPDATE→DELETE never reorder), each lane committing concurrently on its own connection with its own AIMD batch controller. 0 (default, unset) = auto:N — the new fast-by-default adaptive concurrent path: min(4, budget) on both engine families, where budget comes from the same connection-slot probe --max-target-connections drives (MySQL has implemented that probe — ProbeTargetConnectionBudget, ADR-0116 — since v0.100.0; a failed probe degrades to serial apply rather than refusing). 1 = explicit serial opt-out (byte-identical to the pre-fast-by-default behaviour). W>1 honored verbatim. Exactly-once for keyed tables (the position advances only to a boundary durable across all lanes). An in-lane PlanetScale tx-killer (MySQL) or serialization/deadlock (Postgres) is recovered in-lane — split-and-retried idempotently, no stream restart. ·
 
---schema-changes · forward (default, ADR-0091) applies every unambiguous source schema change on the target — ADD/DROP COLUMN, ALTER COLUMN TYPE, and (MySQL source) ALTER NULLABILITY — logging each applied DDL at INFO, so the sync stays online through schema evolution. CREATE/DROP INDEX and ADD/DROP/MODIFY CHECK reach the target on no source: the MySQL reader's boundary projection carries neither and pgoutput carries neither (ADR-0091 §1d), so they never produce a forwardable boundary — add them on the target out-of-band. See the per-source matrix in the schema-changes guide. refuse restores the conservative pre-v0.92 behavior: any source DDL surfaces loudly with the drained-model recovery hint. RENAME COLUMN and multi-shape combos always refuse loudly, as does a computed/volatile DEFAULT on ADD COLUMN. See the warn box below. ·
+--schema-changes · forward (default, ADR-0091) applies every unambiguous source schema change on the target — ADD/DROP COLUMN, ALTER COLUMN TYPE, and (MySQL source) ALTER NULLABILITY — logging each applied DDL at INFO, so the sync stays online through schema evolution. CREATE/DROP INDEX and ADD/DROP/MODIFY CHECK reach the target on no source: the MySQL reader's boundary projection carries neither and pgoutput carries neither (ADR-0091 §1d), so they never produce a forwardable boundary. See the per-source matrix in the schema-changes guide. Since v0.156.0, on Postgres and MySQL/MariaDB binlog sources, the non-index part of that gap stops the stream instead of passing silently: a constraint (primary key, UNIQUE, foreign key, CHECK, Postgres EXCLUDE), row-level-security or policy, Postgres NOT NULL, or DEFAULT/identity/generation change ends the stream with UNFORWARDED-SCHEMA-CHANGE at the next write to that table, and the refusal is recorded so every restart refuses again until you apply the change to the target and acknowledge it with --accept-unforwarded-schema-change. Index-only DDL is still neither forwarded nor detected — add indexes on the target out-of-band. PlanetScale/Vitess (VStream) sources are not covered: the whole gap is still silent there. refuse restores the conservative pre-v0.92 behavior: any source DDL surfaces loudly with the drained-model recovery hint. RENAME COLUMN and multi-shape combos always refuse loudly, as does a computed/volatile DEFAULT on ADD COLUMN. See the warn box below. ·
 
 --copy-fanout-degree · VStream/CDC snapshot cold-start (PlanetScale-MySQL target) only, ADR-0097: WRITE-side fan-out — the incoming snapshot row stream is PK-hash-partitioned out to N concurrent batched-INSERT writers, each on its own connection, to beat the single round-trip-bound INSERT connection vtgate forces. 0 = auto: 4; 1 = serial. Bounded by the target connection budget. ·
 
@@ -563,6 +563,8 @@ Flag · Purpose ·
 --shard-coordination-lease-duration / --shard-coordination-renew-deadline / --shard-coordination-retry-period · Timings for that DDL-coordination lease (ADR-0054), consulted only when --inject-shard-column is set and --no-coordinate-live-ddl is absent. The holder writes lease_expires_at = now + lease-duration every retry-period; a stalled holder loses the lease after the duration and the takeover stream probes-and-records. Defaults 30s / 20s / 10s, and the ordering retry-period < renew-deadline < lease-duration is enforced. Raise the lease to something like 300s if you run ALTERs on tables large enough that the apply window exceeds 30s. ·
 
 --backfill-added-column · After a forwarded ADD COLUMN lands, populate the already-shipped target rows with real source values instead of leaving them on the column's DEFAULT (NULL if none) — ADR-0058. The streamer issues a bounded PK-cursor SELECT (pk, new_col) against the source and emits synthetic UPDATE events. Off by default and knowingly opt-in: the cost is proportional to the table's source row count. Consulted whenever schema-change forwarding is active — i.e. under the default --schema-changes=forward; --schema-changes=refuse makes it moot, as do --inject-shard-column (whose own boundary router handles the shape) and multi-database streams (which don't forward DDL at all). ·
+
+--accept-unforwarded-schema-change · =<FINGERPRINT> — one-shot acknowledgement of a recorded UNFORWARDED-SCHEMA-CHANGE refusal (v0.156.0; Postgres and MySQL/MariaDB binlog sources). When the source takes a constraint, row-level-security, policy, NOT NULL (Postgres) or DEFAULT/identity change the change stream cannot carry, the stream stops, the refusal is recorded on the stream's sluice_cdc_state row, and every later start refuses again, printing fingerprint <12 hex>. Apply the same change to the target first, then start once with this flag set to that fingerprint: it clears that one record and takes a fresh baseline, so passing it without the target change accepts the difference permanently. Only a matching fingerprint clears the record — a different one is refused, an empty value keeps refusing, and once used it is spent for the rest of the process — so a copy left in a service definition cannot pre-accept a later refusal. Keep it out of ExecStart anyway. Deliberately not a syncs.yaml key: a fleet leg is acknowledged by one manual sync start outside the fleet (procedure). ·
 
 --auto-prune-change-log / --auto-prune-interval / --auto-prune-keep · Trigger-CDC sources only (postgres-trigger / sqlite-trigger / d1-trigger) — a no-op on every other engine, which has no change log. Reap consumed rows from the source's sluice_change_log in-stream so it can't grow unbounded on a continuous sync (ADR-0137): equivalent to cronning sluice trigger prune, without the cron. Off by default — auto-DELETEing rows on the source is an explicit opt-in. Only rows below the target's persisted CDC frontier (minus --auto-prune-keep, default 1000) are removed, so warm-resume is never starved, and a prune failure is logged and swallowed. Multi-stream safe: every trigger-CDC sync records its applied frontier in the source's sluice_change_log_consumers table and the cut is taken at the minimum across registered consumers. Two caveats before enabling it on a shared source — a change log predating that registry is refused (nothing is pruned) until you re-run sluice trigger setup to migrate it, and a peer sync on an older sluice never registers at all, so upgrade every sync on the source first. Cadence via --auto-prune-interval (default 5m). ·
 
@@ -831,6 +833,8 @@ Flag · Purpose ·
 
 --retry-attempts / --retry-backoff-base / --retry-backoff-cap · backup stream run's retry budget for consecutive retriable rollover failures: how many it absorbs before giving up (default 8; 1 disables retry), the base interval (default 100ms, doubling), and the per-interval ceiling (default 30s). Mirrors the sync stream's --apply-retry-* knobs, whose spellings are accepted here as aliases. ·
 
+--accept-unforwarded-schema-change · On backup stream run: =<FINGERPRINT> — one-shot acknowledgement of a recorded UNFORWARDED-SCHEMA-CHANGE refusal (v0.156.0; Postgres and MySQL/MariaDB binlog sources). A source constraint, row-level-security, policy or DEFAULT change the change stream cannot carry stops the stream and is recorded in the destination's stream_state.json (key unforwarded_schema_change_refusal); every later run refuses again, printing the fingerprint to pass. Take a new full backup first — a chain restored from the old full would lack the change — then run once with this flag set to that fingerprint. It clears that one record and takes a fresh baseline, so passing it without the new full leaves the chain without the change permanently. A fingerprint of a different refusal is refused. ·
+
 --keep-incrementals / --keep-duration · backup prune's retention policy — keep at least the N most-recent incrementals, or keep those younger than a duration (168h = 7d, 720h = 30d). Mutually exclusive. Both round up to a segment boundary, because prune retires only whole segments: you always keep more than you asked for, never fewer. ·
 
 --smart-compaction / --smart-compaction-off / --compaction-pk-strategy · backup compact's event-level collapse (ADR-0064): within each merge group's change-chunks, INSERT+UPDATE becomes an INSERT, UPDATE+UPDATE an UPDATE, INSERT+DELETE nothing, UPDATE+DELETE a DELETE. Off by default — opt in when an update-heavy workload makes the CPU cost worth the smaller chain; --smart-compaction-off states that default explicitly, as an audit trail or as the recovery flag after a refuse-loudly on a corrupt PK. The two are mutually exclusive. --compaction-pk-strategy picks the row identity the collapse keys on and has no effect without --smart-compaction: pk (default) uses the declared primary key, replica-identity is a PG-facing alias for pk today, and none disables per-row collapse (a debugging escape hatch). ·
@@ -1064,6 +1068,8 @@ Flag · Purpose ·
     sluice control-tables ddl                       # planetscale dialect (default)
     sluice control-tables ddl --engine mysql        # same dialect, spelled for vanilla MySQL
 
+  Upgrading to v0.156.0 on a safe-migrations branch: ship one ALTER. v0.156.0 adds sluice_cdc_state.unforwarded_refusal, which records an UNFORWARDED-SCHEMA-CHANGE refusal so a restart cannot silently accept it. A fresh control-tables ddl already includes it, but an existing table cannot be altered directly on safe migrations, and every sync start refuses to stream until the column exists. Before restarting streams, run sluice deploy-ddl … --ddl 'ALTER TABLE `sluice_cdc_state` ADD COLUMN `unforwarded_refusal` TEXT NULL'.
+
 ## trigger setup / teardown
 
 ### sluice trigger setup
@@ -1278,7 +1284,7 @@ Exit code · Meaning ·
 
 2 · Config error: the --config file could not be loaded or parsed. (The read-side commands verify/diff/sync-health/metrics-watch have always used 2 more broadly for "the check could not run at all". For verify this includes a run that completed but could not verify one or more tables — a per-table count/sample error, or a source table missing on the target: an unverified table is not a pass, so those runs exit 2 rather than a misleading 0. Tables deliberately excluded via --include-table/--exclude-table or config filters stay exit-neutral.) ·
 
-3 · Named refusal: sluice declined to proceed (or to silently alter a value) and named the remedy — the refusal-class codes below. Retrying without acting on the hint fails identically. ·
+3 · Named refusal: sluice declined to proceed (or to silently alter a value) and named the remedy — the refusal-class codes below. Retrying without acting on the hint fails identically. UNFORWARDED-SCHEMA-CHANGE behaves the same way on restart — the refusal is recorded, and every later start refuses again until you start once with --accept-unforwarded-schema-change=<fingerprint>, using the fingerprint the replayed refusal prints — but it carries no error code yet, so it exits 1, not 3: alert on the marker in the log, not on the exit status. Do not put the flag in a unit's ExecStart. It only accepts the one refusal whose fingerprint it names, so it would not pre-accept a later one, but it belongs on a single manual start after the change has been applied to the target. ·
 
 80 · Usage error: kong (the CLI parser) exits 80 on unknown flags/commands and missing required arguments, before any sluice code runs. sluice adopts this rather than remapping it. ·
 
@@ -1791,7 +1797,7 @@ These hold the state that makes migrate --resume and sync start warm-resume work
 
 Object · Created by · When & why · Cleaned up by ·
 
-sluice_cdc_state · sync start · At CDC stream open. One row per --stream-id: the durable CDC source position, slot name, source-DSN fingerprint, and stop flag — the warm-resume frontier. · --reset-target-data (clears the row); otherwise persists. ·
+sluice_cdc_state · sync start · At CDC stream open. One row per --stream-id: the durable CDC source position, slot name, source-DSN fingerprint, and stop flag — the warm-resume frontier. Since v0.156.0 also a recorded UNFORWARDED-SCHEMA-CHANGE refusal (column unforwarded_refusal, TEXT NULL), which every later start replays until --accept-unforwarded-schema-change clears it. The column is added on the next start after upgrading; a PlanetScale safe-migrations target or a Postgres role that does not own the table must add it by hand. · --reset-target-data (clears the row); otherwise persists. ·
 
 sluice_migrate_state · migrate · At bulk-copy start. One header row per --migration-id for resumable bulk migration (ADR-0082). · --reset-target-data; otherwise persists. ·
 
@@ -2214,7 +2220,7 @@ A coarser-grained rollback: take a pg_dump / mysqldump of the new target periodi
 
 Why the old primary must survive the window. Either rollback path only exists while the old database is still there and consistent. Dropping it immediately after cutover throws away your rollback option; keep it until the new database has proven itself, then decommission.
 
-Schema changes during a long-running sync. By default (--schema-changes=forward) a stream applies every unambiguous source schema change on the target — ADD/DROP COLUMN, ALTER COLUMN TYPE, and, on a MySQL source, ALTER NULLABILITY — so it stays online through routine schema evolution, including a destructive DROP COLUMN. CREATE/DROP INDEX and ADD/DROP/MODIFY CHECK reach the target on no source: the MySQL reader's boundary projection carries neither and pgoutput carries neither (ADR-0091 §1d), so they never produce a forwardable boundary — add them on the target out-of-band. To gate DDL through a separate change process, start with --schema-changes=refuse. See the warning box in the sync start reference.
+Schema changes during a long-running sync. By default (--schema-changes=forward) a stream applies every unambiguous source schema change on the target — ADD/DROP COLUMN, ALTER COLUMN TYPE, and, on a MySQL source, ALTER NULLABILITY — so it stays online through routine schema evolution, including a destructive DROP COLUMN. CREATE/DROP INDEX and ADD/DROP/MODIFY CHECK reach the target on no source: the MySQL reader's boundary projection carries neither and pgoutput carries neither (ADR-0091 §1d). Indexes are a silent gap — add them on the target out-of-band. Since v0.156.0, on Postgres and MySQL/MariaDB binlog sources, a CHECK change — like any constraint, row-level-security, policy, DEFAULT or (Postgres) NOT NULL change — instead stops the stream with UNFORWARDED-SCHEMA-CHANGE at the next write to that table and stays stopped until you apply it to the target and acknowledge it (recovery); plan such DDL for a drained window. PlanetScale/Vitess sources are not covered and still pass it silently. To gate all DDL through a separate change process, start with --schema-changes=refuse. See the warning box in the sync start reference.
 
 
 ===============================================================
@@ -3229,7 +3235,7 @@ A single tristate flag on sync start (and per-sync in a sync run fleet spec) gov
 
 Mode · Behavior ·
 
---schema-changes=forward (default) · Apply every unambiguous source schema change on the target automatically — ADD/DROP COLUMN, ALTER COLUMN TYPE, and, on a MySQL source, ALTER NULLABILITY — logging each applied DDL at INFO. The sync stays online through routine schema evolution. CREATE/DROP INDEX and ADD/DROP/MODIFY CHECK are not among them on any source: see the matrix below. ·
+--schema-changes=forward (default) · Apply every unambiguous source schema change on the target automatically — ADD/DROP COLUMN, ALTER COLUMN TYPE, and, on a MySQL source, ALTER NULLABILITY — logging each applied DDL at INFO. The sync stays online through routine schema evolution. CREATE/DROP INDEX and ADD/DROP/MODIFY CHECK are not among them on any source: see the matrix below. Nor are constraint, row-level-security, policy or DEFAULT changes — since v0.156.0 those stop the stream on Postgres and MySQL/MariaDB binlog sources. ·
 
 --schema-changes=refuse · The conservative pre-v0.92 behavior: any source DDL surfaces loudly with a structured drift diff and the drained-model recovery hint. For operators who gate DDL through a separate change-management process. ·
 
@@ -3239,7 +3245,7 @@ This is a behavior change on upgrade. A stream that previously refused on source
 
 Under forward, the intercept can emit any shape's DDL, but a change only reaches the target if the source's CDC stream actually carries its detail on the wire. Postgres logical replication (pgoutput) carries less than MySQL's information_schema re-read, so the honest matrix differs by source engine. This is the ground-truth table from ADR-0091 §1d — do not assume a shape forwards without checking it:
 
-Shape · MySQL source · Postgres source ·
+Shape · MySQL / MariaDB source · Postgres source ·
 
 ADD COLUMN · forwards · forwards ·
 
@@ -3247,23 +3253,30 @@ DROP COLUMN · forwards · forwards ·
 
 ALTER COLUMN TYPE (same- or cross-engine) · forwards5 · forwards5 ·
 
-ALTER NULLABILITY · forwards · refuses1 ·
+ALTER NULLABILITY · forwards · not forwarded — stops the stream (UNFORWARDED-SCHEMA-CHANGE)1,6 ·
 
 Column REORDER · no-op2 · no-op2 ·
 
-CREATE / DROP INDEX · no boundary — never reaches the target; mirror manually3 · never signaled on the wire — cannot forward; mirror manually1 ·
+CREATE / DROP plain (non-unique) INDEX · no boundary — never reaches the target and is not detected; mirror manually3 · never signaled on the wire — cannot forward and is not detected; mirror manually1 ·
 
-ADD / DROP / MODIFY CHECK · no boundary — never reaches the target; mirror manually3 · never signaled on the wire — cannot forward; mirror manually1 ·
+ADD / DROP / MODIFY CHECK · not forwarded — stops the stream (UNFORWARDED-SCHEMA-CHANGE)3,6 · not forwarded — stops the stream (UNFORWARDED-SCHEMA-CHANGE)1,6 ·
+
+PRIMARY KEY / UNIQUE / FOREIGN KEY (add, drop, change) · not forwarded — stops the stream6 (a UNIQUE index counts, including a prefix-length change) · not forwarded — stops the stream6 (constraints, EXCLUDE included; a bare CREATE UNIQUE INDEX with no constraint is a plain index here) ·
+
+DEFAULT / identity / generated change on an existing column · not forwarded — stops the stream6 (DEFAULT, EXTRA such as AUTO_INCREMENT / ON UPDATE, generation expression) · not forwarded — stops the stream6 (SET/DROP DEFAULT, identity, generated column) ·
+
+Row-level security / CREATE/ALTER/DROP POLICY · — · not forwarded — stops the stream6 ·
 
 RENAME COLUMN · refuses (§rename) · forwards via attnum4 ·
 
 RENAME TABLE / multi-shape combo · refuses · refuses ·
 
-1 pgoutput's relation message carries only column name + type + the replica-identity key flag — no nullability flag, no secondary-index or CHECK metadata. The wire never signals these on a Postgres source, so they produce no boundary to forward. A resulting incompatibility surfaces as a loud apply error on the next affected row, not silent corruption.
+1 pgoutput's relation message carries only column name + type + the replica-identity key flag — no nullability flag, no secondary-index or CHECK metadata. The wire never signals these on a Postgres source, so they produce no boundary to forward. Nullability and CHECK changes are caught by the v0.156.0 door instead (6); a plain index change is not caught by anything.
 2 sluice decodes rows by column name, never by position, so a pure reorder needs no DDL — it is a safe no-op.
-3 MySQL's CDC projection reads only {schema, name, columns, primary key} on a DDL boundary; it does not project secondary indexes or CHECK constraints. An index-only or CHECK-only DDL therefore produces no boundary at all — it is not refused and nothing is logged about it; the change simply never reaches the target, and you add it there out-of-band. Forwarding them would need a new catalog projection (perf-only for indexes; cross-engine expression-translation-hazardous for checks), so both are deferred.
+3 MySQL's CDC projection reads only {schema, name, columns, primary key} on a DDL boundary; it does not project secondary indexes or CHECK constraints. An index-only or CHECK-only DDL therefore produces no boundary at all and is never forwarded. For a plain index that is still the whole story — it is not refused and nothing is logged about it; the change simply never reaches the target, and you add it there out-of-band. A CHECK change, since v0.156.0, is caught by the door in 6 on a binlog source. Forwarding either would need a new catalog projection (perf-only for indexes; cross-engine expression-translation-hazardous for checks), so both are deferred.
 4 A Postgres RENAME is proven via the stable pg_attribute.attnum — see RENAME COLUMN.
 5 With two carve-outs, both below: a cast to or from a session-normalised timestamp always refuses (session-normalised timestamp), and on a Postgres source a change your projected type cannot express refuses under both modes (projection-invisible changes).
+6 v0.156.0+, Postgres and MySQL/MariaDB binlog sources. Neither change stream describes these objects, so they never forward; through v0.155.1 they were dropped with no log line and the target stayed weaker than the source. Now the stream stops at the next write to that table with UNFORWARDED-SCHEMA-CHANGE, the refusal is recorded, and every later start refuses again until acknowledged — see below. Not covered: PlanetScale / Vitess (VStream) sources, where these changes are still silent, and the trigger-CDC engines (postgres-trigger, sqlite-trigger, d1-trigger), whose own readers this door does not reach (for postgres-trigger's DDL handling see below).
 
 Every forwarded DDL is logged at INFO as it lands, so the applied change is visible in the sync's log stream. Cross-engine type ALTERs are retargeted through the same translation path a cold-start CREATE TABLE uses; a widening ALTER forwards cleanly, while a narrowing or incompatible one is rejected by the target engine and surfaces as a loud, retryable refuse (position not advanced).
 
@@ -3313,6 +3326,63 @@ Dropping a table a postgres-trigger install captures — directly, or through DR
 
 Multi-shape combos (more than one structural change in a single boundary) also refuse — the IR delta can't be unambiguously ordered — as does a target DDL apply that fails on lock contention, permissions, or an unrecognized type. Every one of these leaves the CDC position un-advanced, so a retry replays the boundary once you've reconciled by hand.
 
+## A change the stream cannot carry stops it: UNFORWARDED-SCHEMA-CHANGE
+
+v0.156.0+, Postgres and MySQL/MariaDB binlog sources. Some source DDL cannot reach the target through any change stream, because neither stream describes the object: pgoutput's relation message carries column names, type OIDs and key flags only, and after a DDL the binlog reader rebuilds a table from information_schema as columns plus primary key only. Through v0.155.1 these changes were dropped with no log line, so the target stayed weaker than the source — for a policy, that is a security boundary. The sharpest shape was a single statement, ALTER TABLE t ADD COLUMN x int, ADD CONSTRAINT fk FOREIGN KEY (x) REFERENCES p(id), which forwarded the column and silently dropped the foreign key, on both engines.
+
+- Postgres: ADD/DROP CONSTRAINT (primary key, UNIQUE, foreign key, EXCLUDE, CHECK), ENABLE/FORCE ROW LEVEL SECURITY, CREATE/ALTER/DROP POLICY, SET/DROP NOT NULL, SET/DROP DEFAULT, and identity or generated-column changes.
+
+- MySQL and MariaDB: primary key and UNIQUE changes (a prefix-length change included), foreign key changes (columns, referenced table and columns, ON UPDATE/ON DELETE), CHECK changes (NOT ENFORCED included, on MySQL), and DEFAULT, EXTRA (AUTO_INCREMENT, ON UPDATE) or generation-expression changes on an existing column. Nullability is not compared there, because the column forward already carries it.
+
+When the stream starts, sluice records these objects for every table in scope (the baseline). At the next write to a table after such a DDL it re-reads that table's catalog and compares; on any difference sync and backup stream end with UNFORWARDED-SCHEMA-CHANGE, naming each change, before the post-DDL row lands. It is never retried automatically, and an automatic retry after some other transient error keeps the baseline it started with, so a change made just before a dropped connection is still refused. What does not refuse, because the pipeline already handles it: the attributes of a column added in the same statement (but a constraint added with a new column does refuse — that is the foreign-key shape above), a constraint that disappears because its column was dropped, and ADD … NOT VALID followed by VALIDATE (validity is not compared).
+
+### It is recorded, and every restart refuses again
+
+A restarted reader would take its baseline from a catalog that already holds the change, so without a record a systemd Restart=on-failure, a pod restart or a supervisor would accept it silently, forever. So the refusal is persisted: sync writes it on the stream's row of the target's sluice_cdc_state table (column unforwarded_refusal), and backup stream writes it in the destination's stream_state.json (key unforwarded_schema_change_refusal). Every later start reads it before any change stream opens and refuses again — warm resume, multi-database resume, --restart-from-scratch and --reset-target-data included — replaying the recorded refusal with its fingerprint <12 hex> (the first 12 hex digits of the SHA-256 of the recorded text) and the exact flag to pass.
+
+Exit status 1, no error code. The refusal carries no SLUICE-E-* code yet, so it exits 1, not 3, and a JSON log line or envelope has no code or hint to branch on. Alert on the marker UNFORWARDED-SCHEMA-CHANGE in the log, not on the exit status — automation that treats a codeless exit 1 as "retry" will just see it refuse again.
+
+### Recovering: apply it to the target, then acknowledge once
+
+The drained-migrate runbook below does not clear this refusal — a plain restart with the same --stream-id just replays it. Instead:
+
+- Apply the same change to the target yourself. For backup stream, take a new full backup instead: a chain restored from the old full would lack the change.
+
+- Start the stream without the flag once if you do not have the fingerprint yet — the replayed refusal prints it.
+
+- Start once with the same --stream-id and --accept-unforwarded-schema-change=<fingerprint> (the same flag exists on backup stream run). It clears that record, logs a WARN naming what was accepted, and takes a fresh baseline.
+
+    # the replayed refusal names the change and prints: ... fingerprint 3f9a0c1b7e22
+    sluice sync start \
+        --stream-id app-prod \
+        --source-driver postgres --source 'postgres://...source...' \
+        --target-driver postgres --target 'postgres://...target...' \
+        --accept-unforwarded-schema-change=3f9a0c1b7e22
+
+The acknowledgement takes a fresh baseline, so passing it without step 1 accepts the difference permanently and nothing reports it again.
+
+The acknowledgement is bound to one refusal. Only the fingerprint of the refusal recorded now clears it; a value naming any other refusal is refused ("names a different refusal than the one recorded"), and an empty value keeps refusing. The recorded text is stamped with the moment it was recorded, so the same change recurring later gets a new fingerprint. On sync, once the flag has cleared the record it is spent for the rest of the process. That is what makes a copy left in a systemd ExecStart line or a wrapper script harmless — it cannot accept the next, different refusal on the next automatic restart — but take it out anyway: it belongs on a single manual start. It is deliberately not a syncs.yaml key, because standing config would pre-accept refusals. Fleet legs have their own procedure: acknowledging a fleet leg.
+
+To avoid the refusal altogether, make such changes through the drained model: sluice sync stop --wait, apply the change on source and target, restart. A change made while the stream is stopped is part of the next start's baseline, so it does not refuse.
+
+### What it does not catch
+
+- A change made while the stream was not watching — while it was stopped, during the cold-start copy, a DDL a lagging stream had not reached when it stopped, or anything before you upgraded to v0.156.0. It is already in the baseline. Upgrading does not find an old gap: if a Postgres or MySQL/MariaDB binlog stream ran through such DDL on an earlier release, audit those tables by hand (on Postgres compare pg_constraint, pg_policy, pg_class.relrowsecurity/relforcerowsecurity, pg_attribute.attnotnull and pg_attrdef; on MySQL/MariaDB information_schema.table_constraints, check_constraints, referential_constraints and columns.COLUMN_DEFAULT/EXTRA), and for backup stream take a new full.
+
+- A table nobody writes to again — detection needs a later write to the same table. A change reverted before that read is missed (net no change).
+
+- On MySQL, a DDL run under an out-of-scope default database (USE other; ALTER TABLE db.t …), which does not clear the reader's schema cache.
+
+- Plain (non-constraint) indexes, Postgres column collation, and policies or RLS on a partitioned Postgres root.
+
+- backup incremental, which opens a fresh reader every run, so a change between two incrementals is in the next run's baseline.
+
+- PlanetScale / Vitess (VStream) sources, and the postgres-trigger, sqlite-trigger and d1-trigger engines, which this door does not reach. On VStream the whole gap is still silent — audit the target by hand after such DDL.
+
+Known false refusals, each costing one acknowledgement: on MySQL, a DROP COLUMN b shrinks a composite UNIQUE (a, b) to UNIQUE (a) while Postgres drops the whole index, and the reader cannot see which the target did; on Postgres, a constraint rename refuses as a drop plus an add.
+
+Upgrading an existing stream to v0.156.0. The control table gains a column, sluice_cdc_state.unforwarded_refusal (TEXT NULL), added automatically on the next start. Two setups cannot add it themselves and must do it by hand before restarting streams: a PlanetScale safe-migrations target (ship ALTER TABLE `sluice_cdc_state` ADD COLUMN `unforwarded_refusal` TEXT NULL through sluice deploy-ddl), and a Postgres role that does not own an existing control table (the owner runs ALTER TABLE sluice_cdc_state ADD COLUMN unforwarded_refusal TEXT NULL). Every start checks for the column and refuses to stream if it is missing and cannot be added, because a stream that could not record a refusal would have it accepted silently by the next restart. A downgrade to an older binary ignores a recorded refusal and accepts the change on restart, so apply any recorded change to the target before downgrading.
+
 ## The refusal message
 
 When a change refuses, the error is deliberately greppable and names the specific offending object plus the operator action. It carries three parts: the classify error (which shape / how many changes), a structured drift diff that names the exact columns / indexes / constraints that differ, and a recovery hint. The hint spells out the drained model:
@@ -3327,7 +3397,7 @@ When a change refuses, the error is deliberately greppable and names the specifi
 
 ## Operator runbook: recovering a refused change
 
-When a change refuses — or when you run --schema-changes=refuse deliberately — the recovery is the drained-schema-migrate sequence. Stop the stream with --wait so the CLI blocks until the streamer confirms a graceful drain (the in-flight batch is committed and the CDC position is persisted past the last applied event), apply the DDL to whichever side needs it, then resume from the persisted position:
+When a change refuses — or when you run --schema-changes=refuse deliberately — the recovery is the drained-schema-migrate sequence. Stop the stream with --wait so the CLI blocks until the streamer confirms a graceful drain (the in-flight batch is committed and the CDC position is persisted past the last applied event), apply the DDL to whichever side needs it, then resume from the persisted position. (One refusal is the exception: UNFORWARDED-SCHEMA-CHANGE is recorded on the target, so this sequence alone just replays it — apply the change to the target and acknowledge it with --accept-unforwarded-schema-change instead.)
 
     # 1. Drain and stop — --wait blocks until the drain is confirmed
     sluice sync stop --wait \
@@ -5051,7 +5121,7 @@ MariaDB has native uuid, inet6, and inet4 column types. Under a bulk migrate the
 
 ## The COLUMN_DEFAULT dialect
 
-MariaDB's information_schema reports column defaults in a different dialect than MySQL 8: string defaults keep their quotes, a defaultless nullable column's default is the literal word NULL, and DEFAULT CURRENT_TIMESTAMP reads as current_timestamp() with an empty extra. A reader written to MySQL conventions would silently corrupt every default; the mariadb flavor reads them correctly (in the run, DEFAULT CURRENT_TIMESTAMP, DEFAULT 'unnamed', and defaultless-nullable columns all reproduced on the target). The same dialect note also covers why SYSTEM VERSIONED tables and SEQUENCEs hide from the BASE TABLE filter: MariaDB reports its defaults in a different dialect.
+MariaDB's information_schema reports column defaults in a different dialect than MySQL 8: string defaults keep their quotes, a defaultless nullable column's default is the literal word NULL, and DEFAULT CURRENT_TIMESTAMP reads as current_timestamp() with an empty extra. A reader written to MySQL conventions would silently corrupt every default; the mariadb flavor reads them correctly (in the run, DEFAULT CURRENT_TIMESTAMP, DEFAULT 'unnamed', and defaultless-nullable columns all reproduced on the target). That is the cold-start read: under a continuous sync, a forwarded ADD COLUMN did not get the same translation until v0.155.1, and on v0.99.271–v0.155.0 it landed a wrong DEFAULT on the target and filled the target's existing rows with it — see the field note's update for the repair. The same dialect note also covers why SYSTEM VERSIONED tables and SEQUENCEs hide from the BASE TABLE filter: MariaDB reports its defaults in a different dialect.
 
 ## Landing on PlanetScale
 
@@ -6805,7 +6875,7 @@ An honest number: the marker took ~7 minutes to land — not seconds — because
 
 - Sequences and identity counters are not continuously synced. CDC replicates row changes, not catalog-level sequence positions — irrelevant for a read-only analytics copy, since queries read rows, not nextval(). It only matters if you ever promote this copy to take writes; that's what sluice cutover's sequence priming (--sequence-margin) is for.
 
-- Schema forwarding from a Postgres source has an honest per-shape matrix. Column adds, drops, and type changes forward; CREATE INDEX, CHECK, and nullability changes never signal on pgoutput's wire from a Postgres source, so they cannot forward — see the ground-truth table. For this pattern that's mostly a feature (the target's index set is yours to design for analytics), but if you want a source index mirrored, create it on the target yourself.
+- Schema forwarding from a Postgres source has an honest per-shape matrix. Column adds, drops, and type changes forward; CREATE INDEX, CHECK, and nullability changes never signal on pgoutput's wire from a Postgres source, so they cannot forward — see the ground-truth table. For indexes that's mostly a feature (the target's index set is yours to design for analytics), but if you want a source index mirrored, create it on the target yourself. Constraints are different since v0.156.0: a source CHECK, NOT NULL, primary-key / UNIQUE / foreign-key, DEFAULT, identity, RLS or policy change stops the stream with UNFORWARDED-SCHEMA-CHANGE at the next write to that table, and it stays stopped until you apply the change on the replica (or decide it does not belong there) and acknowledge it once with --accept-unforwarded-schema-change — see the recovery. If your source team ships such DDL routinely, plan for the stop.
 
 - The standing sync holds a replication slot on your production source — forever. That's the deal with logical replication: if the sync stops for a long time, the slot pins WAL on the source and its storage grows. sluice emits severity-graded slot-retention warnings ahead of trouble, but decommissioning this pattern means sync stop --wait plus sluice slot drop — a slot is never auto-dropped. See Prepare a Postgres source for the slot-lifecycle story.
 
@@ -6985,6 +7055,16 @@ A fleet is a YAML file listing each sync as a curated subset of the sync start f
 Two data-corruption classes are refused at load, loudly. Two Postgres-source syncs that resolve to the same replication slot-name would fight over one single-consumer slot — silent corruption — so the loader refuses the config, naming both stream-ids and the slot. Duplicate stream-ids on the same target (which would clobber each other's position row) are refused the same way. When several syncs point at one target server, the loader WARNs that they share a connection budget so you can size apply-concurrency accordingly.
 
 Each sync's own retry (ADR-0093 re-snapshot, apply-retry backoff) is the inner loop; the supervisor's restart is the outer loop. A sync that drains cleanly (a sync stop or Ctrl-C) is left stopped; a sync that dies with the process still live is logged loudly, backed off, and restarted. The consecutive-failure counter resets once a sync has run longer than the healthy threshold, so a sync that ran for hours before dying carries no restart debt.
+
+The one failure that is not restarted: UNFORWARDED-SCHEMA-CHANGE (v0.156.0+). A leg that stopped because its Postgres or MySQL/MariaDB binlog source took a constraint, row-level-security, policy or DEFAULT change the stream cannot carry (what that covers) is marked failed at once and logged at ERROR, naming the acknowledgement route; the other legs keep running. A restart could only refuse again — the refusal is recorded on the target — and this is the one refusal where a restart that somehow skipped the record would accept the change silently. Every other failure, other terminal errors included, is still restarted exactly as above. There is deliberately no syncs.yaml key for the acknowledgement, because standing config would pre-accept refusals. To bring the leg back:
+
+- Apply the same change to the target (the leg is already stopped).
+
+- Start that stream once outside the fleet with the leg's own source, target and flags: sluice sync start --stream-id <id> … --accept-unforwarded-schema-change=<fingerprint>, using the fingerprint the replayed refusal prints.
+
+- Stop it with sluice sync stop --stream-id <id> … --wait.
+
+- Restart the fleet process. On Linux and macOS a SIGHUP also works: a reload starts a failed leg that is still in syncs.yaml.
 
 ## Run the fleet
 
@@ -7423,7 +7503,7 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-07-17Postgres•• field note information_schema reports a numeric scale of 2046 — Since PG 15, numeric(5,-2) is legal &mdash; and information_schema.columns reports its scale as 2046. The catalog view masks an 11-bit two's-complement scale field without sign-extending it, so the portable, standards-blessed way to read numeric scale is quietly wrong for every negative-scale column. When a number looks impossible, read the typmod.
 
-- 2026-07-16MariaDB•• field note MariaDB reports its defaults in a different dialect — Side by side on the same DDL, MariaDB's information_schema speaks a different dialect than MySQL 8's: string defaults keep their quotes, a defaultless nullable column's default is the literal word NULL, and DEFAULT CURRENT_TIMESTAMP reads as current_timestamp() with an empty extra. A MySQL-convention reader silently corrupts every default &mdash; and SYSTEM VERSIONED tables and SEQUENCEs hide from the BASE TABLE filter entirely.
+- 2026-07-16MariaDB● deep dive MariaDB reports its defaults in a different dialect — Side by side on the same DDL, MariaDB's information_schema speaks a different dialect than MySQL 8's: string defaults keep their quotes, a defaultless nullable column's default is the literal word NULL, and DEFAULT CURRENT_TIMESTAMP reads as current_timestamp() with an empty extra. A MySQL-convention reader silently corrupts every default &mdash; and SYSTEM VERSIONED tables and SEQUENCEs hide from the BASE TABLE filter entirely.
 
 - 2026-07-16Postgres•• field note The heartbeat aged seven hours at write time — A concurrent-run guard compared time.Now() against a heartbeat written with CURRENT_TIMESTAMP into a bare timestamp &mdash; a value Postgres stores in the server's zone and pgx reads back as UTC. The age is wrong by exactly the server's offset, and the offset's sign picks the failure: a live guard goes inert, or a crashed run's resume is falsely refused. Arithmetically invisible on every UTC CI container.
 
@@ -11724,6 +11804,8 @@ Here is the ironic part. Before the flavor shipped, every one of those corruptio
 ## What sluice does about it
 
 The v0.99.268 mariadb flavor landed the catalog-query fix and the compensating shim atomically — the discipline the scoping work flagged as mandatory. translateMariaDBDefault normalizes every default shape (quoted string literals with '' doubling and the \0 \n \r \\ schema-metadata escape set, including NUL-bearing binary defaults re-encoded to MySQL's 0x… hex; the bare keyword NULL for defaultless-nullable; current_timestamp()-with-empty-extra canonicalized) to a byte-identical IR read. The invisible-object census now refuses loudly, naming every SYSTEM VERSIONED table and SEQUENCE rather than skipping it. The two MySQL-8-only columns select constants on the MariaDB variant. A server-fingerprint guard closes the last hole in both directions: the mariadb flavor refuses a non-MariaDB server (the shim would actively mis-read MySQL's bare abc defaults as expressions — coded SLUICE-E-DRIVER-HOST-MISMATCH), while a plain mysql connection whose VERSION() carries -MariaDB WARNs toward the mariadb driver.
+
+Update (v0.155.1, corrected v0.156.0): the shim reached one of the two readers. translateMariaDBDefault covered the cold-start schema read. The CDC reader's per-table re-read at a DDL boundary — whose defaults a forwarded ADD COLUMN re-emits on the target — kept the MySQL-convention translation on every flavor until v0.155.1 (Bug 286). So on a MariaDB binlog sync from v0.99.271 through v0.155.0, a forwarded ADD COLUMN landed the string-default corruptions described above: a defaultless nullable column arrived as DEFAULT 'NULL' (the four-character string), DEFAULT 'abc' with its quotes kept. The v0.155.1 notes said the rows were intact; that was wrong (Bug 287). When the forwarded ADD COLUMN ran on the target, the target filled every row it already held with that wrong default, and CDC never corrected them — the source's own fill of its existing rows writes no binlog row event. Only rows written after the ADD COLUMN, which carry explicit values, were right. If you were affected, correct the column's DEFAULT (ALTER TABLE … ALTER COLUMN … SET DEFAULT …) and repair that column on the rows that existed on the target when it was added — re-copy the table, or update them from the source's values. You cannot pick those rows out by value alone, because the wrong default is also what a legitimately defaulted row would hold; compare against the source. The same correction applies to vanilla MySQL binlog sources that forwarded an ADD COLUMN whose BINARY/VARBINARY default contains a NUL byte, on v0.155.1 or earlier (GC-29). v0.156.0 lands the declared DEFAULT in both cases, so the existing rows are now filled correctly.
 
 ## The transferable lesson
 
