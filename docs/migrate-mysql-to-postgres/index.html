@@ -64,7 +64,7 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=requir
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
     <span class="f">--resume</span></code></pre>
-<p>To deliberately start clean over an already-populated target, <code>--reset-target-data</code> drops the source-schema tables on the target and re-copies (it prompts for a typed <code>reset</code> confirmation unless you add <code>--yes</code>). It's mutually exclusive with <code>--resume</code>.</p>
+<p>To deliberately start clean over an already-populated target, <code>--reset-target-data</code> drops the source-schema tables on the target and re-copies. At a terminal it prompts for a typed <code>reset</code> confirmation unless you add <code>--yes</code>; run from a script, a CI job or an agent — any non-terminal stdin — it refuses with <a href="/docs/error-codes/"><code>SLUICE-E-CONFIRMATION-REQUIRED</code></a> (exit 3) before touching either database, so <code>--yes</code> is required in automation. It's mutually exclusive with <code>--resume</code>.</p>
 
 <h2 id="verify">5. Verify the copy <a class="hlink" href="#verify" aria-label="Permalink to this section">#</a></h2>
 <p>Once the migration finishes, confirm source and target agree. <a href="/docs/commands/#verify">verify</a> compares per-table row counts by default and returns a non-zero exit code on any mismatch (CI-friendly):</p>

@@ -33,6 +33,9 @@
     
 <p>A one-shot <a href="/docs/commands/#migrate">migrate</a> from Postgres needs only <code>SELECT</code> and works anywhere, including locked-down managed tiers. <strong>Continuous sync</strong> is different: sluice's default Postgres CDC engine reads changes through a logical replication slot, which needs a handful of cluster settings and a role privilege. This guide is the practical checklist — set these before <code>sync start</code>, and if your host forbids them, jump to the <a href="#slotless">slot-less trigger path</a> at the end.</p>
 
+<div class="note warn"><strong>Postgres schema reads need PostgreSQL 12 or newer.</strong> The schema reader references PG-12 catalog columns (<code>pg_collation.collisdeterministic</code>, <code>pg_attribute.attgenerated</code>) unconditionally, so <code>migrate</code>, <code>sync</code>, <code>backup</code>, <code>schema preview</code> and <code>schema diff</code> against a PG&nbsp;10/11 source fail at the column read with SQLSTATE <code>42703</code> rather than degrading. The CDC lane's own floor (pgoutput, PG&nbsp;10) is lower and does not help — nothing runs before the schema read. <code>cutover</code> carries the same 12–18 floor for the same reason.</div>
+<div class="note"><strong>An identity column with no backing sequence is refused at schema read.</strong> A Postgres <code>GENERATED … AS IDENTITY</code> column whose identity-owned sequence is absent from the catalog refuses loudly, naming the shape and <code>--exclude-table</code> as the remedy — rather than carrying zero-valued options that would render <code>START WITH 0</code> on the target. A partition <em>child</em> of an identity-bearing partitioned table is not this shape: on PG&nbsp;17+ <code>information_schema</code> reports the child's column as identity while the only identity-owned sequence belongs to the root, and sluice resolves the child's identity through its partition root exactly as Postgres does.</div>
+
 <h2 id="required-gucs">Required GUCs <a class="hlink" href="#required-gucs" aria-label="Permalink to this section">#</a></h2>
 <p>Logical replication is gated by a small set of server parameters. Check them as a superuser on the source:</p>
 <pre><code>SHOW wal_level;                  -- must be 'logical'
@@ -68,9 +71,11 @@ Postgres Essential, Render Basic, Supabase free), use <span class="f">--source-d
 <pre><code><span class="c"># List every slot on the source (columns mirror pg_replication_slots)</span>
 <span class="k">sluice</span> slot list <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://user:pass@host:5432/app'
 
-<span class="c"># Drop a named slot (prompts for confirmation; --yes skips it,</span>
-<span class="c"># --force drops an active slot, --if-exists treats a missing slot as success)</span>
-<span class="k">sluice</span> slot drop sluice_slot <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://user:pass@host:5432/app'</code></pre>
+<span class="c"># Drop a named slot. It NEVER prompts: without --yes it refuses with</span>
+<span class="c"># SLUICE-E-CONFIRMATION-REQUIRED (exit 3), at a terminal as well as anywhere else.</span>
+<span class="c"># The name is positional and LITERAL (--force drops an active slot,</span>
+<span class="c"># --if-exists treats a missing slot as success)</span>
+<span class="k">sluice</span> slot drop sluice_slot <span class="f">--yes</span> <span class="f">--source-driver</span> postgres <span class="f">--source</span> 'postgres://user:pass@host:5432/app'</code></pre>
 <p>When you start a stream and setup fails partway (publication permissions, <code>START_REPLICATION</code> rejection, cancellation), the freshly-created slot is auto-dropped before the error returns — so failed cold-start attempts don't leave <code>sluice_slot</code>-named slots behind. Auto-cleanup deliberately skips a slot that pre-existed the call (it may carry someone else's progress) and a slot whose pump already emitted positioned changes (that's user data); for those, <code>sluice slot drop</code> is the explicit path.</p>
 
 <h2 id="failover">Slot survival under failover <a class="hlink" href="#failover" aria-label="Permalink to this section">#</a></h2>
@@ -130,7 +135,7 @@ sluice_pg_slot_spill_bytes_total{stream_id="app",slot="sluice_slot"} 5242880</co
     <span class="f">--source-driver</span> postgres-trigger <span class="f">--source</span> 'postgres://user:pass@host:5432/app' \
     <span class="f">--target-driver</span> postgres         <span class="f">--target</span> 'postgres://user:pass@target:5432/app?sslmode=require' \
     <span class="f">--stream-id</span> app</code></pre>
-<p><strong>3. Tear down cleanly</strong> when the stream is finished — this drops every per-table trigger and (by default) the <code>sluice_change_log</code> table, leaving zero residue. Pass <code>--keep-data</code> to retain the change-log for forensics, or <code>--yes</code> to skip the confirmation prompt:</p>
+<p><strong>3. Tear down cleanly</strong> when the stream is finished — this drops every per-table trigger and (by default) the <code>sluice_change_log</code> table, leaving zero residue. Pass <code>--keep-data</code> to retain the change-log for forensics. <code>--yes</code> skips the confirmation prompt, and is <strong>required</strong> anywhere stdin is not a terminal &mdash; a script, a CI job or an agent gets <code>SLUICE-E-CONFIRMATION-REQUIRED</code> (exit 3) with nothing torn down:</p>
 <pre><code><span class="k">sluice</span> trigger teardown \
     <span class="f">--source-driver</span> postgres-trigger \
     <span class="f">--dsn</span> 'postgres://user:pass@host:5432/app' <span class="f">--yes</span></code></pre>

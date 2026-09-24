@@ -66,7 +66,7 @@ A non-zero exit tells you where — the table, and (in sample mode) the mismatch
 
 - Structural drift (schema diff flagged it). Read the suggested DDL. If it's a missing index or constraint on an otherwise-correct table, applying the suggestion is often enough. If a column type is wrong, fix it with a --type-override and re-migrate that table rather than hand-patching.
 
-- A count shortfall on a fresh migration. Re-run migrate. A plain re-run is idempotent for tables that copied cleanly and fills the gap. If the target table is in a partially-written state you want to discard, migrate --reset-target-data is the destructive recovery: it deletes the migrate-state row, drops every source-schema table on the target, and runs a fresh cold-start (it prompts for confirmation — type reset, or pass --yes in automation). See ADR-0023.
+- A count shortfall on a fresh migration. Re-run migrate. A plain re-run is idempotent for tables that copied cleanly and fills the gap. If the target table is in a partially-written state you want to discard, migrate --reset-target-data is the destructive recovery: it deletes the migrate-state row, drops every source-schema table on the target, and runs a fresh cold-start (at a terminal it prompts for confirmation — type reset; in automation --yes is required, since a non-terminal stdin refuses SLUICE-E-CONFIRMATION-REQUIRED at exit 3 before anything is touched). See ADR-0023.
 
 - A drift that appears on a running sync. The equivalent recovery is sync start --reset-target-data — drop the target, restore, then transition back to live polling. Don't reach for it on a transient lag; let the sync catch up and re-verify first.
 
