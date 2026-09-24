@@ -21,7 +21,7 @@ Exit code · Meaning ·
 
 2 · Config error: the --config file could not be loaded or parsed. (The read-side commands verify/diff/sync-health/metrics-watch have always used 2 more broadly for "the check could not run at all". For verify this includes a run that completed but could not verify one or more tables — a per-table count/sample error, or a source table missing on the target: an unverified table is not a pass, so those runs exit 2 rather than a misleading 0. Tables deliberately excluded via --include-table/--exclude-table or config filters stay exit-neutral.) ·
 
-3 · Named refusal: sluice declined to proceed (or to silently alter a value) and named the remedy — the refusal-class codes below. Retrying without acting on the hint fails identically. ·
+3 · Named refusal: sluice declined to proceed (or to silently alter a value) and named the remedy — the refusal-class codes below. Retrying without acting on the hint fails identically. UNFORWARDED-SCHEMA-CHANGE behaves the same way on restart — the refusal is recorded, and every later start refuses again until you start once with --accept-unforwarded-schema-change=<fingerprint>, using the fingerprint the replayed refusal prints — but it carries no error code yet, so it exits 1, not 3: alert on the marker in the log, not on the exit status. Do not put the flag in a unit's ExecStart. It only accepts the one refusal whose fingerprint it names, so it would not pre-accept a later one, but it belongs on a single manual start after the change has been applied to the target. ·
 
 80 · Usage error: kong (the CLI parser) exits 80 on unknown flags/commands and missing required arguments, before any sluice code runs. sluice adopts this rather than remapping it. ·
 

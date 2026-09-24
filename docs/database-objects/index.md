@@ -13,7 +13,7 @@ These hold the state that makes migrate --resume and sync start warm-resume work
 
 Object · Created by · When & why · Cleaned up by ·
 
-sluice_cdc_state · sync start · At CDC stream open. One row per --stream-id: the durable CDC source position, slot name, source-DSN fingerprint, and stop flag — the warm-resume frontier. · --reset-target-data (clears the row); otherwise persists. ·
+sluice_cdc_state · sync start · At CDC stream open. One row per --stream-id: the durable CDC source position, slot name, source-DSN fingerprint, and stop flag — the warm-resume frontier. Since v0.156.0 also a recorded UNFORWARDED-SCHEMA-CHANGE refusal (column unforwarded_refusal, TEXT NULL), which every later start replays until --accept-unforwarded-schema-change clears it. The column is added on the next start after upgrading; a PlanetScale safe-migrations target or a Postgres role that does not own the table must add it by hand. · --reset-target-data (clears the row); otherwise persists. ·
 
 sluice_migrate_state · migrate · At bulk-copy start. One header row per --migration-id for resumable bulk migration (ADR-0082). · --reset-target-data; otherwise persists. ·
 
