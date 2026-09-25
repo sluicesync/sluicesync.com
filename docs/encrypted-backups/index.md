@@ -167,6 +167,18 @@ Restore parallelism is engine-generic: --table-parallelism (tables applied concu
 
 To replay a chain into a live, continuously-updated target instead of a one-shot restore, use the broker — one process produces the chain, another tails it and applies incrementals as they land. See Sync from a backup chain.
 
+## A column added mid-chain: the captured fill
+
+When the source runs ALTER TABLE t ADD COLUMN c … DEFAULT d between two links, it fills every row it already holds — and that fill writes no row event, so no link carries a value of c for those rows. Replay adds the column from the schema recorded at the end of the window and lets the target fill the rows from that DEFAULT, which is wrong for a DEFAULT dropped or changed later in the window (Django's AddField drops its default in the very next statement) and for a non-constant one (now(), gen_random_uuid(), a sequence). Through v0.156.0 such rows restored as NULL, the window-end default, or the restore's own clock, silently.
+
+Since v0.156.1 the capture records the fill. When backup incremental or a backup stream rollover sees that its window added a column, it reads the column's actual values back from the source for every row, keyed by primary key, and writes them into the same incremental as ordinary row updates that replay after every event of the window — so a row the window itself changed keeps its own value. The cost is one read of the key and the added columns per table, once per window that adds a column, logged per table as recorded the ADD COLUMN fill with the row count and duration. The backup format does not change (schema hash, backup ids and format version are as before), and a v0.156.0 binary restoring such a chain was measured to restore the same rows. The values are read when the window closes, not at its end position, so a row changed after the window ends carries its newer value one link early; the next link replays that change anyway, so only a restore that stops at that very link sees it.
+
+- ADD-COLUMN-FILL-NOT-CAPTURED (capture-time WARN) — the table has no primary key, so its rows cannot be addressed one by one and the fill is recorded as skipped.
+
+- ADD-COLUMN-FILL-NOT-REPRODUCIBLE (restore-time WARN; the restore carries on) — the chain does not carry the fill: every added column of a skipped table, and, on a chain captured by an older sluice, every column added with a DEFAULT sluice cannot prove constant. A Django-style dropped DEFAULT on such an older chain is invisible to it and restores NULL with no warning. Repair by copying that column's values for the pre-ALTER rows from the source.
+
+Take a fresh full backup after upgrading if your chains span an ADD COLUMN: a chain captured by v0.156.0 or earlier does not contain the fill, and no release can reconstruct it from that chain. Repair any target already restored from such a chain against the source. (An older binary compacting a new chain drops the fill record, which can only cause a spurious ADD-COLUMN-FILL-NOT-REPRODUCIBLE WARN for a column that restores correctly.)
+
 ## Verifying a backup
 
 backup verify walks a chain, recomputes every chunk's SHA-256, and reports any mismatch — a target-free integrity probe, ideal for a cron check against archived backups:
