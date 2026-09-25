@@ -63,6 +63,8 @@ Flag · Axis ·
 
 The generic --table-parallelism / --bulk-parallelism cold-start knobs are inert on a VStream source (setting one emits a one-time WARN). Use the two flags above instead. --copy-table-parallelism is for self-managed non-Vitess MySQL, not PlanetScale.
 
+Columns in a non-UTF-8 character set (v0.156.3). vttablet's VStream row event carries a latin1, cp1251, sjis, … column's stored bytes, and sluice now converts them by the field's collation, in the COPY phase and in CDC. Three VStream-specific edges: a non-ASCII value in a gbk, big5, tis620 or gb18030 column refuses with CHARSET-NOT-DECODABLE (vttablet sends those with collation 0); a _bin-collated text column arrives typed VARBINARY/BLOB/BINARY and is decoded as text; and vttablet reports a replayed row's current collation, so a replay across a charset change is decoded by the new charset — a detected replay across a change into a non-UTF-8 charset refuses, but an online schema change (a deploy request, Vitess online DDL) swaps in a shadow table and is not seen. See non-UTF-8 character sets. These arms were measured on vttestserver, not against PlanetScale.
+
 ## Warm-resume & auto-resnapshot
 
 On restart, sluice resumes from the persisted VGTID position. PlanetScale's binlog-retention window is finite, so a resume from a position older than the source's retained binlogs is routine — and by default (ADR-0093, parity with the self-hosted binlog path) sluice auto-recovers with a fresh cold-start re-snapshot rather than failing. On an idempotent VStream source the upsert copy absorbs the overlap and the target is not dropped.
