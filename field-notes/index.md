@@ -247,7 +247,7 @@ They're listed newest first, each dated to roughly when the work landed in sluic
 
 - 2026-05-31MySQL & Vitess· quick note MySQL TIME is a duration, not a time of day — A MySQL TIME ranges -838:59:59 to 838:59:59 and models elapsed duration, not clock time. Map it to Postgres time by name and any negative or over-24-hour value has nowhere to go &mdash; the target is interval.
 
-- 2026-05-30MySQL & Vitess· quick note MySQL turned our emoji into '?' — MySQL substitutes ? for 4-byte UTF-8 in ENUM/SET labels at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it.
+- 2026-05-30MySQL & Vitess•• field note MySQL turned our emoji into '?' — MySQL substitutes ? for 4-byte UTF-8 in ENUM/SET labels at CREATE TABLE time regardless of column charset; the label is gone from the catalog before any client sees it.
 
 - 2026-05-30Cross-cutting· quick note One redaction flag, two engines, two behaviors — --redact randomize:int:100000,200000 into a SMALLINT column loud-refused on a Postgres target and silently clamped every row to 32767 on a MySQL one &mdash; turning an anonymization rule into a constant, and a compliance guarantee into a compliance failure.
 
