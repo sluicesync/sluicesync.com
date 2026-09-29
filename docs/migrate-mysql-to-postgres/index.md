@@ -73,5 +73,11 @@ sluice forces a strict sql_mode on every MySQL connection to close the silent-cl
 
 Both are global flags — see Configuration for the full discussion.
 
+### Session time zone: DSN-TIME-ZONE-NOT-UTC
+
+sluice reads and writes every MySQL TIMESTAMP as a UTC instant, which is only correct when the session's time_zone is UTC, so it sets time_zone='+00:00' on every connection. Since v0.156.5, a MySQL, MariaDB, PlanetScale or Vitess DSN whose time_zone parameter names any other zone is refused at connect with an error marked DSN-TIME-ZONE-NOT-UTC. It carries no SLUICE-E- code, so it exits 1. Every spelling of UTC is accepted ('+00:00', 'UTC', 'Etc/UTC', 'GMT' and the like, quoted or URL-encoded), and the variable name is matched the way MySQL reads it (TIME_ZONE=, @@session.time_zone=, @@local.time_zone=, …). A GLOBAL spelling (@@global.time_zone=) is refused whatever its value, because it would change the zone for every client of the server, and SYSTEM is refused because the host's zone cannot be known from the DSN. As a second, independent check, every new connection reads back its own @@session.time_zone and is refused with the same marker unless it is UTC.
+
+If a DSN of yours carried a non-UTC time_zone on v0.8.0 through v0.156.4, sluice honoured it but still read the session's digits as UTC, silently, at exit 0. Every TIMESTAMP a migrate or sync cold copy read from such a source, and every one written into such a target (bulk copy, LOAD DATA, the CDC applier, restore), is off by the zone's offset — measured under '+09:00', a stored 12:00Z read back as 21:00Z. DATETIME columns and values that arrived through the binlog change stream were not shifted. Remedy: remove the parameter (or set it to '+00:00'), then re-copy the affected tables, or correct their TIMESTAMP columns by the offset with CONVERT_TZ. A configuration that ran on v0.156.4 can stop here on upgrade, including a CDC-only stream whose values were never shifted.
+
 ---
 Canonical page: https://sluicesync.com/docs/migrate-mysql-to-postgres/ · Full docs index: https://sluicesync.com/llms.txt

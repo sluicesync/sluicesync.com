@@ -68,7 +68,19 @@ julian · REAL/INTEGER Julian day ·
 
 A value whose storage class doesn't match the chosen encoding — or ISO text matching no layout, or a non-truthy boolean — is refused loudly, naming the row, never a silently-wrong date. Carry a genuine outlier raw with --type-override <col>=text. Preview the resolved types first with schema preview.
 
-Column DEFAULT expressions are carried too: a SQLite datetime('now') / CURRENT_TIMESTAMP default becomes the target's CURRENT_TIMESTAMP (date('now')→CURRENT_DATE, time('now')→CURRENT_TIME). A non-portable default expression is dropped with a loud WARN rather than emitted as an expression the target can't evaluate — the column keeps its type, just without the default.
+Column DEFAULT expressions are carried too. SQLite evaluates a CURRENT_TIMESTAMP / datetime('now') / date('now') / time('now') / strftime(…, 'now') default in UTC, so since v0.156.5 sluice carries it onto the target's UTC clock, spelled for the target column's type:
+
+Target column · Postgres · MySQL ·
+
+naive timestamp / DATETIME · date_trunc('second', timezone('utc', now())) · UTC_TIMESTAMP() ·
+
+timestamptz / MySQL TIMESTAMP · date_trunc('second', now()) (an instant) · CURRENT_TIMESTAMP (an instant) ·
+
+date / time · the UTC date / time · UTC_DATE() / UTC_TIME() ·
+
+text / varchar / char · SQLite's exact text form, via to_char · SQLite's exact text form, via DATE_FORMAT ·
+
+Before v0.156.5 these became a bare CURRENT_TIMESTAMP / CURRENT_DATE / CURRENT_TIME, which the target evaluates in the writing session's time zone, so a non-UTC session stamped local wall-clock digits into columns that had held UTC. Only five strftime formats are recognised (%Y-%m-%d %H:%M:%S, %Y-%m-%dT%H:%M:%SZ, %Y-%m-%d, %H:%M:%S and the epoch %s). Any other format, any column type with no faithful spelling, and any other non-portable default expression is dropped with a loud WARN naming the column, rather than degraded to a session-zone keyword — the column keeps its type, just without the default. MySQL accepts expression defaults from 8.0.13 (MariaDB 10.2.1); on an older server, or one whose version sluice could not read, every cell except the TIMESTAMP one is dropped with a WARN.
 
 ## Richer target types with --infer-types
 
@@ -83,7 +95,7 @@ Candidates are picked by name hint (is_*/*_flag; *_at/created/updated; *_json/me
 
 On a live D1, inference stages locally first (automatic). Cloudflare D1's query API rejects the rich-type validation patterns (its GLOB complexity limit), so against --source-driver d1 sluice first replicates the database into a byte-faithful local SQLite file and validates there — engaged automatically when you pass --infer-types (v0.99.167). The staged copy is lossless (exact storage classes, integers above 253 included — unlike wrangler d1 export), so inference sees the original types and decides identically. Pass --stage-local to stage even without inference (a faster local bulk read), or --no-stage-local to force the direct path. A plain D1 migrate without --infer-types streams directly as before. (Not needed for a local SQLite file — it has no such limit.) The war story behind this — a UUID GLOB that passed every local test and died on live D1 with code 7500 — is the field note Cloudflare D1 is not your local SQLite.
 
-Boolean CHECK constraints and strftime() defaults carry across (v0.99.287). SQLite has no BOOLEAN type, so the canonical idiom is an INTEGER column constrained to 0/1 — e.g. active INTEGER CHECK (active IN (0,1)). When --infer-types promotes that column to Postgres BOOLEAN, sluice now re-types the constraint alongside it (CHECK (active IN (false, true))), covering =, <>/!=, reversed operands, and IN/NOT IN. An ordering comparison (active > 0) or an out-of-range literal (active = 2) is left alone so Postgres rejects it loudly rather than sluice guessing. Separately, strftime() column defaults that render a current instant — e.g. DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')) — now translate to a valid Postgres expression (date_trunc('second', now()), preserving second precision) instead of being dropped. A partial format or a non-'now' base still drops loudly, since guessing a general translation is how a default silently changes meaning. Before v0.99.287 the CHECK case refused the whole migration and the strftime() default was silently absent on the target.
+Boolean CHECK constraints and strftime() defaults carry across (v0.99.287). SQLite has no BOOLEAN type, so the canonical idiom is an INTEGER column constrained to 0/1 — e.g. active INTEGER CHECK (active IN (0,1)). When --infer-types promotes that column to Postgres BOOLEAN, sluice now re-types the constraint alongside it (CHECK (active IN (false, true))), covering =, <>/!=, reversed operands, and IN/NOT IN. An ordering comparison (active > 0) or an out-of-range literal (active = 2) is left alone so Postgres rejects it loudly rather than sluice guessing. Separately, strftime() column defaults that render a current instant — e.g. DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')) — now translate to a valid Postgres expression (date_trunc('second', now()), preserving second precision; since v0.156.5 spelled per column type on the UTC clock, as in the table above) instead of being dropped. A partial format or a non-'now' base still drops loudly, since guessing a general translation is how a default silently changes meaning. Before v0.99.287 the CHECK case refused the whole migration and the strftime() default was silently absent on the target.
 
 ## Keys, indexes, and index collation
 
