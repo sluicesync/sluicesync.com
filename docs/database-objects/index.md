@@ -25,6 +25,14 @@ sluice_target_metrics_history · sync start (telemetry only) · Only when Planet
 
 sluice_shard_consolidation_lease · sync start (consolidation only) · Only when consolidating a multi-shard Vitess/PlanetScale source onto one target with cross-shard DDL coordination (ADR-0054). One row per consolidated table records which shard-stream owns applying a coordinated DDL. · Lease rows GC-swept automatically; table via --reset-target-data. ·
 
+sluice_cdc_skipped_tables · sync start (MySQL and Postgres targets) · At CDC stream open. One row per (stream, table) the stream carried changes for but the target does not have: a cumulative skip count plus the first and last skipped position tokens (v0.123.0). Rendered by sync status and the sync stop summary; sync health exits 1 while any count is nonzero. See sync start. · Persists — no built-in cleanup, including --reset-target-data. Delete a stream's rows by hand once its skips are resolved. ·
+
+sluice_cdc_apply_marks · sync start, sync from-backup (MySQL and Postgres targets) · Alongside sluice_cdc_state, only when absent (v0.156.5, ADR-0190). One row per marked key: which source transaction and position within it last wrote that key, written in the same target transaction as the row itself, so a restart after a crash in the middle of a source transaction can tell which of its changes already landed (how it works). A transaction's marks are deleted by the same target transaction that persists a position past it. If it cannot be created or used, the stream logs APPLY-MARKS-UNAVAILABLE and runs without marks. On a PlanetScale safe-migrations branch, create it with control-tables ddl. · Rows auto-cleared: as the position passes their transaction, at every cold start, and by --reset-target-data. The table stays in place. ·
+
+sluice_cdc_query_timeout_raise · sync start (MySQL-family targets) · Created at CDC stream open alongside sluice_cdc_state; a row is written only when --planetscale-raise-query-timeout raises the keyspace's query timeout for the cold-start copy (ADR-0182). It records the previous value, keyed by stream-id, so the timeout is restored even after a crash; the row is deleted on revert. · Row deleted when the timeout is restored; the table stays in place. ·
+
+Keyset store. sluice_keysets is not created on the migration target unless you point it there: it lives wherever a --keyset-source=db:<dsn> points (MySQL or Postgres), and is created there if absent. It holds the named, generation-versioned HMAC / tokenize keys for PII redaction (ADR-0041), shared across streams. sluice never drops it — rotating or retiring a key is a row operation you own.
+
 --reset-target-data is destructive: it clears the relevant state row(s) and drops every source-schema table sluice manages on that target, then cold-starts. Other tables on the target are untouched. See the migrate reference and ADR-0023.
 
 ## Source database — Postgres logical CDC

@@ -18,7 +18,6 @@ Postgres · postgres · postgres://user:pass@host:5432/dbname?sslmode=require ·
 PlanetScale · planetscale · MySQL DSN against the PlanetScale host (TLS required). ·
 
 Vitess (self-hosted) · vitess · MySQL DSN against vtgate — the self-hosted Vitess flavor (VStream CDC; warm-resume since v0.99.44). ·
-
 SQLite · sqlite · A file path (./app.db) or a wrangler d1 export .sql dump (auto-detected). Migrate source and target (no CDC). ·
 
 Cloudflare D1 · d1 · d1://<account_id>/<database_id> (or d1://<database_id> + CLOUDFLARE_ACCOUNT_ID); token via the env var CLOUDFLARE_API_TOKEN (never a flag). Migrate source. ·
@@ -26,6 +25,8 @@ Cloudflare D1 · d1 · d1://<account_id>/<database_id> (or d1://<database_id> + 
 Postgres (slot-less) · postgres-trigger · Same as postgres; pairs with trigger setup. ·
 
 SQLite / D1 (CDC) · sqlite-trigger / d1-trigger · Trigger-based continuous CDC over a SQLite file / live D1; pair with trigger setup --source-driver. ·
+
+On every MySQL-family DSN (MySQL, MariaDB, PlanetScale, Vitess), sluice pins the session to time_zone='+00:00'; a time_zone parameter naming another zone is refused (DSN-TIME-ZONE-NOT-UTC).
 
 ## Environment variables
 
@@ -107,7 +108,7 @@ Flag · Default · Purpose ·
 
 --skill · &mdash; · Print an installable agent skill file (YAML frontmatter + the AGENTS.md agent guide) and exit &mdash; write it into a skills directory for trigger-based loading. sluice agent-guide prints the bare guide. ·
 
-Migrating legacy MySQL data? sluice forces a strict sql_mode on every MySQL connection to close the silent-clamp / silent-zero-date class. Data that was only accepted under a relaxed mode (pre-5.7 zero-dates, silently-truncated values) will refuse loudly — pass --mysql-sql-mode='' to fall through to the server default. Zero / partial dates specifically are governed by --zero-date (default error): use --zero-date=null to carry them as NULL or --zero-date=epoch to substitute 1970-01-01 rather than refusing.
+Migrating legacy MySQL data? sluice forces a strict sql_mode on every MySQL connection to close the silent-clamp / silent-zero-date class. Data that was only accepted under a relaxed mode (pre-5.7 zero-dates, silently-truncated values) will refuse loudly — pass --mysql-sql-mode='' to fall through to the server default. Zero / partial dates specifically are governed by --zero-date (default error): use --zero-date=null to carry them as NULL or --zero-date=epoch to substitute 1970-01-01 rather than refusing. A DSN time_zone parameter other than UTC, or any GLOBAL spelling, is refused at connect (DSN-TIME-ZONE-NOT-UTC, v0.156.5) — through v0.156.4 it silently shifted every TIMESTAMP sluice copied or wrote.
 
 ## Source-DSN tuning parameters
 
