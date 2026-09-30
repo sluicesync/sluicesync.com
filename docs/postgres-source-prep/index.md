@@ -91,7 +91,7 @@ Set --source-heartbeat-interval and sluice INSERTs a row into a source-owned tab
         --stream-id app \
         --source-heartbeat-interval 30s
 
-It is opt-in (0, off, by default) because the INSERT is a behaviour change on the source that regulated systems must enable explicitly. The heartbeat table is auto-created and periodically pruned (--source-heartbeat-prune-window, default 1h); on a role without CREATE TABLE the streamer WARNs once and continues without it. Rename the table with --source-heartbeat-table-name, or silence the warning with --no-source-heartbeat.
+It is opt-in (0, off, by default) because the INSERT is a behaviour change on the source that regulated systems must enable explicitly. The heartbeat table is auto-created and periodically pruned (--source-heartbeat-prune-window, default 1h); on a role without CREATE TABLE the streamer WARNs once and continues without it. Since v0.156.6 an owner can pre-create the table and grant the source role only INSERT and DELETE on it — plus, on Postgres, USAGE on its id sequence, which every heartbeat INSERT draws from; a missing sequence grant is named at startup (GRANT USAGE ON SEQUENCE) on the same WARN-and-continue path. Rename the table with --source-heartbeat-table-name, or silence the warning with --no-source-heartbeat.
 
 ## Slot health and telemetry
 

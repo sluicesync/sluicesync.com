@@ -82,7 +82,7 @@ Gauge · What it tells you ·
 
 sluice_sync_lag_seconds · Seconds the target trails the source's latest applied commit (engine-neutral apply lag; 0 when caught up). ·
 
-sluice_seconds_since_last_apply · Wall-clock seconds since this stream's most recent applier commit — the staleness signal. ·
+sluice_seconds_since_last_apply · Wall-clock seconds since this stream's most recent applier commit — the staleness signal. Never negative: skew of up to 60 s reads 0, and a row dated further in the future reads +Inf under a # CONTROL-TIMESTAMP-IN-FUTURE comment, so a > N alert fires (v0.156.6). ·
 
 sluice_stream_known · Constant 1 per tracked stream; count(sluice_stream_known) gives a stream-count alert. ·
 

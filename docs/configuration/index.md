@@ -134,6 +134,8 @@ Pass --metrics-listen ADDR to sync start (or metrics-watch) to bind a Prometheus
 
 - The sluice_target_* gauge family — target CPU / memory / storage utilisation and replica lag — when PlanetScale telemetry is configured (--planetscale-org + the metrics-token flags). Without telemetry these gauges are simply absent.
 
+sluice_seconds_since_last_apply is never negative (v0.156.6): clock skew of up to 60 s reads 0, and a stream row dated further in the future reads +Inf under a # CONTROL-TIMESTAMP-IN-FUTURE comment line, so a > N alert fires rather than reading the stream as fresh. A dashboard or recording rule that assumed a finite value should handle +Inf. The stream's next position write clears it; a stalled or stopped stream needs a restart (see sync health).
+
 ## What sluice creates in your databases
 
 To make migrations resumable and continuous sync durable, sluice writes a small, predictable set of sluice_-prefixed bookkeeping objects — state tables on the target, and a replication slot / publication / triggers on the source. They're excluded from schema diff and verify, so they never look like drift. For the full inventory — what each object is, when it appears, and how to remove it — see Objects sluice creates.
