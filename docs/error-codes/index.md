@@ -17,7 +17,7 @@ Exit code · Meaning ·
 
 0 · Success. For verify, diff, and sync-health: success and clean. ·
 
-1 · Generic runtime failure. For verify/diff/sync-health this is those commands' long-standing per-command meaning: the check ran and found a mismatch / drift / stale stream. ·
+1 · Generic runtime failure. For verify/diff/sync-health this is those commands' long-standing per-command meaning: the check ran and found a mismatch / drift / stale stream. For sync-health it also covers a stream whose age cannot be read — a row dated more than 60 s in the future, state UNKNOWN under CONTROL-TIMESTAMP-IN-FUTURE (v0.156.6) — whatever --max-stale-seconds says, including 0. ·
 
 2 · Config error: the --config file could not be loaded or parsed. (The read-side commands verify/diff/sync-health/metrics-watch have always used 2 more broadly for "the check could not run at all". For verify this includes a run that completed but could not verify one or more tables — a per-table count/sample error, or a source table missing on the target: an unverified table is not a pass, so those runs exit 2 rather than a misleading 0. Tables deliberately excluded via --include-table/--exclude-table or config filters stay exit-neutral.) ·
 
