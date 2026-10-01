@@ -35,7 +35,7 @@ Two data-corruption classes are refused at load, loudly. Two Postgres-source syn
 
 Each sync's own retry (ADR-0093 re-snapshot, apply-retry backoff) is the inner loop; the supervisor's restart is the outer loop. A sync that drains cleanly (a sync stop or Ctrl-C) is left stopped; a sync that dies with the process still live is logged loudly, backed off, and restarted. The consecutive-failure counter resets once a sync has run longer than the healthy threshold, so a sync that ran for hours before dying carries no restart debt.
 
-The one failure that is not restarted: UNFORWARDED-SCHEMA-CHANGE (v0.156.0+). A leg that stopped because its Postgres or MySQL/MariaDB binlog source took a constraint, row-level-security, policy or DEFAULT change the stream cannot carry (what that covers) is marked failed at once and logged at ERROR, naming the acknowledgement route; the other legs keep running. A restart could only refuse again — the refusal is recorded on the target — and this is the one refusal where a restart that somehow skipped the record would accept the change silently. Every other failure, other terminal errors included, is still restarted exactly as above. There is deliberately no syncs.yaml key for the acknowledgement, because standing config would pre-accept refusals. Since v0.156.1 the same applies to an interrupted added-column backfill, ADD-COLUMN-BACKFILL-INCOMPLETE (its message begins UNFORWARDED-SCHEMA-CHANGE: ADD-COLUMN-BACKFILL-INCOMPLETE:), which the supervisor treats identically — but for that one, step 1 below is different: there is no DDL to apply, so instead copy the added column's values from the source for the rows that predate the ADD COLUMN, keyed by primary key (or re-copy by passing --restart-from-scratch on the acknowledged start). Since v0.156.2 the supervisor's ERROR line leads with that repair for this refusal; on v0.156.1 it said "apply the change to the target" (Bug 289). Stopping a leg, or the fleet, while a backfill runs produces it, so wait for the leg's backfill complete line first. To opt a leg out of the backfill, set no-backfill-added-column: true on it. To bring the leg back:
+A failure that is not restarted: UNFORWARDED-SCHEMA-CHANGE (v0.156.0+). A leg that stopped because its Postgres or MySQL/MariaDB binlog source took a constraint, row-level-security, policy or DEFAULT change the stream cannot carry (what that covers) is marked failed at once and logged at ERROR, naming the acknowledgement route; the other legs keep running. A restart could only refuse again — the refusal is recorded on the target — and this is the one refusal where a restart that somehow skipped the record would accept the change silently. Since v0.156.7, five more refusals are not restarted either (below); every other failure, other terminal errors included, is still restarted exactly as above. There is deliberately no syncs.yaml key for the acknowledgement, because standing config would pre-accept refusals. Since v0.156.1 the same applies to an interrupted added-column backfill, ADD-COLUMN-BACKFILL-INCOMPLETE (its message begins UNFORWARDED-SCHEMA-CHANGE: ADD-COLUMN-BACKFILL-INCOMPLETE:), which the supervisor treats identically — but for that one, step 1 below is different: there is no DDL to apply, so instead copy the added column's values from the source for the rows that predate the ADD COLUMN, keyed by primary key (or re-copy by passing --restart-from-scratch on the acknowledged start). Since v0.156.2 the supervisor's ERROR line leads with that repair for this refusal; on v0.156.1 it said "apply the change to the target" (Bug 289). Stopping a leg, or the fleet, while a backfill runs produces it, so wait for the leg's backfill complete line first. To opt a leg out of the backfill, set no-backfill-added-column: true on it. To bring the leg back:
 
 - Apply the same change to the target (the leg is already stopped).
 
@@ -44,6 +44,27 @@ The one failure that is not restarted: UNFORWARDED-SCHEMA-CHANGE (v0.156.0+). A 
 - Stop it with sluice sync stop --stream-id <id> … --wait.
 
 - Restart the fleet process. On Linux and macOS a SIGHUP also works: a reload starts a failed leg that is still in syncs.yaml.
+
+Five more refusals that are not restarted (v0.156.7+). A leg that stops on one of these is marked failed and is not restarted, whatever max-consecutive-failures says; the other legs keep running. Each is a condition every restart would hit again:
+
+- SLOT-ACKED-PAST-TARGET-POSITION: the slot and the persisted position are both durable, so a restart compares the same two values.
+
+- SHARDED-TARGET-VINDEX-UPDATE: the refused change is after the persisted position, so a restart re-delivers it.
+
+- APPLY-MARK-MISMATCH: the marks are durable, and a restart re-delivers the same transaction onto them.
+
+- CHARSET-NOT-DECODABLE: a restart reads the same value again.
+
+- DSN-TIME-ZONE-NOT-UTC: a restart parses the same DSN.
+
+The supervisor logs each at ERROR with a marker= attribute naming the refusal, so alert on failed legs and on that attribute. Before v0.156.7 these legs were restarted after backoff and refused again, indefinitely under the default max-consecutive-failures: 0, while the fleet looked healthy. Coded SLUICE-E-* refusals and other terminal errors are still restarted under the failure cap, because some clear without any change to the leg (for example SLUICE-E-CDC-REPLICATION-HEADROOM once another slot is freed).
+Apply the remedy the message names. The fleet config has no key for --restart-from-scratch or for the acknowledgement flags, so a remedy that needs one runs outside the fleet:
+
+- Remove the leg from syncs.yaml and reload the fleet (restart it, or SIGHUP on Linux and macOS). A reload starts every failed leg still in the config, so do not reload with the leg still listed until the fix is in.
+
+- Run that stream once with sync start, with the leg's own source, target and flags plus the remedy flag, for example --restart-from-scratch or --accept-slot-acked-past-position=<LSN>. Stop it with sluice sync stop --stream-id <id> … --wait once it is running cleanly.
+
+- Put the leg back in syncs.yaml and reload.
 
 ## Run the fleet
 

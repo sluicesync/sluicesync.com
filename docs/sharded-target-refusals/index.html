@@ -29,7 +29,7 @@
     <h1>What sluice refuses on a sharded target</h1>
     <p class="subtitle">Each refusal exists because a specific silent-corruption shape was measured on a live cluster. This page is the reasoning.</p>
     
-    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#upsert-key">The shard key is not in the key sluice conflicts on</a></li><li><a href="#placement">Routing and placement disagree</a></li><li><a href="#shard-key-update">A change would move a row between shards</a></li><li><a href="#blocked">A workflow has taken the table away</a></li><li><a href="#not-refused">What sluice does not protect you from</a></li></ul></nav>
+    <nav class="toc" aria-label="On this page"><p class="toc-label">On this page</p><ul><li><a href="#upsert-key">The shard key is not in the key sluice conflicts on</a></li><li><a href="#placement">Routing and placement disagree</a></li><li><a href="#shard-key-update">A change would move a row between shards</a></li><li><a href="#vindex-update">Vitess / PlanetScale MySQL: a write that assigns a primary-vindex column</a></li><li><a href="#blocked">A workflow has taken the table away</a></li><li><a href="#not-refused">What sluice does not protect you from</a></li></ul></nav>
     
 <p>sluice refuses several things on a sharded target that it accepts everywhere else. Each refusal exists because a specific way of losing or corrupting data was <strong>measured on a live cluster</strong> &mdash; not because sharded targets warrant extra caution in the abstract.</p>
 
@@ -74,6 +74,26 @@
 
 <p><strong>The fix:</strong> shard on a column your application does not update. If the change is a one-off, apply it on the source as a delete plus an insert, which sluice replicates as two changes that both route correctly.</p>
 
+<h2 id="vindex-update">Vitess / PlanetScale MySQL: a write that assigns a primary-vindex column <a class="hlink" href="#vindex-update" aria-label="Permalink to this section">#</a></h2>
+
+<p><code>SHARDED-TARGET-VINDEX-UPDATE</code> &mdash; the stream stops mid-apply, terminal (v0.156.7+).</p>
+
+<p>On a sharded Vitess or PlanetScale MySQL keyspace, vtgate refuses an <code>UPDATE</code> or <code>ON DUPLICATE KEY UPDATE</code> that assigns a table's primary-vindex column (<code>Error 1235</code>, <code>VT12001</code>). That keeps a row from being moved between shards, and nothing is written. Before v0.156.7 the stream stopped on the bare 1235. It now stops with this marker, the table and a remedy. The position stays where it was, and nothing is written silently.</p>
+
+<p>The marker exists because the refusal decides what you can sync into a keyspace you pre-created and vindexed yourself. The scope, measured on a 2-shard vttestserver (open item GC-41 (e)):</p>
+
+<ul>
+  <li><strong>Primary vindex on a column that is not the primary key:</strong> sluice's upserts and updates assign the vindex column, so vtgate refuses every row write and the stream stops on the first one. Not supported.</li>
+  <li><strong>Primary vindex on the primary key:</strong> inserts and deletes apply, and so do updates on the batched paths. An <code>UPDATE</code> sent by the per-change path is refused even when the key does not change, because it re-states the vindex column. That path covers <code>--apply-batch-size 1</code>, the broker and chain restore, a partial after-image (including the default-on <code>ADD COLUMN</code> backfill), an empty before-image, a keyless table, and any primary-key change.</li>
+  <li><strong>A change that really moves a row's vindex value</strong> (a primary-key change, or a new value in the vindex column) cannot be applied through vtgate at all.</li>
+</ul>
+
+<p>It is <strong>terminal</strong>. It carries no <code>SLUICE-E-*</code> code and exits <code>1</code>. A restart re-delivers the same change and refuses again, so under <a href="/docs/operate-fleet/#refusals-not-restarted"><code>sluice sync run</code></a> the leg is marked <code>failed</code> and not restarted.</p>
+
+<p>One shape vtgate does let through silently: <code>ON DUPLICATE KEY UPDATE col = VALUES(col)</code>, which it executes as an insert on the new shard and leaves the old row in place. That is a cross-shard duplicate at exit 0, measured on vttestserver. sluice never sends that spelling to a Vitess-family target (its upsert uses the row-alias form, which vtgate refuses loudly), and a test pins it.</p>
+
+<p><strong>The fix:</strong> for a change that moves a row's vindex value, delete the row on the target and re-copy it, or sync into an unsharded keyspace. An update refused only because it re-states an unchanged vindex column is a known over-refusal; lifting it is open work. The full scope is under <a href="/docs/planetscale-region-move/#sharded-preserve">sharded &rarr; sharded</a>.</p>
+
 <h2 id="blocked">A workflow has taken the table away <a class="hlink" href="#blocked" aria-label="Permalink to this section">#</a></h2>
 
 <p><code>SLUICE-E-TARGET-TABLE-BLOCKED-BY-WORKFLOW</code> &mdash; the stream halts.</p>
@@ -93,6 +113,7 @@
 <ul>
   <li><strong>Per-shard <code>UNIQUE</code> and <code>EXCLUDE</code> constraints.</strong> sluice copies your schema faithfully, and the platform enforces those constraints within a shard. sluice does not warn that a constraint means less than it says &mdash; see <a href="/docs/sharding-readiness-checklist/#unique">the readiness checklist</a> to find them yourself before migrating.</li>
   <li><strong>Cross-shard transaction semantics.</strong> Reads that span shards have no shared snapshot. That is a property of your queries after the migration, not of the copy.</li>
+  <li><strong>A commit torn between two data shards.</strong> On Vitess and PlanetScale MySQL, vtgate's default <code>transaction_mode=MULTI</code> commits a multi-shard transaction shard by shard with no two-phase commit. sluice orders its rows ahead of its control-table writes, which covers a tear between the data and the <a href="/docs/planetscale-region-move/#sharded-preserve">sidecar control keyspace</a>. A source transaction whose rows span two data shards can still tear between them, and that class is not covered (under triage).</li>
   <li><strong>Router-evaluated expression differences.</strong> Bulk copy moves stored values, which we measured byte-identical; computed results are an application concern.</li>
   <li><strong>Choosing the shard key.</strong> sluice checks that your schema is consistent with the key you chose. Whether it is a good key is a design question.</li>
 </ul>

@@ -79,7 +79,7 @@ This is the part that bites people. A logical slot is a primary-local object by 
 
 - Vanilla Postgres without HA: nothing to do — there's no failover — but still monitor slot health.
 
-The idle-slot trap. Even with all three mechanisms configured, a slot that hasn't advanced during the slot-sync window can still be lost on failover: the standby's copy stays at an old LSN, and promotion leaves it pointing at recycled WAL (wal_status='lost' on resume). The durable fix is to keep the slot advancing — run sync start continuously (its CDC reader sends a standby-status keepalive every 10s), and on quiet sources inject lightweight WAL. sluice has this built in.
+The idle-slot trap. Even with all three mechanisms configured, a slot that hasn't advanced during the slot-sync window can still be lost on failover: the standby's copy stays at an old LSN, and promotion leaves it pointing at recycled WAL (wal_status='lost' on resume). The durable fix is to keep the slot advancing — run sync start continuously (its CDC reader sends a standby-status keepalive every 10s), and on quiet sources inject lightweight WAL. sluice has a heartbeat for this (below), but on PostgreSQL 15+ it may not advance an idle slot; see the caveat there.
 
 ### Keeping an idle slot alive
 
@@ -92,6 +92,28 @@ Set --source-heartbeat-interval and sluice INSERTs a row into a source-owned tab
         --source-heartbeat-interval 30s
 
 It is opt-in (0, off, by default) because the INSERT is a behaviour change on the source that regulated systems must enable explicitly. The heartbeat table is auto-created and periodically pruned (--source-heartbeat-prune-window, default 1h); on a role without CREATE TABLE the streamer WARNs once and continues without it. Since v0.156.6 an owner can pre-create the table and grant the source role only INSERT and DELETE on it — plus, on Postgres, USAGE on its id sequence, which every heartbeat INSERT draws from; a missing sequence grant is named at startup (GRANT USAGE ON SEQUENCE) on the same WARN-and-continue path. Rename the table with --source-heartbeat-table-name, or silence the warning with --no-source-heartbeat.
+
+PostgreSQL 15+ idle sources: the heartbeat may not keep the slot advancing (unverified). The heartbeat table is outside the stream's publication, and PostgreSQL 15 and later skip empty transactions in pgoutput. So on an idle source no position may be decoded, and the slot likely retains WAL until the next change to a published table. PostgreSQL 14 and earlier are unaffected. This is filed as GC-41 (j) and has not been measured on a live server; v0.156.6 and earlier behaved the same. Until it is settled, size max_slot_wal_keep_size for the longest idle period you expect.
+
+## A slot acknowledged past the target's position is refused: SLOT-ACKED-PAST-TARGET-POSITION
+
+When a sync resumes, it starts from the position the target recorded in sluice_cdc_state. PostgreSQL decodes from the later of that position and the slot's confirmed_flush_lsn. So if the slot has been acknowledged past the target's position, every change committed in between is skipped and never reaches the target. Since v0.156.7 a warm resume compares the two first and refuses with SLOT-ACKED-PAST-TARGET-POSITION, naming the slot, both LSNs and the remedy. That covers single-schema and multi-schema resumes, and the resume that finishes a stopped cold start. The refusal carries no SLUICE-E-* code, so it exits 1, and it is not retried.
+
+How a slot gets there:
+
+- A stop on v0.156.6 or earlier of a Postgres → MySQL-family sync (MySQL, MariaDB, PlanetScale, Vitess). Those releases acknowledged the slot at the position the reader had streamed, ahead of the target's writes. A Ctrl-C, crash, kill or apply error that ended the run while changes sat in an apply batch left the slot past them. A graceful sync stop that drained its batch did not.
+
+- A target restored from a backup, or failed over to a replica, holding an older sluice_cdc_state row than the slot has been acknowledged to.
+
+- A slot dropped and recreated after the stream wrote its position. One example is a --restart-from-scratch interrupted before its copy finished, which leaves the old row next to a slot created at "now".
+
+A stream written by v0.156.7 or later does not trip it: the slot is only released to the position read back from the target, and that position never moves backward.
+
+What to do: re-copy with sluice sync start &hellip; --restart-from-scratch, or re-copy the affected tables. If you have verified the target already holds every change up to the slot's position (for instance, every change in the gap was to a table outside this stream's filter), start once with --accept-slot-acked-past-position=<confirmed_flush_lsn>, using the LSN the refusal prints. The stream then resumes and the gap is skipped. The flag is bound to that LSN, so a slot that has moved since refuses again. It is a command-line flag only, not a syncs.yaml key, so it cannot pre-accept a later refusal. One legitimate upgrade shape can also trip the check: a Postgres → Postgres stream last written by an older release whose final persisted position was a mid-transaction schema-change anchor. Its resume was lossless, and the acknowledgement is the right answer there.
+
+Check after upgrading. Upgrading stops new loss; it does not restore rows an older release already lost. A stream that already resumed on v0.156.6 or earlier after such a stop skipped its gap at that resume, and this check cannot see it any more, because the target has since persisted positions past the slot. For each Postgres → MySQL-family stream stopped by Ctrl-C, a crash, a kill or an apply error on one of those releases, compare pg_replication_slots.confirmed_flush_lsn with the LSN in the target's sluice_cdc_state.source_position before its first resume on v0.156.7. If the slot is past it, re-copy. For a stream that has already resumed, compare row counts per table (or run sluice verify) against the source, and re-copy what differs.
+
+Under sluice sync run, a leg that stops on this refusal is marked failed and not restarted.
 
 ## Slot health and telemetry
 
