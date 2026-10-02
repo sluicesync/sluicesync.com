@@ -45,7 +45,7 @@ A failure that is not restarted: UNFORWARDED-SCHEMA-CHANGE (v0.156.0+). A leg th
 
 - Restart the fleet process. On Linux and macOS a SIGHUP also works: a reload starts a failed leg that is still in syncs.yaml.
 
-Six more refusals that are not restarted (five since v0.156.7, the sixth since v0.156.8). A leg that stops on one of these is marked failed and is not restarted, whatever max-consecutive-failures says; the other legs keep running. Each is a condition every restart would hit again:
+Eight more refusals that are not restarted (five since v0.156.7, the sixth since v0.156.8, the last two since v0.156.9). A leg that stops on one of these is marked failed and is not restarted, whatever max-consecutive-failures says; the other legs keep running. Each is a condition every restart would hit again:
 
 - SLOT-ACKED-PAST-TARGET-POSITION: the slot and the persisted position are both durable, so a restart compares the same two values.
 
@@ -57,7 +57,11 @@ Six more refusals that are not restarted (five since v0.156.7, the sixth since v
 
 - DSN-TIME-ZONE-NOT-UTC: a restart parses the same DSN.
 
-- SLUICE-E-CDC-KEY-MATCHED-MULTIPLE-ROWS (marker KEY-SCOPED-WRITE-MATCHED-MULTIPLE-ROWS, v0.156.8+): the apply transaction is rolled back, so a restart replays the same source changes onto the same committed rows. It needs the re-copy the refusal names.
+- SLUICE-E-CDC-KEY-MATCHED-MULTIPLE-ROWS (marker KEY-SCOPED-WRITE-MATCHED-MULTIPLE-ROWS, v0.156.8+): the target transaction holding the change is rolled back, so a restart replays the same source changes onto the same committed rows. It needs the re-copy the refusal names.
+
+- CHANGE-LOG-WATERMARK-STALLED (v0.156.9+, postgres-trigger sources): a restart re-reads the same immutable change-log window through the same code. The halt means an unknown sluice bug, so whether every possible cause repeats is unverified; it is listed because restarting forever would turn the halt back into the silent stall it exists to end. Report it.
+
+- HEARTBEAT-TABLE-NOT-SLUICES (v0.156.9+): the existing source table under the heartbeat's name is still not sluice's. A fleet spec has no heartbeat key today, so no fleet leg reaches it yet; it is listed so one never restart-loops on it.
 
 The supervisor logs each at ERROR with a marker= attribute naming the refusal, so alert on failed legs and on that attribute. Before v0.156.7 the first five were restarted after backoff and refused again, indefinitely under the default max-consecutive-failures: 0, while the fleet looked healthy. Other coded SLUICE-E-* refusals and other terminal errors are still restarted under the failure cap, because some clear without any change to the leg (for example SLUICE-E-CDC-REPLICATION-HEADROOM once another slot is freed). DEFERRED-KEY-CHECK-FAILED-AT-COMMIT is deliberately among them: one of its causes depends on arrival timing, and a restart can clear it.
 Apply the remedy the message names. The fleet config has no key for --restart-from-scratch or for the acknowledgement flags, so a remedy that needs one runs outside the fleet:
