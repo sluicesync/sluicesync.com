@@ -146,6 +146,8 @@ Rather than firing an incremental from cron, run backup stream run as a long-liv
 
 Stop it with SIGTERM / SIGINT (drains the in-flight rollover and exits), or cross-machine with sluice backup stream stop --target <url>, which writes a stop request the running stream observes on its next rollover tick. To bound total disk without an external wrapper, in-process rotation caps the open segment at --retain-rotate-at <dur> and/or --retain-rotate-at-chain-length <n> and opens a fresh segment over the same CDC handle (ADR-0046); pair that with backup prune below.
 
+An idle Postgres source still commits windows (v0.156.8+). A backup stream or backup incremental from a Postgres source now captures the walsender's keepalive position as a transaction boundary whenever none of the source's transactions is open (two change records), so its slot follows the server's WAL while your tables are idle (why). The visible effect: for each rollover window in which the server wrote WAL, backup stream now commits one manifest plus one small change chunk, where on Postgres 15+ it used to skip the window as an empty rollover, and the window's end position advances. It is bounded by the throttle — at most one boundary pair per 10 s, so a window holds at most 2 × window / 10 s records — and adds nothing on a fully quiet server. Size retention and backup prune schedules accordingly. (Code-read, not benchmarked.)
+
 ## Retention: prune and compact
 
 Two explicit operator actions bound a chain's size and restore time. Neither runs automatically, and the chain root (full) is always preserved.
