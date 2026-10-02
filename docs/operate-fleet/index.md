@@ -45,7 +45,7 @@ A failure that is not restarted: UNFORWARDED-SCHEMA-CHANGE (v0.156.0+). A leg th
 
 - Restart the fleet process. On Linux and macOS a SIGHUP also works: a reload starts a failed leg that is still in syncs.yaml.
 
-Five more refusals that are not restarted (v0.156.7+). A leg that stops on one of these is marked failed and is not restarted, whatever max-consecutive-failures says; the other legs keep running. Each is a condition every restart would hit again:
+Six more refusals that are not restarted (five since v0.156.7, the sixth since v0.156.8). A leg that stops on one of these is marked failed and is not restarted, whatever max-consecutive-failures says; the other legs keep running. Each is a condition every restart would hit again:
 
 - SLOT-ACKED-PAST-TARGET-POSITION: the slot and the persisted position are both durable, so a restart compares the same two values.
 
@@ -57,7 +57,9 @@ Five more refusals that are not restarted (v0.156.7+). A leg that stops on one o
 
 - DSN-TIME-ZONE-NOT-UTC: a restart parses the same DSN.
 
-The supervisor logs each at ERROR with a marker= attribute naming the refusal, so alert on failed legs and on that attribute. Before v0.156.7 these legs were restarted after backoff and refused again, indefinitely under the default max-consecutive-failures: 0, while the fleet looked healthy. Coded SLUICE-E-* refusals and other terminal errors are still restarted under the failure cap, because some clear without any change to the leg (for example SLUICE-E-CDC-REPLICATION-HEADROOM once another slot is freed).
+- SLUICE-E-CDC-KEY-MATCHED-MULTIPLE-ROWS (marker KEY-SCOPED-WRITE-MATCHED-MULTIPLE-ROWS, v0.156.8+): the apply transaction is rolled back, so a restart replays the same source changes onto the same committed rows. It needs the re-copy the refusal names.
+
+The supervisor logs each at ERROR with a marker= attribute naming the refusal, so alert on failed legs and on that attribute. Before v0.156.7 the first five were restarted after backoff and refused again, indefinitely under the default max-consecutive-failures: 0, while the fleet looked healthy. Other coded SLUICE-E-* refusals and other terminal errors are still restarted under the failure cap, because some clear without any change to the leg (for example SLUICE-E-CDC-REPLICATION-HEADROOM once another slot is freed). DEFERRED-KEY-CHECK-FAILED-AT-COMMIT is deliberately among them: one of its causes depends on arrival timing, and a restart can clear it.
 Apply the remedy the message names. The fleet config has no key for --restart-from-scratch or for the acknowledgement flags, so a remedy that needs one runs outside the fleet:
 
 - Remove the leg from syncs.yaml and reload the fleet (restart it, or SIGHUP on Linux and macOS). A reload starts every failed leg still in the config, so do not reload with the leg still listed until the fix is in.
