@@ -25,6 +25,14 @@ There is no third spelling, which is why this is a refusal rather than a degrada
 
 The fix: put the shard key in the primary key. That is the standard advice for a sharded schema anyway, and it makes the shard key unchangeable for a given key.
 
+### On Vitess / PlanetScale MySQL: a vindex column outside the primary key (v0.156.9+)
+
+On a sharded Vitess or PlanetScale MySQL keyspace the same pair holds for a vindex column outside the primary key (GC-41 (e)). vtgate refuses an ON DUPLICATE KEY UPDATE that assigns any vindex column (VT12001: DML cannot update vindex column, measured on vttestserver), and the spellings it accepts &mdash; leaving the column out, or col = VALUES(col) &mdash; insert a moved row on its new shard beside the original. So there is no write sluice can send.
+
+A sync cold start, and its stopped-copy resume, read each in-scope table's vindexes (SHOW VSCHEMA VINDEXES ON) and refuse with the same code before anything is written, naming the table and the column. A table with no primary key fails on every vindex column. A table whose vschema or key cannot be read is passed with a WARN, because vtgate then refuses the offending write itself (SHARDED-TARGET-VINDEX-UPDATE). A warm restart of an existing stream runs no such preflight and still stops at the first refused write. Through v0.156.8 every such stream also failed, but only at its first row.
+
+The fix on Vitess / PlanetScale: make the primary key contain every vindex column, or move the primary vindex onto the primary key. A UNIQUE index does not help there, because the MySQL CDC applier's upsert leaves only primary-key columns out of its update list. Scope of what then applies: sharded → sharded.
+
 ## Routing and placement disagree
 
 SLUICE-E-TARGET-SHARD-PLACEMENT-MISMATCH &mdash; refused before any data moves.
@@ -51,19 +59,21 @@ SHARDED-TARGET-VINDEX-UPDATE &mdash; the stream stops mid-apply, terminal (v0.15
 
 On a sharded Vitess or PlanetScale MySQL keyspace, vtgate refuses an UPDATE or ON DUPLICATE KEY UPDATE that assigns a table's primary-vindex column (Error 1235, VT12001). That keeps a row from being moved between shards, and nothing is written. Before v0.156.7 the stream stopped on the bare 1235. It now stops with this marker, the table and a remedy. The position stays where it was, and nothing is written silently.
 
-The marker exists because the refusal decides what you can sync into a keyspace you pre-created and vindexed yourself. The scope, measured on a 2-shard vttestserver (open item GC-41 (e)):
+The marker exists because the refusal decides what you can sync into a keyspace you pre-created and vindexed yourself. The scope, measured on a 2-shard vttestserver (GC-41 (e)):
 
-- Primary vindex on a column that is not the primary key: sluice's upserts and updates assign the vindex column, so vtgate refuses every row write and the stream stops on the first one. Not supported.
+- Every vindex column inside the primary key: inserts, updates and deletes apply on every apply path, the per-change path included (--apply-batch-size 1, the broker and chain restore, a partial after-image including the default-on ADD COLUMN backfill, a primary-key change that keeps the vindex value). Since v0.156.9 the per-change UPDATE leaves a key column whose value did not change out of its SET list, the shape the batched path has always sent; &ldquo;did not change&rdquo; is compared bit-exactly, so a DOUBLE/FLOAT key moving between 0 and -0 is still sent. Through v0.156.8 every such update stopped the stream here, even with the key unchanged.
 
-- Primary vindex on the primary key: inserts and deletes apply, and so do updates on the batched paths. An UPDATE sent by the per-change path is refused even when the key does not change, because it re-states the vindex column. That path covers --apply-batch-size 1, the broker and chain restore, a partial after-image (including the default-on ADD COLUMN backfill), an empty before-image, a keyless table, and any primary-key change.
+- A vindex column outside the primary key, or a table with no primary key: no write sluice can send works. Since v0.156.9 a sync cold start refuses it up front with SLUICE-E-TARGET-SHARD-KEY-NOT-IN-UPSERT-KEY; a warm restart of an existing stream, or a vschema the role cannot read, still stops here at the first refused write.
 
-- A change that really moves a row's vindex value (a primary-key change, or a new value in the vindex column) cannot be applied through vtgate at all.
+- A change that really moves a row's vindex value (a change to a vindexed primary-key column, or a new value in a vindex column) cannot be applied through vtgate at all.
+
+- Two narrow shapes are still refused at write time with the vindex in the key: an insert into a table whose every column is in the primary key when the first key column is a vindex column, and an UPDATE whose after-image holds only unchanged key columns. Both are filed.
 
 It is terminal. It carries no SLUICE-E-* code and exits 1. A restart re-delivers the same change and refuses again, so under sluice sync run the leg is marked failed and not restarted.
 
 One shape vtgate does let through silently: ON DUPLICATE KEY UPDATE col = VALUES(col), which it executes as an insert on the new shard and leaves the old row in place. That is a cross-shard duplicate at exit 0, measured on vttestserver. sluice never sends that spelling to a Vitess-family target (its upsert uses the row-alias form, which vtgate refuses loudly), and a test pins it.
 
-The fix: for a change that moves a row's vindex value, delete the row on the target and re-copy it, or sync into an unsharded keyspace. An update refused only because it re-states an unchanged vindex column is a known over-refusal; lifting it is open work. The full scope is under sharded → sharded.
+The fix: for a change that moves a row's vindex value, delete the row on the target and re-copy it, or sync into an unsharded keyspace. For a vindex column outside the primary key, put it in the primary key. A stream that stopped here on an earlier release for an UPDATE that did not change the key can be restarted on v0.156.9. The full scope is under sharded → sharded.
 
 ## A workflow has taken the table away
 
