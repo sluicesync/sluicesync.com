@@ -79,7 +79,7 @@ One sync start, both ends the plain postgres driver. This is a standing sync —
         --notify-sync-lag-seconds 60 \
         --metrics-listen :9101
 
-- --schema-changes forward (the default since v0.99.45, shown explicitly here because it's load-bearing): unambiguous source DDL — column adds, drops, type changes — is applied on the analytics copy automatically, so the replica tracks schema evolution without operator intervention. The conservative alternative is --schema-changes refuse: any source DDL then surfaces loudly and you apply it to the target through your own change process. See Schema changes during a sync — including its honest per-shape matrix, which matters here (caveats).
+- --schema-changes forward (the default since v0.99.45, shown explicitly here because it's load-bearing): unambiguous source DDL — column adds, drops, type changes — is applied on the analytics copy automatically, so the replica tracks schema evolution without operator intervention. The conservative alternative is --schema-changes refuse: the stream forwards nothing and checks each schema boundary against the target, stopping with SCHEMA-CHANGE-REFUSED at a change the target cannot hold until you apply it there through your own change process. See Schema changes during a sync — including its honest per-shape matrix, which matters here (caveats).
 
 - --notify-sync-lag-seconds 60 alerts your webhook/Slack sink when sluice's own apply lag (sluice_sync_lag_seconds) reaches a minute. This threshold is ungated — it needs only a sink, no PlanetScale telemetry credentials.
 
