@@ -56,7 +56,7 @@ Microsoft.DBforPostgreSQL provider registration is a one-time subscription step,
 
 A cleanly stopped sluice stream leaves its (resumable) replication slot in place; when you're done for good, drop it — an abandoned slot retains WAL and will eventually fill the instance disk:
 
-    sluice slot drop --yes <slot>
+    sluice slot drop <slot> --source-driver postgres --source 'postgres://...' --yes
 
 ## What sluice checks for you
 

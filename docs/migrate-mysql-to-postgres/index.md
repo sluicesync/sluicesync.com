@@ -69,7 +69,7 @@ sluice forces a strict sql_mode on every MySQL connection to close the silent-cl
 
 - --zero-date=null carries zero/partial dates as NULL (refused on a NOT NULL column), or --zero-date=epoch substitutes 1970-01-01.
 
-- --mysql-sql-mode='' (explicit empty) falls all the way through to the server's default sql_mode for the broadest legacy tolerance.
+- --mysql-sql-mode='' (explicit empty) falls through to the server's default sql_mode for the broadest legacy tolerance — plus NO_AUTO_VALUE_ON_ZERO, which sluice adds to the live session and reads back on every MySQL connection whatever the mode (v0.156.11+; a server that refuses it is refused with NO-AUTO-VALUE-ON-ZERO-UNSET).
 
 Both are global flags — see Configuration for the full discussion.
 

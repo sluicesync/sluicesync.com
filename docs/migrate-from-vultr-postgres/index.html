@@ -59,7 +59,7 @@
 <p>Prefer the direct port anyway: a pool sized N permanently holds N of the plan's small connection budget (22 on the cheapest plan). Note that sluice's pooler-host WARN does <em>not</em> fire here — the pool hostname equals the primary's, only the port differs — which on Vultr is harmless, but it also means &ldquo;no WARN&rdquo; is not evidence of &ldquo;not a pooler&rdquo; on this provider.</p>
 
 <h2 id="decommissioning">Decommissioning <a class="hlink" href="#decommissioning" aria-label="Permalink to this section">#</a></h2>
-<p>A cleanly stopped sluice stream leaves its (resumable) replication slot in place; when done for good, <code>sluice slot drop --yes &lt;slot&gt;</code> — an abandoned slot retains WAL against the instance disk. (<code>pghoard_local</code> stays; see above.)</p>
+<p>A cleanly stopped sluice stream leaves its (resumable) replication slot in place; when done for good, <code>sluice slot drop &lt;slot&gt; --source-driver postgres --source 'postgres://...' --yes</code> — an abandoned slot retains WAL against the instance disk. (<code>pghoard_local</code> stays; see above.)</p>
 
 <h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
 <ul>

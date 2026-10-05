@@ -78,7 +78,7 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=requir
 <p>sluice forces a strict <code>sql_mode</code> on every MySQL connection to close the silent-clamp / silent-zero-date class of corruption. Data that was only storable under a relaxed mode — pre-5.7 zero-dates (<code>0000-00-00</code>), silently-truncated values — will <strong>refuse loudly</strong> rather than land subtly wrong. That's deliberate. Two knobs let you decide how to carry it:</p>
 <ul>
   <li><code>--zero-date=null</code> carries zero/partial dates as <code>NULL</code> (refused on a <code>NOT NULL</code> column), or <code>--zero-date=epoch</code> substitutes <code>1970-01-01</code>.</li>
-  <li><code>--mysql-sql-mode=''</code> (explicit empty) falls all the way through to the server's default <code>sql_mode</code> for the broadest legacy tolerance.</li>
+  <li><code>--mysql-sql-mode=''</code> (explicit empty) falls through to the server's default <code>sql_mode</code> for the broadest legacy tolerance — plus <code>NO_AUTO_VALUE_ON_ZERO</code>, which sluice adds to the live session and reads back on every MySQL connection whatever the mode (v0.156.11+; a server that refuses it is refused with <code>NO-AUTO-VALUE-ON-ZERO-UNSET</code>).</li>
 </ul>
 <p>Both are <a href="/docs/configuration/#global-flags">global flags</a> — see Configuration for the full discussion.</p>
 

@@ -103,7 +103,7 @@ The two families differ in trigger naming: postgres-trigger uses one combined tr
 
 Command · Removes ·
 
-sluice slot drop <name> · The PG source replication slot (the one object sluice never drops on its own). ·
+sluice slot drop <name> --source-driver postgres --source … --yes · The PG source replication slot (the one object sluice never drops on its own). ·
 
 sluice trigger teardown · Every trigger-engine object on the source; --keep-data retains the change-log. ·
 

@@ -46,7 +46,33 @@ On the consumer side, point the broker at the same chain. It reads the chain's c
         --apply-concurrency 4 \
         --poll-interval 10s
 
---apply-concurrency matters for cross-region targets. Each incremental's merged change stream is fanned across W in-order PK-hash lanes (same key → same lane → applied in source order), each committing concurrently on its own connection. Without it, a large incremental replayed into a high-latency target applies through a single RTT-bound stream and the broker falls behind. 0 (default) = auto:4; 1 = explicit serial; W>1 honored. Exactly-once is preserved — every change in an incremental carries the same chain position, so the lanes persist the identical resume position the serial path would.
+--apply-concurrency matters for cross-region targets. Each incremental's merged change stream is fanned across W in-order PK-hash lanes (same key → same lane → applied in source order), each committing concurrently on its own connection. Without it, a large incremental replayed into a high-latency target applies through a single RTT-bound stream and the broker falls behind. 0 (default) = auto:4; 1 = explicit serial; W>1 honored. The lanes persist the same position as serial apply — every change in an incremental carries the same chain position. Replay itself is at-least-once in both modes: an interrupted incremental is re-applied whole and converges by key (next section).
+
+## Replay safety: keyless tables are refused (v0.156.11+)
+
+v0.156.11 — who should check. Upgrading stops new duplication and renumbering; it does not repair rows already affected.
+
+- sync from-backup brokers on v0.99.222 through v0.156.10 that were ever interrupted (an error, a crash, a supervisor restart, a SIGINT or SIGTERM, q/ctrl+c), over a chain carrying a table with no PRIMARY KEY and no NOT NULL UNIQUE index, or into a target table keyed only on a surrogate: the interrupted incremental was re-applied whole and its committed rows duplicated at exit 0. Run sluice verify --depth count against the backup's source database and the target; a target count above the source's on such a table is duplicated rows. After the upgrade the broker refuses those tables, so key them on the source and take a new full backup, or move them to sluice sync start — then rebuild or de-duplicate the target table.
+
+- Brokers on v0.20.0 through v0.99.221 that were ever interrupted mid-incremental: the interruption was recorded as applied and the rest of the incremental skipped, in any table. Run sluice verify --depth count and re-copy any table whose target count is below the source's.
+
+- Anyone who re-ran a restore onto the same target after a failed attempt, on any release through v0.156.10, where the backup carried a keyless table or the target table was keyed only on a surrogate. Compare those tables' row counts with the source.
+
+- Cold copies into a pre-created, surrogate-keyed target (MySQL family on v0.99.92+, Postgres on v0.99.111+) whose log contains hit a transient target error: the re-sent batch could land twice. Compare that table's row count with the source. Such a copy now refuses with SLUICE-E-COPY-RETRY-AMBIGUOUS-KEYLESS instead of retrying.
+
+- MySQL, MariaDB, Vitess and PlanetScale MySQL targets that received an AUTO_INCREMENT value of 0, on every release through v0.156.10 — a source row whose MySQL AUTO_INCREMENT column, or Postgres bigserial / identity column, held 0 landed under the next generated value at exit 0, on every write path into a MySQL-family target. On the source, list the rows with 0 in that column; if the target has no row with 0 there, find the row by its other columns and correct its key. A sharded keyspace whose column is filled by a vtgate sequence still replaces 0 after the upgrade, so avoid carrying 0 into one.
+
+The broker stamps every change of an incremental with the position of the incremental before it, and advances its position only once the whole incremental has applied. Those changes carry no apply identity, so the exactly-once apply marks sync start uses cannot skip any of them: an interruption partway through an incremental — an apply error, a chunk that failed to fetch, a crash, a SIGINT or SIGTERM, a supervisor restart — makes the next run re-apply all of it. A table keyed by a PRIMARY KEY or NOT NULL UNIQUE index made of columns the replayed rows carry absorbs that, because the re-applied INSERT upserts on the key. A table with neither would gain a duplicate of every row the interrupted run had committed, and so would a target table keyed only on a surrogate the rows do not carry (bigserial, identity, DEFAULT gen_random_uuid(), MySQL AUTO_INCREMENT or a DEFAULT-expression key), because every re-applied row draws a fresh key value and collides with nothing.
+
+So the broker refuses with SLUICE-E-BROKER-KEYLESS-TABLE (exit 3, no override) before it applies anything when any table the chain records has no such key: on warm resume, before an --at-chain-id position write, before a --reset-target-data drop, and before each tick that brings a table not yet judged (a table already judged is judged again before any incremental whose schema change alters its definition). The broker has no table filter, so every table in the chain is in scope. Each table is judged twice, and the message says which judgment failed:
+
+- The chain's recorded schema — what the source declared: a PRIMARY KEY or a NOT NULL UNIQUE index. A partial UNIQUE index does not count, since a replayed row outside its predicate collides with nothing.
+
+- The live target table — whether a re-written row actually collides. On Postgres, the ON CONFLICT arbiter the applier itself picks (the PRIMARY KEY before any UNIQUE index) must be made entirely of columns the rows supply, so a supplied UNIQUE index beside an unsupplied surrogate primary key does not count. On the MySQL family, some PRIMARY KEY or UNIQUE index of NOT NULL, non-generated columns must be fully supplied. On a multi-shard Vitess or PlanetScale keyspace, every primary-vindex column must also be supplied, because a key there is enforced per shard and a re-sent row without its routing column lands on another shard; the probe reads the keyspace's shards and the table's primary vindex (SHOW VSCHEMA VINDEXES ON) and fails closed if the target credentials cannot run them (measured on vttestserver; whether PlanetScale's restricted roles allow these reads is unverified). A generated key column never counts as supplied. A view, foreign table or materialized view under a chain table's name on a Postgres target is refused too.
+
+The remedy is a key on the source and a new full backup, so the chain's recorded schema carries it (then start on the new chain with --reset-target-data, or --at-chain-id after restoring it yourself); for a table keyless only on the target, give the target table the source's key rather than a surrogate; or replicate those tables with sync start instead. Exactly-once broker replay — an apply identity per change, so the marks can skip what already landed — is the open follow-up that will lift this refusal.
+
+A key-changing incremental does not converge on a re-run. Even on a keyed table, re-applying a whole incremental converges only for inserts, and for updates and deletes that keep each row's key. An incremental that changed a row's key value re-inserts a row the interrupted run had already moved, and the move then collides with the moved copy, so the re-run fails on a duplicate key (MySQL 1062 / Postgres 23505) on every attempt — in the lane apply mode, possibly after committing part of the incremental. And when a key value was moved off one row and onto another inside the incremental, the re-run can apply a change to the wrong row with no error at all. If your source changes key values, recover an interrupted incremental with --reset-target-data, not by re-running.
 
 ## 3. Cold-start vs warm-resume
 
@@ -75,7 +101,17 @@ Stop the broker by writing a stop signal to the chain destination — the runnin
 
     sluice sync from-backup stop --backup-target s3://my-bucket/app-chain
 
-The broker follows segment-rotation seams automatically and is restart-resilient on both sides — its idempotent applier absorbs any overlap on resume. Two consumers must use distinct --stream-ids for distinct targets, or they'll race on position writes. To rest the chain encrypted, the broker accepts the same encryption flags as the rest of the backup family — see the backup reference.
+Exit codes on stop and cancel (v0.156.11+). sluice sync from-backup stop is observed only between ticks, so it never interrupts an incremental and the broker exits 0; use it to stop a broker deliberately. A SIGINT or SIGTERM — or q/ctrl+c on the live panel — cancels immediately:
+
+- Between incrementals or between ticks — nothing of an unadvanced incremental was applied; exit 0.
+
+- While an incremental is being applied — part of it may be committed and the position was not advanced, so the run returns an error carrying BROKER-INCREMENTAL-PARTIAL (exit 1) naming the incremental. Re-running the same command re-applies all of it, which converges only if the incremental changed no key value (see above); a source that changes key values recovers with --reset-target-data.
+
+- During a --reset-target-data cold start, once its drop has begun — the target holds a partial restore and no position, so it returns BROKER-COLD-START-PARTIAL (exit 1). Re-run with --reset-target-data; never start that target with --at-chain-id.
+
+Through v0.156.10 both of the latter exited 0 and the panel printed "stopped." — supervisors that treat a cancel's exit status as success should expect the change.
+
+The broker follows segment-rotation seams automatically and resumes from its persisted position after a restart on either side, re-applying an interrupted incremental whole (see replay safety). Two consumers must use distinct --stream-ids for distinct targets, or they'll race on position writes. To rest the chain encrypted, the broker accepts the same encryption flags as the rest of the backup family — see the backup reference.
 
 ---
 Canonical page: https://sluicesync.com/docs/from-backup-sync/ · Full docs index: https://sluicesync.com/llms.txt

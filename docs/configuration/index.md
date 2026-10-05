@@ -94,7 +94,7 @@ Flag · Default · Purpose ·
 
 --pprof-listen · off · Bind net/http/pprof at an address to diagnose stalls (e.g. :6060). Fetch /debug/pprof/goroutine?debug=2 to dump every goroutine's stack — the first move on a silent stall. ·
 
---mysql-sql-mode · strict · Override sluice's forced strict sql_mode. Pass '' (empty) to migrate legacy MySQL data with zero-dates. ·
+--mysql-sql-mode · strict · Override sluice's forced strict sql_mode. Pass '' (empty) to migrate legacy MySQL data with zero-dates, or a comma-separated mode list to force those modes. Whatever the mode, sluice always adds NO_AUTO_VALUE_ON_ZERO (v0.156.11+), without which MySQL rewrites a carried AUTO_INCREMENT value of 0 — so neither this flag nor a DSN sql_mode sets exactly the listed modes any more. A server or proxy that will not accept it is refused with NO-AUTO-VALUE-ON-ZERO-UNSET. ·
 
 --zero-date · error · How to carry MySQL zero / partial dates (0000-00-00, YYYY-00-DD, YYYY-MM-00): error refuses loudly naming the column; null carries them as NULL (itself refused on a NOT NULL column); epoch substitutes 1970-01-01. A silent-loss-class control — the default is the safe one. ·
 
@@ -108,7 +108,7 @@ Flag · Default · Purpose ·
 
 --skill · &mdash; · Print an installable agent skill file (YAML frontmatter + the AGENTS.md agent guide) and exit &mdash; write it into a skills directory for trigger-based loading. sluice agent-guide prints the bare guide. ·
 
-Migrating legacy MySQL data? sluice forces a strict sql_mode on every MySQL connection to close the silent-clamp / silent-zero-date class. Data that was only accepted under a relaxed mode (pre-5.7 zero-dates, silently-truncated values) will refuse loudly — pass --mysql-sql-mode='' to fall through to the server default. Zero / partial dates specifically are governed by --zero-date (default error): use --zero-date=null to carry them as NULL or --zero-date=epoch to substitute 1970-01-01 rather than refusing. A DSN time_zone parameter other than UTC, or any GLOBAL spelling, is refused at connect (DSN-TIME-ZONE-NOT-UTC, v0.156.5) — through v0.156.4 it silently shifted every TIMESTAMP sluice copied or wrote.
+Migrating legacy MySQL data? sluice forces a strict sql_mode on every MySQL connection to close the silent-clamp / silent-zero-date class. Data that was only accepted under a relaxed mode (pre-5.7 zero-dates, silently-truncated values) will refuse loudly — pass --mysql-sql-mode='' to fall through to the server default. Zero / partial dates specifically are governed by --zero-date (default error): use --zero-date=null to carry them as NULL or --zero-date=epoch to substitute 1970-01-01 rather than refusing. A DSN time_zone parameter other than UTC, or any GLOBAL spelling, is refused at connect (DSN-TIME-ZONE-NOT-UTC, v0.156.5) — through v0.156.4 it silently shifted every TIMESTAMP sluice copied or wrote. NO_AUTO_VALUE_ON_ZERO is always added to the session mode (v0.156.11): on every release through v0.156.10 a carried AUTO_INCREMENT value of 0 landed on a MySQL-family target under the next generated value — see who should check.
 
 ## Source-DSN tuning parameters
 
