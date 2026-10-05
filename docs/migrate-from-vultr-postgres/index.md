@@ -41,7 +41,7 @@ Prefer the direct port anyway: a pool sized N permanently holds N of the plan's 
 
 ## Decommissioning
 
-A cleanly stopped sluice stream leaves its (resumable) replication slot in place; when done for good, sluice slot drop --yes <slot> — an abandoned slot retains WAL against the instance disk. (pghoard_local stays; see above.)
+A cleanly stopped sluice stream leaves its (resumable) replication slot in place; when done for good, sluice slot drop <slot> --source-driver postgres --source 'postgres://...' --yes — an abandoned slot retains WAL against the instance disk. (pghoard_local stays; see above.)
 
 ## What sluice checks for you
 

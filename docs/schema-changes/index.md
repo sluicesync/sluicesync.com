@@ -258,7 +258,7 @@ Loud, no data loss (GC-44 F24); the marker and the recovery text are new in v0.1
 
 - A type widening on a stream over a single database and schema, without --inject-shard-column: start once with --schema-changes=forward, then return to refuse. This is the only change a forward start passes (GC-44 F26: a DROP COLUMN or RENAME COLUMN wedge cannot pass it).
 
-- Any other change, or a multi-database or multi-schema stream: drop the stream's replication slot with sluice slot drop <slot> --yes (the literal name sluice slot list prints), then start once with --restart-from-scratch, which re-copies every table in scope from a fresh snapshot past that transaction.
+- Any other change, or a multi-database or multi-schema stream: drop the stream's replication slot with sluice slot drop <slot> --source-driver=postgres --source <source DSN> --yes (the literal name sluice slot list prints), then start once with --restart-from-scratch, which re-copies every table in scope from a fresh snapshot past that transaction.
 
 - --inject-shard-column: the target tables hold the sibling shards' rows too. First delete this shard's rows from each in-scope target table (DELETE FROM <schema>.<table> WHERE <shard column> = '<this shard's value>'), then drop the slot, then start once with --restart-from-scratch. Never use --reset-target-data here: it drops every sibling shard's rows.
 

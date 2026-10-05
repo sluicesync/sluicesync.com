@@ -94,7 +94,7 @@
 
 <h2 id="cleanup">Cleanup quick reference <a class="hlink" href="#cleanup" aria-label="Permalink to this section">#</a></h2>
 <div class="table-scroll"><table><thead><tr><th>Command</th><th>Removes</th></tr></thead><tbody>
-<tr><td><code>sluice slot drop &lt;name&gt;</code></td><td class="desc">The PG source replication slot (the one object sluice never drops on its own).</td></tr>
+<tr><td><code>sluice slot drop &lt;name&gt; --source-driver postgres --source … --yes</code></td><td class="desc">The PG source replication slot (the one object sluice never drops on its own).</td></tr>
 <tr><td><code>sluice trigger teardown</code></td><td class="desc">Every trigger-engine object on the source; <code>--keep-data</code> retains the change-log.</td></tr>
 <tr><td><code>sluice trigger prune</code> / <code>backup prune</code></td><td class="desc">Old change-log rows / below-floor <code>sluice_cdc_schema_history</code> rows (the tables stay).</td></tr>
 <tr><td><code>sluice sync start --reset-target-data</code></td><td class="desc">The target bookkeeping state + every source-schema table sluice manages on the target (destructive recovery).</td></tr>

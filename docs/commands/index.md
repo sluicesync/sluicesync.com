@@ -497,7 +497,7 @@ Flag · Purpose ·
 
 --stream-id · Required. The key the broker's chain-state position is persisted under on the target — needed for clean restart resume. ·
 
---apply-concurrency · Key-hash concurrent-apply lane count W for incremental replay (the same machinery sync start uses). 0 (default) = auto:4; 1 = serial; W>1 honored. Matters for high-latency / cross-region targets — without it a large incremental replays through a single RTT-bound stream. Exactly-once preserved. ·
+--apply-concurrency · Key-hash concurrent-apply lane count W for incremental replay (the same machinery sync start uses). 0 (default) = auto:4; 1 = serial; W>1 honored. Matters for high-latency / cross-region targets — without it a large incremental replays through a single RTT-bound stream. The lanes persist the same position as serial apply: every change in an incremental carries the same broker chain position. Replay itself stays at-least-once either way — an interrupted incremental is re-applied whole and converges by key (see replay safety). ·
 
 --reset-target-data · Cold-start recovery: drop target tables, run a chain restore (full + every incremental), then transition to live polling. At a terminal it prompts for a typed reset unless --yes; on a non-terminal stdin it refuses SLUICE-E-CONFIRMATION-REQUIRED (exit 3) before touching either database — see confirmation and --yes. Mutually exclusive with --at-chain-id. ·
 
@@ -505,9 +505,11 @@ Flag · Purpose ·
 
 --poll-interval · Cadence each broker tick runs at (default 30s); new incrementals are applied within ~one interval of their source-side commit. ·
 
---apply-batch-size · CDC changes per target transaction during replay (default 100). Idempotent applier semantics keep replay-on-crash safe. ·
+--apply-batch-size · CDC changes per target transaction during incremental replay (default 100). An interrupted incremental is re-applied whole on the next run, which converges only on keyed tables, so tables with no PRIMARY KEY or NOT NULL UNIQUE index are refused (SLUICE-E-BROKER-KEYLESS-TABLE). ·
 
 --max-buffer-bytes · Soft cap on per-batch buffered memory in the CDC applier. Default 67108864 (64 MiB). ·
+
+  Keyless tables are refused (v0.156.11+). An interrupted incremental is re-applied whole on the next run, so the broker refuses before applying anything — SLUICE-E-BROKER-KEYLESS-TABLE, exit 3, no override — when a chain table has no PRIMARY KEY or NOT NULL UNIQUE index, or the target table is keyed only on a surrogate the rows do not carry. A cancel mid-incremental exits 1 with BROKER-INCREMENTAL-PARTIAL, and one during a --reset-target-data cold start after its drop exits 1 with BROKER-COLD-START-PARTIAL; sync from-backup stop and a cancel between ticks exit 0. See replay safety.
 
   The full walkthrough — producing the chain, cold-start vs warm-resume, stopping — is in the backup-chain sync guide.
 
@@ -669,7 +671,9 @@ Flag · Purpose ·
 
 --bulk-parallelism · Within-table chunk parallelism — a single table's chunks applied concurrently (ADR-0112). 0 = auto: min(8, NumCPU); 1 = serial. Engages only for tables with ≥2 chunks; multiplies with --table-parallelism (table × chunk), with the product bounded by the target connection budget. Applies to chain restores too. ·
 
---apply-concurrency · Key-hash concurrent-apply lane count for the incremental-replay leg of a chain restore (ADR-0104/0105). The full-restore row load is the bulk COPY (governed by the two parallelism flags above); a chain's incremental change-replay would otherwise run through a single serial stream and stall RTT-bound on a high-latency / cross-region target. 0 (default) = auto:4; 1 = serial; W>1 honored. Exactly-once preserved. No effect on a single-full restore. ·
+--apply-concurrency · Key-hash concurrent-apply lane count for the incremental-replay leg of a chain restore (ADR-0104/0105). The full-restore row load is the bulk COPY (governed by the two parallelism flags above); a chain's incremental change-replay would otherwise run through a single serial stream and stall RTT-bound on a high-latency / cross-region target. 0 (default) = auto:4; 1 = serial; W>1 honored. The lanes persist the same position as serial apply (every change carries the segment's chain position). No effect on a single-full restore. ·
+
+--include-table / --exclude-table · Restore only these tables, or every table except these (comma-separated, repeatable; glob patterns allowed). Mutually exclusive. Tables out of scope are never examined, including by the keyless-table door below. ·
 
 --target-schema · Postgres-only: land restored tables under a named schema namespace. ·
 
@@ -685,6 +689,8 @@ Flag · Purpose ·
 
     sluice restore --from s3://my-bucket/app-chain \
         --target-driver postgres --target ...
+
+   Re-running a failed restore: empty what it loaded first (v0.156.11+). restore appends — the full's bulk load and the incrementals' INSERTs land next to whatever the target already holds — so re-running one that failed partway onto the same target writes everything the earlier attempt wrote a second time. A keyed table then fails loudly on its key. A keyless table (no PRIMARY KEY and no NOT NULL UNIQUE index), or a target table keyed only on a serial, identity or defaulted surrogate the backup's rows do not carry, used to hold two copies of every row silently, on every release through v0.156.10. Now an in-scope table (after --include-table / --exclude-table) that is keyless on either judgment and already holds rows is refused before anything is written, with SLUICE-E-RESTORE-KEYLESS-TABLE-NOT-EMPTY (exit 3, no override) — on Postgres, the MySQL family and SQLite targets. An empty table restores normally, so restoring into a fresh target, into empty pre-created tables, or into a database holding other data is unaffected. restore has no --reset-target-data: after a failed restore, empty (TRUNCATE) or drop every table it loaded — not only the named ones, since a keyed table it loaded fails the re-run on its key — then re-run; or exclude the named tables with --exclude-table. If you ever re-ran a restore onto the same target after a failed attempt, compare those tables' row counts with the source (sluice verify --depth count).
 
    Pair with sync start --position-from-manifest URL — point it at the chain URL whose terminal manifest's EndPosition becomes the stream's resume position, so CDC picks up from the chain's tail without re-bulking. If that EndPosition is empty — an incremental whose window captured nothing ends where it began — the terminal link's StartPosition is used instead, with a WARN naming the backup id (v0.147.0); it refuses only when both are empty. (PG soft preflight warnings — wal_keep_size sufficiency, Patroni-managed source — fire here; --strict-preflight promotes them to refusals.) On a MySQL source in file/pos mode the chain's tail position also names the @@server_uuid it was captured from (v0.137.2+), so pointing the stream at a replaced or restored instance refuses terminally and does not re-copy (v0.146.0; through v0.145.0 it cold-started, which dropped the target's tables and re-copied from whichever instance answered). Note --restart-from-scratch is not the remedy on this path, being mutually exclusive with this flag: supply a manifest captured from the instance that is answering, or take a fresh backup full against it. a chain whose tail predates v0.137.2 resumes with a UNVERIFIED-INSTANCE-IDENTITY WARN until one fresh full backup re-roots it — see the MySQL resume signals.
 
