@@ -144,9 +144,31 @@ Rather than firing an incremental from cron, run backup stream run as a long-liv
         --target s3://my-bucket/app-chain \
         --rollover-window 5m --rollover-max-changes 100000
 
-Stop it with SIGTERM / SIGINT (drains the in-flight rollover and exits), or cross-machine with sluice backup stream stop --target <url>, which writes a stop request the running stream observes on its next rollover tick. To bound total disk without an external wrapper, in-process rotation caps the open segment at --retain-rotate-at <dur> and/or --retain-rotate-at-chain-length <n> and opens a fresh segment over the same CDC handle (ADR-0046); pair that with backup prune below.
+Stop it with sluice backup stream stop --target <url> (works cross-machine), which writes a stop request the running stream observes — see stopping a stream below for what happens to the in-flight rollover, and why SIGTERM is only the fallback. To bound total disk without an external wrapper, in-process rotation caps the open segment at --retain-rotate-at <dur> and/or --retain-rotate-at-chain-length <n> and opens a fresh segment over the same CDC handle (ADR-0046); pair that with backup prune below.
 
 An idle Postgres source still commits windows (v0.156.8+). A backup stream or backup incremental from a Postgres source now captures the walsender's keepalive position as a transaction boundary whenever none of the source's transactions is open (two change records), so its slot follows the server's WAL while your tables are idle (why). The visible effect: for each rollover window in which the server wrote WAL, backup stream now commits one manifest plus one small change chunk, where on Postgres 15+ it used to skip the window as an empty rollover, and the window's end position advances. It is bounded by the throttle — at most one boundary pair per 10 s, so a window holds at most 2 × window / 10 s records — and adds nothing on a fully quiet server. Size retention and backup prune schedules accordingly. (Code-read, not benchmarked.)
+
+### Stopping a stream (v0.156.12+)
+
+A backup chain never ends inside a source transaction, because a chain that did would restore that transaction twice (or, on MySQL file/pos, lose part of it). That shapes how a backup stream run stops:
+
+- sluice backup stream stop (the command, the stop file, or the in-process stop) closes the current rollover at once when no source transaction is open. When one is open, the stream keeps reading until that transaction's commit — already committed at the source, only being delivered — then commits the rollover and exits 0. The wait is bounded at 60 s and 1,000,000 changes (fixed defaults, no flag). If either runs out, the rollover is abandoned and the stream still exits 0: no manifest is written and the replication position is not acknowledged, so the next run reads that window again from the previous rollover's end. The WARN carries BACKUP-WINDOW-ABANDONED-OPEN-TRANSACTION. backup stream stop returns as soon as it has written the request; the stream process is what waits, so wait for the process to exit (up to about 60 s plus the commit) before signalling it.
+
+- SIGTERM / SIGINT does not drain. It commits the in-flight rollover only when it stands at a transaction boundary; inside a transaction it abandons the rollover at once (same WARN, exit 0), because the cancel also tears down the change stream, so the commit cannot be waited for.
+
+- An abandoned rollover loses nothing, but it is not free. The whole window is re-read on the next start — on a busy source, where a signal almost always lands inside a transaction, up to a full --rollover-window (default 5 minutes) or --rollover-max-changes (default 100,000) of work. A supervisor that signals the stream more often than once per window (frequent restarts, a short RuntimeMaxSec, a liveness probe that kills it) never lets the chain advance: every run exits 0 and only the WARN says so.
+
+So stop with sluice backup stream stop, wait for the process to exit, and use SIGTERM only as the fallback after that. Under systemd: ExecStop= running backup stream stop followed by a wait on the process, with TimeoutStopSec above 60 s. Under Kubernetes: a preStop hook doing the same, with terminationGracePeriodSeconds above 60 s.
+
+Who should check: chains written before v0.156.12. On v0.19.0 through v0.156.11, a backup stream stop, stop file, SIGTERM/SIGINT or source close that landed inside a source transaction committed the window anyway, and chain restore and sync from-backup then applied that transaction's first rows twice at exit 0 (a keyless table restored at 6 rows against the source's 3; a key-reusing transaction lost a row; on MySQL file/pos the rest of a ROWS event was lost instead — 40,000 rows restored as 39,996). A cancel whose final flush failed (drain-flush failed in the log, any engine, trigger-CDC included) could also drop whole committed changes. Upgrading refuses such chains (below) but does not repair a target already restored or brokered from one, and does not make the chain replayable. Check if any of these apply:
+
+- You ran backup stream and ever stopped or restarted it, or its source stream ended while transactions were being captured, on v0.19.0–v0.156.11, and then restored or brokered that chain. Run sluice backup verify on it with this release (with the key material if encrypted); a shape A or C refusal means it is affected. Then compare each target with its source (sluice verify --depth count, or --depth sample): a count above the source's on a keyless table means duplicated rows; a count below it on any table means lost changes.
+
+- Postgres chains written before v0.138.0 that span a resume carry shape B, which backup verify does not judge. Compare keyless tables, and tables touched by key-reusing transactions, with the source.
+
+- You ran backup compact --smart-compaction on such a Postgres chain and then restored or replayed it. Compare as above, and also compare keyed tables whose rows are deleted soon after insert (queue tables, for example): the target can still hold rows the source deleted.
+
+The remedy for an affected chain is a new full backup; rebuild or correct the affected target tables.
 
 ## Retention: prune and compact
 
@@ -160,6 +182,8 @@ backup prune drops the oldest incrementals. Choose retention by count (--keep-in
 
 backup compact merges consecutive segments whose CreatedAt gaps fall within --merge-window (required) into one segment — fewer files, faster restore. By default it's a byte-level concat: bytes are never decompressed, recompressed, or re-encrypted. Mixed codecs, divergent encryption keysets, or position gaps within a group refuse loudly before any mutation. Opt into event-level collapse (INSERT+UPDATE → INSERT, etc.) with --smart-compaction (ADR-0064). --dry-run reports the plan.
 
+Smart compaction (opt-in, off by default) refuses severed inputs before it copies anything (v0.156.12+). Collapsing an incremental that carries a severed transaction — shape A, or on a Postgres chain shape B, on any incremental it would rewrite — would hide the evidence restore refuses on, so it refuses with SLUICE-E-BACKUP-CHAIN-SEVERED-TRANSACTION (exit 3) and the chain is unchanged. The remedy is --smart-compaction-off (plain compaction moves the chunks verbatim, so restore still refuses the chain) or, to get a chain that replays, a new full backup. It logs at INFO when it cannot judge shape B (no recorded source engine, or one with no position order), refuses a source engine it does not know with SMART-COMPACTION-SOURCE-ENGINE-UNKNOWN (uncoded, exit 1), and, before swapping the catalog, compares the severed-transaction findings on each rewritten incremental before and after: any finding gained or lost refuses with SLUICE-E-BACKUP-CHAIN-UNREADABLE at the pre-swap stage, nothing deleted. That last one is a compactor defect — use --smart-compaction-off and report it.
+
 ## Restore and point-in-time
 
 sluice restore reads a chain from --from-dir / --from, applies the schema (retargeting cross-engine if --target-driver differs from the backup's source engine), bulk-copies the rows back, and creates indexes, constraints, and views. When the store contains incrementals, restore walks the chain in order from the root through every incremental present, landing the target at the chain's tip:
@@ -168,6 +192,8 @@ sluice restore reads a chain from --from-dir / --from, applies the schema (retar
         --target-driver postgres --target 'postgres://...target...'
 
 Point-in-time recovery granularity is your incremental / rollover cadence: every committed incremental is a restorable position, and restore reconstructs the target as of the newest link in the store it reads. To recover to an earlier point, restore from a store (or a copy) whose newest incremental is that point — sluice restore has no "as of timestamp T" flag; the chain's committed positions are the recoverable points.
+
+Severed-transaction pre-check (v0.156.12+). Before applying anything, chain restore decodes the first and last change chunks of every incremental and judges the whole chain. It refuses, exit 3, with no override: shape A, a non-final incremental that ends inside an open source transaction, and shape B (Postgres→Postgres restores only), an incremental that re-delivers the previous one's last transaction — every resumed window on Postgres chains written before v0.138.0 — both as SLUICE-E-BACKUP-CHAIN-SEVERED-TRANSACTION; and shape C, an incremental whose EndPosition is past the last change its chunks record (the old cancel-drain loss), as SLUICE-E-BACKUP-INCOMPLETE. A chain whose final incremental ends inside an open transaction is not refused, since nothing follows it, but restore WARNs CHAIN-TAIL-OPEN-TRANSACTION: what it restores includes only that transaction's head. For each of these the remedy is a new full backup and a new chain from it — see who should check.
 
 Restore parallelism is engine-generic: --table-parallelism (tables applied concurrently, auto 4) composes with --bulk-parallelism (a single table's chunks applied concurrently, auto min(8, NumCPU)); their product is clamped to the target's connection budget. For a chain that carries incrementals, --apply-concurrency fans the incremental change-replay across in-order PK-hash lanes (auto 4) — the knob that matters on a high-latency / cross-region target. Same-engine chains replay schema deltas and change chunks; cross-engine chains that carry incrementals are refused (a full-only cross-engine restore is fine).
 
@@ -214,6 +240,8 @@ backup verify walks a chain, recomputes every chunk's SHA-256, and reports any m
     sluice backup verify --from-dir /var/backups/app
 
 For an encrypted chain, add --encrypt plus the same key source you backed up with. Verify then also runs a decrypt probe on every per-chunk wrapped CEK, so a mid-chain passphrase rotation surfaces here as a clear verify failure instead of a partial-fail at restore time (Bug 117). Verify warns loudly if you point it at an encrypted chain without a key source — SHA-only verify can't see that class of problem.
+
+At every depth, verify also runs the severed-transaction check (v0.156.12+) and reports every refusal: shape A (SLUICE-E-BACKUP-CHAIN-SEVERED-TRANSACTION) and shape C (SLUICE-E-BACKUP-INCOMPLETE) — chains it used to report healthy. It does not judge the Postgres-only shape B. On an encrypted chain verified without the key it cannot decode the change chunks, so it WARNs that it skipped the check and exits green: that run does not answer "is this chain severed?". Pass the key.
 
     export SLUICE_BACKUP_PASS='correct horse battery staple'
     sluice backup verify --from-dir /var/backups/app \
