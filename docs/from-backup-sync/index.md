@@ -33,6 +33,8 @@ Then feed it. Either run periodic incrementals from a scheduler:
         --rollover-window 10s \
         --retain-rotate-at-chain-length 20
 
+Stopping the producer under a supervisor (v0.156.12+). A window never ends inside a source transaction, so stop the producer with sluice backup stream stop and wait for the process to exit — inside a transaction it reads on to the commit, for up to 60 s / 1,000,000 changes, before closing the rollover (or abandoning it if the budget runs out). Send SIGTERM only as the fallback: a signal inside a transaction abandons the in-flight window at once (exit 0, WARN BACKUP-WINDOW-ABANDONED-OPEN-TRANSACTION), and the next run re-reads it. Under systemd, use ExecStop= running backup stream stop plus a wait on the process, with TimeoutStopSec above 60 s; under Kubernetes, a preStop hook doing the same, with terminationGracePeriodSeconds above 60 s. A supervisor that restarts the producer more often than the rollover window (default 5 minutes / 100,000 changes) means the chain never advances. Details: stopping a stream.
+
 ## 2. Replay it into the target
 
 On the consumer side, point the broker at the same chain. It reads the chain's catalog every --poll-interval, applies any incrementals newer than its persisted position in chain order, and persists progress in the target's sluice_cdc_state. The --stream-id is required so it can resume cleanly after a restart:
@@ -74,6 +76,16 @@ The remedy is a key on the source and a new full backup, so the chain's recorded
 
 A key-changing incremental does not converge on a re-run. Even on a keyed table, re-applying a whole incremental converges only for inserts, and for updates and deletes that keep each row's key. An incremental that changed a row's key value re-inserts a row the interrupted run had already moved, and the move then collides with the moved copy, so the re-run fails on a duplicate key (MySQL 1062 / Postgres 23505) on every attempt — in the lane apply mode, possibly after committing part of the incremental. And when a key value was moved off one row and onto another inside the incremental, the re-run can apply a change to the wrong row with no error at all. If your source changes key values, recover an interrupted incremental with --reset-target-data, not by re-running.
 
+### Severed transactions in the chain (v0.156.12+)
+
+Separately from re-applying an interrupted incremental, a chain an older backup stream wrote can carry one source transaction across two incrementals — a window that ended inside a source transaction (shape A), or, on Postgres chains written before v0.138.0, a resume that re-delivered the previous window's last transaction (shape B) — or an incremental whose EndPosition is past its last stored change, the old cancel-drain loss (shape C). On every tick that brings new incrementals, before applying them, the broker runs the same severed-transaction check chain restore runs, over the whole chain:
+
+- A finding on a link the broker has not applied yet refuses (exit 3) — SLUICE-E-BACKUP-CHAIN-SEVERED-TRANSACTION for shapes A and B, SLUICE-E-BACKUP-INCOMPLETE for shape C — before anything of that tick is applied. There is no override; the remedy is a new full backup and a new chain.
+
+- A finding on a link it already applied — by an older binary, or a pre-v0.138.0 Postgres resume — cannot be undone by refusing, so it is logged once per run as the WARN CHAIN-APPLIED-SEVERED-TRANSACTION, naming the links, and the broker continues. Grep the broker log for that marker and compare the tables those links touched with the source (sluice verify --depth count), or rebuild the target from a new full backup.
+
+Shape B is judged only when replaying into Postgres (it needs the source engine's position order). A current backup stream never writes a window that ends inside a source transaction — see who should check for chains written before v0.156.12.
+
 ## 3. Cold-start vs warm-resume
 
 On its first launch against a chain, the broker has no sluice_cdc_state row for the chosen --stream-id, so it doesn't know where in the chain to begin and refuses loudly. There are two ways past that, mutually exclusive:
@@ -110,6 +122,8 @@ Exit codes on stop and cancel (v0.156.11+). sluice sync from-backup stop is obse
 - During a --reset-target-data cold start, once its drop has begun — the target holds a partial restore and no position, so it returns BROKER-COLD-START-PARTIAL (exit 1). Re-run with --reset-target-data; never start that target with --at-chain-id.
 
 Through v0.156.10 both of the latter exited 0 and the panel printed "stopped." — supervisors that treat a cancel's exit status as success should expect the change.
+
+Separately, a broker that reaches a severed-transaction finding on a link it has not applied yet exits 3 (v0.156.12+) with SLUICE-E-BACKUP-CHAIN-SEVERED-TRANSACTION or SLUICE-E-BACKUP-INCOMPLETE; restarting repeats it, so alert on it rather than counting on the retry. A finding on a link it already applied only WARNs CHAIN-APPLIED-SEVERED-TRANSACTION and the broker keeps running.
 
 The broker follows segment-rotation seams automatically and resumes from its persisted position after a restart on either side, re-applying an interrupted incremental whole (see replay safety). Two consumers must use distinct --stream-ids for distinct targets, or they'll race on position writes. To rest the chain encrypted, the broker accepts the same encryption flags as the rest of the backup family — see the backup reference.
 
