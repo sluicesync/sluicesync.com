@@ -23,7 +23,7 @@ On Postgres, the chain is anchored by a replication slot. Pass --chain-slot to b
 
 Why --chain-slot matters. Creating a slot after a full and expecting the next incremental to fill the gap is a silent-loss trap: PostgreSQL fast-forwards START_REPLICATION to the slot's confirmed_flush_lsn without complaint, so every write in between vanishes from the chain. --chain-slot provisions the slot at the snapshot anchor so there is no gap; a chain-resume preflight then refuses loudly if a slot can't serve the parent position (ADR-0083). To abandon a chain, drop the slot with sluice slot drop — it holds source-side WAL until the next incremental consumes it.
 
-Chain off a specific parent with --since <backup-id> (default: the most recent manifest). Each incremental's window closes on --window (wall-clock, default 5m) or --max-changes (event count), whichever fires first, and is always extended to the next transaction commit so a chain never ends mid-transaction.
+Chain off a specific parent with --since <backup-id> (default: the most recent manifest). Each incremental's window closes on --window (wall-clock, default 5m) or --max-changes (count of recorded events, transaction framing included; since v0.157.2 a run of transactions that changed nothing in scope is recorded as its last one only), whichever fires first, and is always extended to the next transaction commit so a chain never ends mid-transaction.
 
 ## Compression
 
