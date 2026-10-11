@@ -61,7 +61,7 @@ Once the migration finishes, confirm source and target agree. verify compares pe
         --target-driver postgres --target "$SLUICE_TARGET" \
         --depth count
 
-For content checking — not just counts — escalate to --depth sample (per-table sampled-row content hashes; ~99% confidence on a 5%+ corruption rate). See the validate guide for the depth ladder.
+On this MySQL → Postgres path, count is the depth that runs: --depth sample (per-table sampled-row content hashes) is same-engine only and refuses a cross-engine pair, because each engine renders values in its own text format. See the validate guide for the depth ladder and what verify cannot see.
 
 ## Migrating legacy MySQL data?
 

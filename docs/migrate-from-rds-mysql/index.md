@@ -68,7 +68,7 @@ Continuous sync — the same CA flag, plus a stream id:
         --target-driver postgres --target 'postgres://user:pass@target-host:5432/app?sslmode=require' \
         --stream-id rds-app
 
-The master user has the replication grants CDC needs out of the box (REPLICATION SLAVE, REPLICATION CLIENT) — nothing to GRANT on defaults.
+The master user has the replication grants CDC needs out of the box (REPLICATION SLAVE, REPLICATION CLIENT) — nothing to GRANT on defaults. Not verified here since v0.158.0: a reader behind the binlog head now also runs SHOW BINLOG EVENTS, which MySQL allows to a REPLICATION SLAVE account, but that RDS permits it to the streaming account has not been measured (if it does not, the stream stops with SLUICE-E-CDC-REPLICATION-PERMISSION rather than decode unproven). Neither has whether binlog_row_metadata can be set to the recommended FULL in the parameter group (why it matters).
 
 ## What sluice checks for you
 

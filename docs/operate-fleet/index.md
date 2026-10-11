@@ -45,7 +45,7 @@ A failure that is not restarted: UNFORWARDED-SCHEMA-CHANGE (v0.156.0+). A leg th
 
 - Restart the fleet process. On Linux and macOS a SIGHUP also works: a reload starts a failed leg that is still in syncs.yaml.
 
-Ten more refusals that are not restarted (five since v0.156.7, the sixth since v0.156.8, two since v0.156.9, the last two since v0.156.10). A leg that stops on one of these is marked failed and is not restarted, whatever max-consecutive-failures says; the other legs keep running. Each is a condition every restart would hit again:
+Twelve more refusals that are not restarted (five since v0.156.7, the sixth since v0.156.8, two since v0.156.9, two since v0.156.10, the last two since v0.158.0). A leg that stops on one of these is marked failed and is not restarted, whatever max-consecutive-failures says; the other legs keep running. Each is a condition every restart would hit again:
 
 - SLOT-ACKED-PAST-TARGET-POSITION: the slot and the persisted position are both durable, so a restart compares the same two values.
 
@@ -66,6 +66,10 @@ Ten more refusals that are not restarted (five since v0.156.7, the sixth since v
 - RESUME-SCHEMA-DIVERGENCE (v0.156.10+): the check compares the source's current table with the target's catalog and records nothing, so a restart refuses again until the target matches. Make the target match the source, then reload the fleet; a reload starts a failed leg still in syncs.yaml. A failure to read the target's catalog is not this marker and is still restarted.
 
 - SCHEMA-CHANGE-REFUSED (v0.156.10+, on legs that forward no DDL: schema-changes: refuse, multi-database and multi-schema legs, --inject-shard-column with --no-coordinate-live-ddl): not restarted for the same reason. Apply the change on the target, then reload. A refusal that also carries AMBIGUOUS-SCHEMA-BOUNDARY is covered too; the fleet spec has no acknowledgement key, so after the checks start that leg once outside the fleet with --accept-unforwarded-schema-change=<fingerprint>.
+
+- COLUMN-ORDER-CHANGED (v0.158.0+): the source flipped the declared order of two of a table's columns (a RENAME COLUMN swap or a reorder), and nothing proves the target's own order moved to match. The check records nothing, so a restart refuses again: apply the same change on the target, then reload. Where the message names a re-copy instead (no record for the table, or a target that cannot reorder in place), run sync start --reset-target-data --yes for that leg outside the fleet.
+
+- DEFERRED-SCHEMA-CHANGE (v0.158.0+, MySQL-family binlog sources under binlog_row_metadata=FULL): a row carries a type change that no schema boundary will describe before its rows are applied, and a restart re-reads the same binlog. The remedy is a re-copy, outside the fleet.
 
 Not in the list: the Postgres reader's mid-stream refusal that carries PRE-ALTER-REPLAY-WEDGE. A wedged leg is restarted and refuses again each time (GC-44 F27, unchanged from v0.156.9), so alert on a leg that keeps restarting with that marker and apply the recovery outside the fleet.
 The supervisor logs each at ERROR with a marker= attribute naming the refusal, so alert on failed legs and on that attribute. Before v0.156.7 the first five were restarted after backoff and refused again, indefinitely under the default max-consecutive-failures: 0, while the fleet looked healthy. Other coded SLUICE-E-* refusals and other terminal errors are still restarted under the failure cap, because some clear without any change to the leg (for example SLUICE-E-CDC-REPLICATION-HEADROOM once another slot is freed). DEFERRED-KEY-CHECK-FAILED-AT-COMMIT is deliberately among them: one of its causes depends on arrival timing, and a restart can clear it.

@@ -112,11 +112,11 @@
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
     <span class="f">--stream-id</span> wave1 <span class="f">--wait</span>
 
-<span class="c"># 4. Prove it landed.</span>
+<span class="c"># 4. Prove it landed (row counts; --depth=sample is same-engine only).</span>
 <span class="k">sluice</span> verify \
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SRC" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$DST" \
-    <span class="f">--include-table</span> 'orders,order_items' <span class="f">--depth</span>=sample</code></pre>
+    <span class="f">--include-table</span> 'orders,order_items' <span class="f">--depth</span>=count</code></pre>
 <p><a href="/docs/commands/#cutover">cutover</a> takes <code>--include-table</code> too, so a wave's sequences get primed without touching tables that are still source-authoritative. Skipping it is the classic staged-migration failure: application writes to the target start allocating IDs that collide with rows CDC is about to deliver.</p>
 <div class="note">Use <code>--wait</code> on <code>sync stop</code>. Without it the stop is asynchronous and late in-flight changes may not have landed.</div>
 

@@ -29,7 +29,7 @@ Purge appears platform-scheduled and lazy — files can outlive the configured w
 
 - FTWRL works (RELOAD honored) — sluice's concurrent frozen-snapshot cold copy runs with no fallback WARNs.
 
-- Replication grants (REPLICATION SLAVE/REPLICATION CLIENT) are present on the admin user out of the box; binlog_format=ROW is read-only at the platform (no MIXED trap); gtid_mode=OFF by default (file/position CDC is fine — expect one POSITION-MODE INFO per CDC open since v0.137.3 naming it the weaker resume arm, with the position's instance identity resting on the v0.137.2 @@server_uuid stamp; gtid_mode=ON is the stronger configuration where the platform allows it); sql_require_primary_key=OFF; stock-strict sql_mode (no DigitalOcean-style ANSI surprise).
+- Replication grants (REPLICATION SLAVE/REPLICATION CLIENT) are present on the admin user out of the box (not verified since v0.158.0: that Azure permits the SHOW BINLOG EVENTS look-ahead a reader behind the head now runs, and whether binlog_row_metadata=FULL, recommended, can be set as a server parameter — why); binlog_format=ROW is read-only at the platform (no MIXED trap); gtid_mode=OFF by default (file/position CDC is fine — expect one POSITION-MODE INFO per CDC open since v0.137.3 naming it the weaker resume arm, with the position's instance identity resting on the v0.137.2 @@server_uuid stamp; gtid_mode=ON is the stronger configuration where the platform allows it); sql_require_primary_key=OFF; stock-strict sql_mode (no DigitalOcean-style ANSI surprise).
 
 - Host pattern *.mysql.database.azure.com; the in-band fingerprint is @@version ending in -azure. One-time subscription step: az provider register --namespace Microsoft.DBforMySQL must have completed before instance creation works.
 

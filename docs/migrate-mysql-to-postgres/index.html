@@ -72,7 +72,7 @@ export SLUICE_TARGET='postgres://postgres:pgpw@localhost:5432/app?sslmode=requir
     <span class="f">--source-driver</span> mysql    <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
     <span class="f">--depth</span> count</code></pre>
-<p>For content checking — not just counts — escalate to <code>--depth sample</code> (per-table sampled-row content hashes; ~99% confidence on a 5%+ corruption rate). See the <a href="/docs/preview-and-validate/#verify">validate guide</a> for the depth ladder.</p>
+<p>On this MySQL&nbsp;→&nbsp;Postgres path, <code>count</code> is the depth that runs: <code>--depth sample</code> (per-table sampled-row content hashes) is same-engine only and refuses a cross-engine pair, because each engine renders values in its own text format. See the <a href="/docs/preview-and-validate/#verify">validate guide</a> for the depth ladder and <a href="/docs/preview-and-validate/#verify-limits">what verify cannot see</a>.</p>
 
 <h2 id="legacy">Migrating legacy MySQL data? <a class="hlink" href="#legacy" aria-label="Permalink to this section">#</a></h2>
 <p>sluice forces a strict <code>sql_mode</code> on every MySQL connection to close the silent-clamp / silent-zero-date class of corruption. Data that was only storable under a relaxed mode — pre-5.7 zero-dates (<code>0000-00-00</code>), silently-truncated values — will <strong>refuse loudly</strong> rather than land subtly wrong. That's deliberate. Two knobs let you decide how to carry it:</p>

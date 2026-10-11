@@ -106,7 +106,7 @@ Confirm source and target agree &mdash; count parity by default, escalating to s
         --target-driver postgres --target "$SLUICE_TARGET" \
         --depth count
 
---depth sample adds per-table sampled-row content hashing (~99% confidence on a 5%+ corruption rate); see the validate guide for the full depth ladder.
+--depth sample (per-table sampled-row content hashing) is same-engine only, so on this PlanetScale MySQL → Postgres path it refuses and count is the depth that runs; see the validate guide for the full depth ladder and what verify cannot see.
 
 ## Translation notes worth checking
 
