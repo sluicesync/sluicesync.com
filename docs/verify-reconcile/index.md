@@ -31,11 +31,11 @@ Tune sample mode with --sample-rows-per-table (raise it for tables with rare ano
 
 Full per-row hashing is planned, not yet shipped. Today the ladder stops at sample; count plus a well-sized same-engine sample is the strongest check available.
 
-What a clean sample cannot rule out (v0.158.0). Each side hashes its columns in its own declared order, so a target whose columns were swapped by name — a source RENAME COLUMN swap an earlier release forwarded as no change — reads clean. A sample also rarely reaches damage confined to the rows written before a schema change (Bug 301), and across engines verify compares counts only, which misses MariaDB NO_LOG UNSIGNED values stored as negatives. Neither backup verify depth sees any of the three. See what verify cannot see and the v0.158.0 notice for what to check instead.
+What a clean sample cannot rule out. Since v0.158.1 sample mode compares columns by name, so a target whose columns were swapped by name — a source RENAME COLUMN swap a release before v0.158.0 forwarded as no change — mismatches on every sampled row that predates the swap, and a source column the target lacks fails as COLUMN-MISMATCH. A clean sample from v0.158.0 or older does not clear a swap: each side hashed its columns in its own declared order, and the rendering also collapsed NULL with an empty string, MySQL/MariaDB FLOATs that differ past 6 digits, non-UTF-8 MySQL binary and spatial values, and oversized MySQL 8 JSON — re-run it on v0.158.1+. A sample still samples: it rarely reaches damage confined to the rows written in a window before a schema change (Bug 301), and across engines verify compares counts only, which misses MariaDB NO_LOG UNSIGNED values stored as negatives. Neither backup verify depth sees any of the three. See what verify cannot see and the v0.158.0 notice for what to check instead.
 
 ## 2. JSON output and cron-friendly exit codes
 
-Both depths accept --format json and -o FILE, so verify pipes cleanly into a CI gate or an alertmanager pipeline. The JSON carries per-table deltas — source vs target counts, sampled-row count, and the mismatched primary keys when sample mode finds drift — so you get the offending rows, not just a red/green.
+Both depths accept --format json and -o FILE, so verify pipes cleanly into a CI gate or an alertmanager pipeline. The JSON carries per-table deltas — source vs target counts, sampled-row count, and the mismatched primary keys when sample mode finds drift — so you get the offending rows, not just a red/green. Since v0.158.1 every table entry also carries a one-word status (ok, count-mismatch, column-mismatch, sample-mismatch or unverified), and sample mode names the source columns the target lacks in columns_missing_on_target and the target-only columns in columns_extra_on_target. Gate on status: a column mismatch sets none of count_mismatch, sample_mismatch or reason.
 
     sluice verify --source-driver mysql    --source "$SLUICE_SOURCE" \
                   --target-driver postgres --target "$SLUICE_TARGET" \
@@ -47,7 +47,7 @@ Exit · Meaning ·
 
 0 · Clean — every checked table matched. ·
 
-1 · Mismatch — at least one table differs (a count delta, or a sampled-row hash mismatch). ·
+1 · Mismatch — at least one table differs (a count delta, a sampled-row hash mismatch, or, since v0.158.1, a COLUMN-MISMATCH: a source column the target lacks). ·
 
 2 · Operational error — couldn't connect, unsupported engine, bad flags. Distinct from 1 so a gate never conflates "the data differs" with "the check couldn't run". ·
 

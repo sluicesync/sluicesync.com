@@ -68,15 +68,19 @@ Both modes accept --format json and -o FILE for piping into a CI gate or alertma
 
 ### What verify cannot see
 
-A clean verify is evidence, not proof of every value. Across engines it compares row counts only. Within one engine, --depth sample hashes a sample of rows per table, and each side hashes its columns in its own declared order. Three defects fixed in v0.158.0 are invisible to it, and to both backup verify depths and a restore, which read a chain as written:
+A clean verify is evidence, not proof of every value. Across engines it compares row counts only. Within one engine, --depth sample hashes a sample of rows per table. Since v0.158.1 both sides read one shared column plan — the source's column names, sorted, keyed by the source's primary key — by name, so a value sitting under the wrong column name mismatches, a target that only declares the same columns in another order stays clean, and a source column the target lacks fails the table as COLUMN-MISMATCH (exit 1; a column only the target has is named and left out of the hash). In --format json every table carries a one-word status (ok, count-mismatch, column-mismatch, sample-mismatch or unverified); branch on it, because a column mismatch sets none of the older fields.
 
-- A column swap on the target. A target whose columns hold each other's values (a source RENAME COLUMN swap that an earlier release forwarded as no change) reads clean, because the target's declared order moved with the names. Measured: verify --depth=sample reported the swapped target as clean.
+A clean sample from v0.158.0 or older does not clear a swapped target. Before v0.158.1 each side hashed its columns in its own declared order, so a swapped target read clean (measured), and the row rendering collapsed some values that differ: NULL and an empty string; a value containing the | separator; a MySQL/MariaDB FLOAT (rendered at 6 significant digits); a MySQL GEOMETRY, BIT, BINARY, VARBINARY or BLOB value that is not valid UTF-8; a MySQL 8 JSON document larger than max_allowed_packet (which now refuses the table, naming the row — verify it with a larger max_allowed_packet); and a day/month-swapped DATE between Postgres endpoints with different DateStyle defaults. Re-run verify --depth sample on v0.158.1 or later.
 
-- Values decoded under the wrong column names behind the binlog head (Bug 301). Only the rows written before the schema change are affected, typically far fewer than a sample reaches, and a chain that captured them is internally consistent.
+Three defects fixed in v0.158.0 are still worth checking separately. Both backup verify depths and a restore read a chain as written, so none of them sees any of the three:
 
-- MariaDB NO_LOG UNSIGNED values stored as negatives. Across engines verify compares counts, which catches a lost DELETE and nothing else.
+- A column swap on the target. A target whose columns hold each other's values (a source RENAME COLUMN swap that an earlier release forwarded as no change). On v0.158.1+ a sample catches it with high probability: the swap leaves every pre-swap row swapped, so a sample of N misses it only with probability (1−f)N for a pre-swap fraction f — about 3×10−5 at f = 10% and the default N = 100. If the pre-swap rows are a small fraction of the table, raise --sample-rows-per-table. Before v0.158.1 a sample read it as clean.
 
-No sluice check clears a target or chain that went through one of these on an affected release. What to check instead, and the remedy, is in the v0.158.0 notice.
+- Values decoded under the wrong column names behind the binlog head (Bug 301). Only the rows written in a window before the schema change are affected, typically far fewer than a sample reaches, so a sample flags one only if it happens to include it; a clean sample does not clear it, and a chain that captured them is internally consistent.
+
+- MariaDB NO_LOG UNSIGNED values stored as negatives. These land on a cross-engine target, where verify compares counts, which catches a lost DELETE and nothing else.
+
+No sluice check clears a target or chain exposed to the Bug 301 or NO_LOG defects on an affected release. What to check instead, and the remedy, is in the v0.158.0 notice.
 
 ---
 Canonical page: https://sluicesync.com/docs/preview-and-validate/ · Full docs index: https://sluicesync.com/llms.txt

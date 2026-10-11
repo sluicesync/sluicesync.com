@@ -951,11 +951,11 @@ Compare data integrity between source and target — row counts by default, esca
 
 Flag · Purpose ·
 
---depth · How thorough: count (default — per-table row-count comparison) or sample (counts + per-table sampled-row content hashes; ~99% confidence on a 5%+ corruption rate). sample is same-engine only: a cross-engine pair (MySQL → Postgres and the like) is refused, so use count there. A full per-row hash mode is planned, not yet shipped. Each side hashes its columns in its own declared order, so a target whose columns were swapped by name reads clean, and a sample rarely reaches damage confined to the few rows written before a schema change — see what verify cannot see. ·
+--depth · How thorough: count (default — per-table row-count comparison) or sample (counts + per-table sampled-row content hashes; ~99% confidence on a 5%+ corruption rate). sample is same-engine only: a cross-engine pair (MySQL → Postgres and the like) is refused, so use count there. A full per-row hash mode is planned, not yet shipped. Since v0.158.1 both sides read the source's columns by name, so a target whose columns were swapped by name mismatches on every sampled row the swap touched, and a source column the target lacks fails the table as COLUMN-MISMATCH (exit 1); before v0.158.1 each side hashed its columns in its own declared order and read a swapped target as clean. A sample still samples: it rarely reaches damage confined to the few rows written before a schema change — see what verify cannot see. ·
 
 --sample-rows-per-table / --sample-seed · Sampling size and a deterministic seed. ·
 
---strict-hash · Require byte-identical per-row hashes. ·
+--strict-hash · Hash each sampled row with SHA-256 instead of MD5. ·
 
 --format / --output · Report format and output destination (for CI gating). ·
 
