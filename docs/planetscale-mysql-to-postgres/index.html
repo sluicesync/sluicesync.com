@@ -111,7 +111,7 @@ postgresql://&lt;user&gt;:&lt;pass&gt;@&lt;region&gt;.pg.psdb.cloud:5432/postgre
     <span class="f">--source-driver</span> planetscale <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
     <span class="f">--depth</span> count</code></pre>
-<p><code>--depth sample</code> adds per-table sampled-row content hashing (~99% confidence on a 5%+ corruption rate); see the <a href="/docs/preview-and-validate/#verify">validate guide</a> for the full depth ladder.</p>
+<p><code>--depth sample</code> (per-table sampled-row content hashing) is same-engine only, so on this PlanetScale MySQL&nbsp;→&nbsp;Postgres path it refuses and <code>count</code> is the depth that runs; see the <a href="/docs/preview-and-validate/#verify">validate guide</a> for the full depth ladder and <a href="/docs/preview-and-validate/#verify-limits">what verify cannot see</a>.</p>
 
 <h2 id="types">Translation notes worth checking <a class="hlink" href="#types" aria-label="Permalink to this section">#</a></h2>
 <p>Postgres value fidelity is high, but a few MySQL&nbsp;&rarr;&nbsp;Postgres translations are worth a look in <a href="#preview">preview</a>:</p>

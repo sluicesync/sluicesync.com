@@ -31,6 +31,8 @@ Tune sample mode with --sample-rows-per-table (raise it for tables with rare ano
 
 Full per-row hashing is planned, not yet shipped. Today the ladder stops at sample; count plus a well-sized same-engine sample is the strongest check available.
 
+What a clean sample cannot rule out (v0.158.0). Each side hashes its columns in its own declared order, so a target whose columns were swapped by name — a source RENAME COLUMN swap an earlier release forwarded as no change — reads clean. A sample also rarely reaches damage confined to the rows written before a schema change (Bug 301), and across engines verify compares counts only, which misses MariaDB NO_LOG UNSIGNED values stored as negatives. Neither backup verify depth sees any of the three. See what verify cannot see and the v0.158.0 notice for what to check instead.
+
 ## 2. JSON output and cron-friendly exit codes
 
 Both depths accept --format json and -o FILE, so verify pipes cleanly into a CI gate or an alertmanager pipeline. The JSON carries per-table deltas — source vs target counts, sampled-row count, and the mismatched primary keys when sample mode finds drift — so you get the offending rows, not just a red/green.

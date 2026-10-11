@@ -21,7 +21,11 @@ enforce_gtid_consistency · ON · Required alongside gtid_mode=ON. ·
 
 server_id · a unique value · Each server in a replication topology needs a distinct id. ·
 
-The connecting user needs SELECT for the bulk copy plus REPLICATION SLAVE and REPLICATION CLIENT to stream the binlog:
+binlog_row_image · FULL (the MySQL default) · Full row images; MINIMAL/NOBLOB is refused at CDC start with SLUICE-E-CDC-ROW-IMAGE-PARTIAL. ·
+
+binlog_row_metadata · FULL (recommended; SET PERSIST binlog_row_metadata = 'FULL') · Since v0.158.0 a reader behind the head decodes each row by the shape it was recorded under. Under the default MINIMAL most schema changes of a streamed table between the reader and the head refuse instead of decoding; FULL lets sluice decode across them by column name (details). ·
+
+The connecting user needs SELECT for the bulk copy plus REPLICATION SLAVE and REPLICATION CLIENT to stream the binlog. REPLICATION SLAVE also covers the SHOW BINLOG EVENTS look-ahead a reader behind the head runs since v0.158.0; without it the reader refuses with SLUICE-E-CDC-REPLICATION-PERMISSION:
 
     CREATE USER 'sluice'@'%' IDENTIFIED BY '<pw>';
     GRANT SELECT, REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'sluice'@'%';

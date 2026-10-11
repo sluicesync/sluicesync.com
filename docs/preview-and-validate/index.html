@@ -67,17 +67,26 @@
 <p>After a migration (or once a <a href="/docs/zero-downtime-cutover/">sync</a> has caught up), <code>verify</code> compares the data itself. It has a depth ladder — start cheap, escalate only if you need stronger guarantees:</p>
 <div class="table-scroll"><table><thead><tr><th>Depth</th><th>What it does</th></tr></thead><tbody>
 <tr><td><code>--depth count</code> (default)</td><td class="desc">Per-table row-count comparison. Fast, catches whole-table and bulk-row loss.</td></tr>
-<tr><td><code>--depth sample</code></td><td class="desc">Counts <em>plus</em> per-table sampled-row content hashes — ~99% confidence of catching a 5%+ corruption rate at the default 100 rows/table. Raise <code>--sample-rows-per-table</code> for rarer anomalies; <code>--strict-hash</code> switches the row hash from MD5 to SHA-256.</td></tr>
+<tr><td><code>--depth sample</code></td><td class="desc">Counts <em>plus</em> per-table sampled-row content hashes — ~99% confidence of catching a 5%+ corruption rate at the default 100 rows/table. <strong>Same-engine only</strong>: a cross-engine pair is refused, so use <code>count</code> there. Raise <code>--sample-rows-per-table</code> for rarer anomalies; <code>--strict-hash</code> switches the row hash from MD5 to SHA-256.</td></tr>
 </tbody></table></div>
-<pre><code><span class="c"># fast count check, CI-gated (non-zero exit on mismatch)</span>
+<pre><code><span class="c"># fast count check, CI-gated (non-zero exit on mismatch) — works across engines</span>
 <span class="k">sluice</span> verify <span class="f">--source-driver</span> mysql <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" <span class="f">--depth</span> count
 
-<span class="c"># content sampling with a larger sample</span>
-<span class="k">sluice</span> verify <span class="f">--source-driver</span> mysql <span class="f">--source</span> "$SLUICE_SOURCE" \
+<span class="c"># content sampling with a larger sample — same engine on both sides</span>
+<span class="k">sluice</span> verify <span class="f">--source-driver</span> postgres <span class="f">--source</span> "$SLUICE_SOURCE" \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> "$SLUICE_TARGET" \
     <span class="f">--depth</span> sample <span class="f">--sample-rows-per-table</span> 500</code></pre>
 <p>Both modes accept <code>--format json</code> and <code>-o FILE</code> for piping into a CI gate or alertmanager. A full per-row hash mode is planned but not yet shipped.</p>
+
+<h3 id="verify-limits">What verify cannot see <a class="hlink" href="#verify-limits" aria-label="Permalink to this section">#</a></h3>
+<p>A clean <code>verify</code> is evidence, not proof of every value. Across engines it compares row counts only. Within one engine, <code>--depth sample</code> hashes a sample of rows per table, and each side hashes its columns <strong>in its own declared order</strong>. Three defects fixed in v0.158.0 are invisible to it, and to both <code>backup verify</code> depths and a restore, which read a chain as written:</p>
+<ul>
+  <li><strong>A column swap on the target.</strong> A target whose columns hold each other's values (a source <code>RENAME COLUMN</code> swap that an earlier release forwarded as no change) reads clean, because the target's declared order moved with the names. Measured: <code>verify --depth=sample</code> reported the swapped target as clean.</li>
+  <li><strong>Values decoded under the wrong column names behind the binlog head (Bug 301).</strong> Only the rows written before the schema change are affected, typically far fewer than a sample reaches, and a chain that captured them is internally consistent.</li>
+  <li><strong>MariaDB <code>NO_LOG</code> UNSIGNED values stored as negatives.</strong> Across engines <code>verify</code> compares counts, which catches a lost DELETE and nothing else.</li>
+</ul>
+<p>No sluice check clears a target or chain that went through one of these on an affected release. What to check instead, and the remedy, is in the <a href="/docs/schema-changes/#known-issue-v0158">v0.158.0 notice</a>.</p>
 
     <div class="pager"><a class="prev" href="/docs/migrate-mysql-to-postgres/">← Migrate MySQL → Postgres</a><a class="next" href="/docs/sizing/">Sizing &amp; plan recommendations →</a></div>
   </main>

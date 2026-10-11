@@ -53,18 +53,30 @@ Depth · What it does ·
 
 --depth count (default) · Per-table row-count comparison. Fast, catches whole-table and bulk-row loss. ·
 
---depth sample · Counts plus per-table sampled-row content hashes — ~99% confidence of catching a 5%+ corruption rate at the default 100 rows/table. Raise --sample-rows-per-table for rarer anomalies; --strict-hash switches the row hash from MD5 to SHA-256. ·
+--depth sample · Counts plus per-table sampled-row content hashes — ~99% confidence of catching a 5%+ corruption rate at the default 100 rows/table. Same-engine only: a cross-engine pair is refused, so use count there. Raise --sample-rows-per-table for rarer anomalies; --strict-hash switches the row hash from MD5 to SHA-256. ·
 
-    # fast count check, CI-gated (non-zero exit on mismatch)
+    # fast count check, CI-gated (non-zero exit on mismatch) — works across engines
     sluice verify --source-driver mysql --source "$SLUICE_SOURCE" \
         --target-driver postgres --target "$SLUICE_TARGET" --depth count
 
-    # content sampling with a larger sample
-    sluice verify --source-driver mysql --source "$SLUICE_SOURCE" \
+    # content sampling with a larger sample — same engine on both sides
+    sluice verify --source-driver postgres --source "$SLUICE_SOURCE" \
         --target-driver postgres --target "$SLUICE_TARGET" \
         --depth sample --sample-rows-per-table 500
 
 Both modes accept --format json and -o FILE for piping into a CI gate or alertmanager. A full per-row hash mode is planned but not yet shipped.
+
+### What verify cannot see
+
+A clean verify is evidence, not proof of every value. Across engines it compares row counts only. Within one engine, --depth sample hashes a sample of rows per table, and each side hashes its columns in its own declared order. Three defects fixed in v0.158.0 are invisible to it, and to both backup verify depths and a restore, which read a chain as written:
+
+- A column swap on the target. A target whose columns hold each other's values (a source RENAME COLUMN swap that an earlier release forwarded as no change) reads clean, because the target's declared order moved with the names. Measured: verify --depth=sample reported the swapped target as clean.
+
+- Values decoded under the wrong column names behind the binlog head (Bug 301). Only the rows written before the schema change are affected, typically far fewer than a sample reaches, and a chain that captured them is internally consistent.
+
+- MariaDB NO_LOG UNSIGNED values stored as negatives. Across engines verify compares counts, which catches a lost DELETE and nothing else.
+
+No sluice check clears a target or chain that went through one of these on an affected release. What to check instead, and the remedy, is in the v0.158.0 notice.
 
 ---
 Canonical page: https://sluicesync.com/docs/preview-and-validate/ · Full docs index: https://sluicesync.com/llms.txt

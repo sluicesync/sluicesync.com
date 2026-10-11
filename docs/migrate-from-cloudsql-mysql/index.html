@@ -87,7 +87,7 @@
 <h2 id="defaults">Defaults that are already right <a class="hlink" href="#defaults" aria-label="Permalink to this section">#</a></h2>
 <ul>
   <li><strong><code>binlog_format=ROW</code>, <code>binlog_row_image=FULL</code>, <code>gtid_mode=ON</code> out of the box — even on 8.0</strong> (contrast RDS 8.0's <code>MIXED</code> and its custom-parameter-group dance). sluice's file/position CDC works as-is; positions carry the <code>server_uuid</code>.</li>
-  <li><strong>Replication grants present on root</strong> (<code>REPLICATION SLAVE</code>, <code>REPLICATION CLIENT</code>) — nothing to GRANT.</li>
+  <li><strong>Replication grants present on root</strong> (<code>REPLICATION SLAVE</code>, <code>REPLICATION CLIENT</code>) — nothing to GRANT. <em>Not verified here since v0.158.0:</em> that Cloud SQL permits the <code>SHOW BINLOG EVENTS</code> look-ahead a reader behind the head now runs, and whether <code>binlog_row_metadata=FULL</code> (recommended) can be set as a flag (<a href="/docs/schema-changes/#binlog-behind-head">why</a>).</li>
   <li><strong><code>sql_require_primary_key=OFF</code></strong> — keyless tables land fine as targets, unlike DO.</li>
   <li><strong>Stock-strict <code>sql_mode</code></strong> — no DO-style <code>ANSI</code> surprise; double-quoted strings are strings.</li>
 </ul>

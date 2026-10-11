@@ -79,7 +79,7 @@ Continuous sync — the same CA flag, plus a stream id:
 
 - binlog_format=ROW, binlog_row_image=FULL, gtid_mode=ON out of the box — even on 8.0 (contrast RDS 8.0's MIXED and its custom-parameter-group dance). sluice's file/position CDC works as-is; positions carry the server_uuid.
 
-- Replication grants present on root (REPLICATION SLAVE, REPLICATION CLIENT) — nothing to GRANT.
+- Replication grants present on root (REPLICATION SLAVE, REPLICATION CLIENT) — nothing to GRANT. Not verified here since v0.158.0: that Cloud SQL permits the SHOW BINLOG EVENTS look-ahead a reader behind the head now runs, and whether binlog_row_metadata=FULL (recommended) can be set as a flag (why).
 
 - sql_require_primary_key=OFF — keyless tables land fine as targets, unlike DO.
 

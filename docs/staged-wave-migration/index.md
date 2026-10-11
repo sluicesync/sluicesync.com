@@ -112,11 +112,11 @@ Per wave, the sequence is the standard cutover scoped to that wave's tables:
         --target-driver postgres --target "$DST" \
         --stream-id wave1 --wait
 
-    # 4. Prove it landed.
+    # 4. Prove it landed (row counts; --depth=sample is same-engine only).
     sluice verify \
         --source-driver mysql    --source "$SRC" \
         --target-driver postgres --target "$DST" \
-        --include-table 'orders,order_items' --depth=sample
+        --include-table 'orders,order_items' --depth=count
 
 cutover takes --include-table too, so a wave's sequences get primed without touching tables that are still source-authoritative. Skipping it is the classic staged-migration failure: application writes to the target start allocating IDs that collide with rows CDC is about to deliver.
 

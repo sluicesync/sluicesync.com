@@ -78,7 +78,7 @@ CALL mysql.rds_show_configuration;                               -- verify: binl
     <span class="f">--source-tls-ca</span> us-east-1-bundle.pem \
     <span class="f">--target-driver</span> postgres <span class="f">--target</span> 'postgres://user:pass@target-host:5432/app?sslmode=require' \
     <span class="f">--stream-id</span> rds-app</code></pre>
-<p>The master user has the replication grants CDC needs out of the box (<code>REPLICATION SLAVE</code>, <code>REPLICATION CLIENT</code>) — nothing to GRANT on defaults.</p>
+<p>The master user has the replication grants CDC needs out of the box (<code>REPLICATION SLAVE</code>, <code>REPLICATION CLIENT</code>) — nothing to GRANT on defaults. <strong>Not verified here since v0.158.0:</strong> a reader behind the binlog head now also runs <code>SHOW BINLOG EVENTS</code>, which MySQL allows to a <code>REPLICATION SLAVE</code> account, but that RDS permits it to the streaming account has not been measured (if it does not, the stream stops with <code>SLUICE-E-CDC-REPLICATION-PERMISSION</code> rather than decode unproven). Neither has whether <code>binlog_row_metadata</code> can be set to the recommended <code>FULL</code> in the parameter group (<a href="/docs/schema-changes/#binlog-behind-head">why it matters</a>).</p>
 
 <h2 id="checks">What sluice checks for you <a class="hlink" href="#checks" aria-label="Permalink to this section">#</a></h2>
 <ul>
