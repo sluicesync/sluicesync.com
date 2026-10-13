@@ -32,7 +32,7 @@ The connecting user needs SELECT for the bulk copy plus REPLICATION SLAVE and RE
 
 A one-shot migrate needs only SELECT. The binlog settings and the two REPLICATION grants are only required for a continuing sync. If you're taking a point-in-time copy with no live CDC, plain SELECT on the source is enough.
 
-No server-id collision. sluice's binlog reader registers itself with its own random server_id, distinct from the source's, so joining the replication stream won't clash with the source or any existing replica.
+The replica server id sluice registers with. Each binlog reader registers with a generated server_id: a per-process base plus a process-wide sequence, kept at or above 65536, so readers opened by one process never share one. At stream start the id is checked against the source's own @@server_id, and a fresh one is taken if they match. A sibling replica's id is not visible to sluice and is not checked. There is no option to set it. Before v0.159.2 two readers opened by one process could get the same id (BINLOG-SERVER-ID-COLLISION, measured on Windows): on MariaDB the second failed loudly with ERROR 4052; on MySQL 8 it was harmless in our measurement, both readers receiving every row.
 
 ## Create the PlanetScale target
 

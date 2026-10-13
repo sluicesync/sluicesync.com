@@ -48,7 +48,7 @@
 <pre><code>CREATE USER 'sluice'@'%' IDENTIFIED BY '&lt;pw&gt;';
 GRANT SELECT, REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'sluice'@'%';</code></pre>
 <div class="note"><strong>A one-shot <code>migrate</code> needs only <code>SELECT</code>.</strong> The binlog settings and the two <code>REPLICATION</code> grants are only required for a continuing <a href="#sync">sync</a>. If you're taking a point-in-time copy with no live CDC, plain <code>SELECT</code> on the source is enough.</div>
-<div class="note"><strong>No server-id collision.</strong> sluice's binlog reader registers itself with its own random <code>server_id</code>, distinct from the source's, so joining the replication stream won't clash with the source or any existing replica.</div>
+<div class="note"><strong>The replica server id sluice registers with.</strong> Each binlog reader registers with a generated <code>server_id</code>: a per-process base plus a process-wide sequence, kept at or above 65536, so readers opened by one process never share one. At stream start the id is checked against the source's own <code>@@server_id</code>, and a fresh one is taken if they match. A sibling replica's id is not visible to sluice and is not checked. There is no option to set it. Before v0.159.2 two readers opened by one process could get the same id (BINLOG-SERVER-ID-COLLISION, measured on Windows): on MariaDB the second failed loudly with <code>ERROR 4052</code>; on MySQL 8 it was harmless in our measurement, both readers receiving every row.</div>
 
 <h2 id="target">Create the PlanetScale target <a class="hlink" href="#target" aria-label="Permalink to this section">#</a></h2>
 <p>Create the destination database in your chosen region:</p>
