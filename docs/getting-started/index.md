@@ -60,6 +60,14 @@ d1 · d1://<account_id>/<database_id> (or d1://<database_id> + CLOUDFLARE_ACCOUN
 
 A note on sslmode. The sslmode=require in these placeholder DSNs encrypts the connection but does not verify the server's certificate — a safe default that works against any TLS target regardless of its CA. Prefer sslmode=verify-full (encrypt and verify the CA chain + hostname, which defeats man-in-the-middle) whenever the target's certificate is trusted by your system store or you can pin its CA with sslrootcert. Managed providers with a public CA make this free — e.g. PlanetScale Postgres ships a Let's Encrypt certificate, so sluice connects with verify-full out of the box. sluice (pgx) passes sslmode and sslrootcert straight through to the driver and never downgrades TLS on its own.
 
+Postgres DSN syntax (v0.159.3+, pgx 5.11). sluice ships pgx 5.11 from v0.159.3, which reads two things in a Postgres connection string the way libpq does:
+
+- Backslashes in key/value DSNs. A backslash escapes the next character outside quotes as well as inside, so an unquoted sslrootcert=C:\certs\root.pem written with single backslashes reads as C:certsroot.pem. Double each backslash (sslrootcert=C:\\certs\\root.pem, quoted or not), or use forward slashes (sslrootcert=C:/certs/root.pem). pgx 5.10 kept an unquoted \c as written.
+
+- Multi-host ports pair with hosts by position. In a URI, a host written without a port gets 5432 instead of borrowing another host's: postgres://u@a,b:5433/db connected to a on 5433 under pgx 5.10 and now connects to a on 5432. In a key/value DSN, a single port still applies to every host, but a port list whose length is neither one nor the number of hosts is refused (could not match 2 port numbers to 3 hosts), where pgx 5.10 silently gave the extra host the first port. Give each host its own port, or one port for all.
+
+- options= in a postgres:// DSN needs nothing: options=-c%20search_path%3Dapp reaches the server with its space intact, because the rewrites sluice applies to a URI DSN's query (such as the application_name stamp and the replication-connection rewrite) encode a space as %20 and a real plus as %2B; through v0.159.2 they wrote a space as +, which pgx 5.11 would read as a literal plus, so the fix landed before the pgx bump and no release paired the two. A bare + you write yourself in a postgres:// query is still read by sluice as a space, though psql, and pgx 5.11 given the DSN directly, read it as a literal plus — so write %20 for a space and %2B for a plus to mean the same thing to every tool. Key/value DSNs (host=… options='-c …') are passed to the driver verbatim.
+
 DSNs often contain credentials, so you can supply them via environment variables instead of flags:
 
     export SLUICE_SOURCE='root:rootpw@tcp(localhost:3306)/app'
