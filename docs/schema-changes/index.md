@@ -140,6 +140,8 @@ Who needs to act:
 
 - pgtrigger-source operators syncing or chain-restoring into a MySQL-family target: still unguarded in the same way (KEY-COLLATION-TRIGGER-CDC-NO-HISTORY, open). Check such targets with sluice verify until it is fixed.
 
+Known issue in v0.160.1: a column named both, leading or trailing inside TRIM(…) changes meaning on a Postgres target (HIGH, silent, Bug 311; fixed in v0.160.2). v0.160.1's GitHub #356 fix kept those three words bare anywhere inside TRIM, so where a MySQL or MariaDB source used such a column as TRIM's remove-string (MySQL stores trim(`both` from `code`)), the Postgres target got TRIM(BOTH FROM code), which trims spaces. A generated column computed different values (measured: bbabb and bab where the source computed a and   bab  ) through migrate, sync start and later CDC rows, and a CHECK over the same shape became a different constraint, all at exit 0. Affected: v0.160.1 only; MySQL or MariaDB source → Postgres target; a generated column or CHECK that uses a column named both, leading or trailing inside TRIM. Check: compare the target's generated values with the source's; sluice verify --depth count does not see this, because the row counts match. Action: upgrade to v0.160.2, then re-copy the affected tables (--reset-target-data --yes for a sync start stream); a stored generated column recomputes only when its row is written.
+
 ## The control: --schema-changes
 
 A single tristate flag on sync start (and per-sync in a sync run fleet spec) governs the behavior, introduced in ADR-0091:
