@@ -950,6 +950,8 @@ Inspect translation without moving data: print the target DDL sluice would emit,
 
 Flag · Purpose ·
 
+--include-table / --exclude-table · Only preview / diff these tables, or every table except these (comma-separated, repeatable, glob patterns such as audit_*; mutually exclusive). The same table filter migrate uses: patterns match the bare table name, not a schema-qualified one. Either flag replaces the config file's include_tables / exclude_tables wholesale for that run; with neither flag, the config's lists apply. Pass the same filter you intend to migrate or sync with, so the preview or diff covers the tables that run will touch. ·
+
 --include-view / --exclude-view / --skip-views · Scope which views are previewed / diffed (comma-separated, repeatable, glob-aware; include and exclude are mutually exclusive). --skip-views drops views from the comparison entirely — the flag for a target whose views are managed out-of-band, where view drift isn't sluice's concern. Same spellings as migrate's. Since v0.161.0 schema preview and schema diff accept a schema that holds views but no tables. ·
 
 --ignore-charset-collation · schema diff only: suppress MySQL charset / collation differences, which operators often manage out-of-band via server defaults rather than per-column. ·
