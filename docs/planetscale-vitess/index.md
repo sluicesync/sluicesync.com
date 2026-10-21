@@ -71,6 +71,16 @@ On restart, sluice resumes from the persisted VGTID position. PlanetScale's binl
 
 When a full re-snapshot is expensive (very large tables) and you'd rather decide deliberately, pass --no-auto-resnapshot. sluice then fails loudly with an actionable error naming the recovery commands (--restart-from-scratch / --reset-target-data) instead of re-copying. It gates both the pre-flight fall-through and the reactive VStream recovery.
 
+A cold start stopped during its copy is re-copied, never resumed (since v0.163.3, VSTREAM-COPY-RESUME-WITHDRAWN). Before v0.163.3 sluice saved the copy's position as it ran and continued from it on the next start, but a continued copy could not make the target match the source: Vitess copies the already-finished tables again rather than replaying their changes, and that second copy only adds and overwrites rows, so any row the source deleted while the stream was stopped stayed on the target, as did every old row of a table dropped and re-created under its name (measured on Vitess 24: 6,701 rows on the target against 701 on the source after a re-create; VSTREAM-COPY-RESUME-RECREATED-TABLE, HIGH, silent). Since v0.163.3 no position is saved until the copy finishes, so a stop or kill during the copy ends in a refusal:
+
+- a stream's first cold start leaves no position, so its re-run finds the copied rows and refuses with SLUICE-E-COLDSTART-TARGET-NOT-EMPTY;
+
+- a re-copy of an existing stream (--restart-from-scratch, or the automatic re-snapshot above) keeps its old position under the in-progress mark, and its re-run refuses COLD-START-INCOMPLETE;
+
+- a mid-copy position saved by v0.163.2 or earlier is refused under VSTREAM-COPY-RESUME-WITHDRAWN.
+
+The remedy for all three is the same command with --restart-from-scratch, which clears the in-scope target tables and copies them again; with --schema-already-applied it cannot clear them (they are yours), so it refuses while they hold rows (RESTART-FROM-SCRATCH-TARGET-NOT-CLEARED): empty them, then re-run. Do not use --force-cold-start here: it copies by upsert over the rows already there and keeps the deleted ones. A stream that has reached CDC resumes from its saved position as it always has. A transient vtgate drop during a re-copy of an existing stream now stops the stream (COLD-START-INCOMPLETE) rather than resuming the copy, so re-run it with --restart-from-scratch; a retriable drop inside either kind of copy is first retried in place by the copy's own reconnect, within its retry budget, as before. Still open, not yet measured: that in-place reconnect resumes the same way inside one process, so a row deleted on the source during the reconnect's few-second window, in a table the copy had already finished or above the cursor, could stay on the target (VSTREAM-COPY-RECONNECT-STALE-ROWS). These measurements were on a local Vitess 24 cluster, not on PlanetScale itself.
+
 ## The throttler & lag reality
 
 Some VStream delays you act on; some you wait out. The measured findings reset a few intuitions:
